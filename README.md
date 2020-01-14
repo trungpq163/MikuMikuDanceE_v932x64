@@ -1,4 +1,4 @@
-## PJ MMD 2020 (Will End If PJ 100Gb Or To 2021) :heart:
+## PJ MMD (Start 2020 and Will End If PJ 100Gb) :heart:
 ### First
 - Change language region -japan- in control pannel.
 - Already installed direcX, microsoft visual c+ package 2005, 2008.
