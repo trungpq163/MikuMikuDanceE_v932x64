@@ -1,0 +1,104 @@
+float mAlbedoH : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "AlbedoH";>;
+float mAlbedoS : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "AlbedoS";>;
+float mAlbedoV : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "AlbedoV";>;
+float mAlbedoLoopsP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "AlbedoLoops";>;
+float mSpecularH : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "SpecularH";>;
+float mSpecularS : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "SpecularS";>;
+float mSpecularVP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "SpecularV+";>;
+float mSpecularVM : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "SpecularV-";>;
+float mSpecularLoopsP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "SpecularLoops";>;
+float mEmissiveR : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "EmissiveR";>;
+float mEmissiveG : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "EmissiveG";>;
+float mEmissiveB : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "EmissiveB";>;
+float mEmissiveBlinkP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "EmissiveBlink";>;
+float mEmissiveIntensityP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "EmissiveIntensity";>;
+float mEmissiveLoopsP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "EmissiveLoops";>;
+float mNormalScaleP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "NormalScale+";>;
+float mNormalScaleM : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "NormalScale-";>;
+float mNormalLoopsP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "NormalLoops";>;
+float mNormalSubScaleP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "NormalSubScale+";>;
+float mNormalSubScaleM : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "NormalSubScale-";>;
+float mNormalSubLoopsP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "NormalSubLoops";>;
+
+float mSmoothness : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "Smoothness";>;
+float mSmoothnessLoopsP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "SmoothnessLoops";>;
+
+float mMetalness : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "Metalness";>;
+float mMetalnessLoopsP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "MetalnessLoops";>;
+float mMelanin : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "Melanin";>;
+float mMelaninLoopsP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "MelaninLoops";>;
+float mCustomA : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "CustomA";>;
+float mCustomALoopsP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "CustomALoops";>;
+float mCustom2R : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "Custom2R";>;
+float mCustom2G : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "Custom2G";>;
+float mCustom2B : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "Custom2B";>;
+float mCustomBLoopsP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "CustomBLoops";>;
+
+float3 hsv2rgb(float3 hsv)
+{
+	float3 rgb = smoothstep(2.0,1.0, abs(fmod(hsv.x*6.0+float3(0,4,2), 6.0) - 3.0));
+	return hsv.z * (1.0 - hsv.y * rgb);
+}
+
+
+
+
+float mWSmoothnessP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "WSmoothness";>;
+float mWSmoothnessBaseSpecularP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "WSmoothBSpec";>;
+
+float mScatterLoR : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "ScatterLoR";>;
+float mScatterLoG : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "ScatterLoG";>;
+float mScatterLoB : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "ScatterLoB";>;
+
+float mScatterHiR : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "ScatterHiR";>;
+float mScatterHiG : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "ScatterHiG";>;
+float mScatterHiB : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "ScatterHiB";>;
+
+float mWaveHeightLowP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "WHeightLo";>;
+float mWaveHeightHighP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "WHeightHi";>;
+
+float mWaveLoopsLowP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "WLoopsLo";>;
+float mWaveLoopsHighP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "WLoopsHi";>;
+
+float mWaveMapScaleLP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "WaveMapScaleL";>;
+float mWaveMapLoopsLP : CONTROLOBJECT<string name=CONTROLLER_NAME; string item = "WaveMapLoopsL";>;
+
+
+
+static const float mWSmoothness = lerp(0, 1, mWSmoothnessP);
+static const float mWSmoothnessBaseSpecular = lerp(1, 10, mWSmoothnessBaseSpecularP);
+
+static const float3 mScatteringLowColor = float3(mScatterLoR, mScatterLoG, mScatterLoB);
+static const float3 mScatteringHighColor = float3(mScatterHiR, mScatterHiG, mScatterHiB);
+
+static const float mWaveHeightLow = lerp(0, 10, mWaveHeightLowP);
+static const float mWaveHeightHigh = lerp(0, 10, mWaveHeightHighP);
+
+static const float mWaveLoopsLow = lerp(1, 10, mWaveLoopsLowP);
+static const float mWaveLoopsHigh = lerp(1, 10, mWaveLoopsHighP);
+
+static const float mWaveMapScaleL = lerp(0, 10, mWaveMapScaleLP);
+
+static const float mWaveMapLoopsL = lerp(1, 10, mWaveMapLoopsLP);
+
+
+
+
+
+static const float3 mAlbedoColor = hsv2rgb(float3(mAlbedoH, mAlbedoS, 1 - mAlbedoV));
+static const float3 mSpecularColor = hsv2rgb(float3(mSpecularH, mSpecularS, lerp(lerp(0.5, 1.0, mSpecularVP), 0.15, mSpecularVM)));
+static const float3 mEmissiveColor = float3(mEmissiveR, mEmissiveG, mEmissiveB);
+static const float3 mCustomBColor = float3(mCustom2R, mCustom2G, mCustom2B);
+
+static const float mNormalScale = lerp(lerp(1, 20, mNormalScaleP), -20, mNormalScaleM);
+static const float mNormalSubScale = lerp(lerp(1, 20, mNormalSubScaleP), -20, mNormalSubScaleM);
+
+static const float mEmissiveBlink = lerp(0, 10, mEmissiveBlinkP);
+static const float mEmissiveIntensity = lerp(1, 8, mEmissiveIntensityP);
+
+
+
+
+
+
+
