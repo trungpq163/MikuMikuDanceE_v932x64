@@ -7,6 +7,6 @@
 - In MMD select file -> open and then find pmm file in forder project.
 
 ### Pj link demo
-1. Pj1: https://youtu.be/bU64P_FvKTU
+1. Pj1 (/UserFile/Project/30-12-19/): https://youtu.be/bU64P_FvKTU
 
 ### :copyright: This is a PJ that I share with friends, if you use for making video, remember credit author (model, stage, motion).
