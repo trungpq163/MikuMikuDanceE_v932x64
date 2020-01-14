@@ -1,0 +1,11 @@
+ポストポイントライト
+ビームマンP
+ベース：PointLight（極北P）
+
+アクセサリ版
+PostPointLight_Ac.xを読み込む
+ライトの色はPostPointLight_Ac.fx内LightColorを設定
+
+pmd版
+PostPointLight.pmdを読み込む
+ライトの色は表情にて変更

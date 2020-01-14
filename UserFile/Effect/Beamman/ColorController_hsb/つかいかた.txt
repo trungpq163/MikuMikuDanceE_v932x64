@@ -1,0 +1,4 @@
+1:任意のモデルを読み込む
+2:ColorController.pmdを読み込む
+3:モデルにColorController.fxを適用する
+4:ColorController.pmdのその他モーフで色を調整する

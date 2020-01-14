@@ -1,0 +1,25 @@
+ドット絵風になったらいいなエフェクト
+ビームマンP
+
+ポストエフェクトっぽく使えるけど実は強制効果
+何と他の質感系との併用未保証！
+
+pallet.pngに使用をする色を設定
+全ての色はここに記載されている色に近似されます
+サンプルでいくつかパレットデータを入れておきました。
+参考にしてみてください
+
+調整
+Dot.fxの
+texture EdgeRT: OFFSCREENRENDERTARGET <
+    string Description = "OffScreen RenderTarget for Dot.fx";
+    float2 ViewPortRatio = 0.25;　　←ここで全体のドット率調整
+    float4 ClearColor = { 1, 1, 1, 1 };
+    float ClearDepth = 1.0;
+    bool AntiAlias = AA_FLG
+    string DefaultEffect = 
+        "* = Edge.fx";
+>;
+
+Dot.fx内
+AA_FLGをtrueにすることでアンチエイリアスがかかります
