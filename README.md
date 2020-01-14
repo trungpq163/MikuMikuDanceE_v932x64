@@ -9,4 +9,4 @@
 ### Pj link demo
 1. Pj1: https://youtu.be/bU64P_FvKTU
 
-### :copyright: This PJ that I share with friends, if you use for making video, remember credir author (model, stage, motion).
+### :copyright: This is a PJ that I share with friends, if you use for making video, remember credir author (model, stage, motion).
