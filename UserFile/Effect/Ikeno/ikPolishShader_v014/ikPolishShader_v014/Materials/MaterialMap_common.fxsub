@@ -1,0 +1,399 @@
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+//#include "../ikPolishShader.fxsub"
+#if !defined(AlphaThreshold)
+#define AlphaThreshold		0.5
+#endif
+
+// 座法変換行列
+float4x4 matW			: WORLD;
+float4x4 matWV		: WORLDVIEW;
+//float4x4 matP		: PROJECTION;
+float4x4 matWVP		: WORLDVIEWPROJECTION;
+// static float4x4 matWVP = mul(matWV, matP);
+
+// マテリアル色
+float4	MaterialDiffuse		: DIFFUSE  < string Object = "Geometry"; >;
+float3	MaterialAmbient		: AMBIENT  < string Object = "Geometry"; >;
+float3	MaterialEmissive	: EMISSIVE < string Object = "Geometry"; >;
+float3	MaterialSpecular	: SPECULAR < string Object = "Geometry"; >;
+float	SpecularPower		: SPECULARPOWER < string Object = "Geometry"; >;
+
+float3   CameraPosition    : POSITION  < string Object = "Camera"; >;
+float3	LightDiffuse		: DIFFUSE   < string Object = "Light"; >;
+
+// 材質モーフ対応
+float4	TextureAddValue   : ADDINGTEXTURE;
+float4	TextureMulValue   : MULTIPLYINGTEXTURE;
+float4	SphereAddValue    : ADDINGSPHERETEXTURE;
+float4	SphereMulValue    : MULTIPLYINGSPHERETEXTURE;
+
+static float4 DiffuseColor  = float4(saturate((MaterialAmbient.rgb+MaterialEmissive.rgb)),MaterialDiffuse.a);
+
+// ガンマ補正の近似。本来はpow(x, 2.2)
+#define Degamma(x)	((x)*(x))
+
+#if !defined(USE_NCHL_SETTINGS)
+static float3 SpecularColor = (Degamma(MaterialSpecular * (LightDiffuse.r * 9 + 1))) * 0.95 + 0.05;
+#else
+#define SpecularColor	(saturate(MaterialSpecular.g * 2) * 0.9 + 0.05)
+#endif
+
+
+
+#if defined(USE_AUTOREFLECTION_SETTINGS)
+// AutoReflection対応モデルのパラメータにより材質を決定する
+static float CustomMetalness = (saturate(frac(SpecularPower*100)+0.0001))%1.0;
+static float CustomSmoothness = (1.0 - saturate(1.0-clamp(SpecularPower,0,50.0)/50.0)) * 0.96 + 0.02;
+#else
+static float CustomMetalness = saturate(Metalness);
+
+#if defined(ENABLE_AUTO_SMOOTHNESS)
+// 謎の係数スペキュラーパワーを適当にスムースネスに置き換える。(0:マット。1:ツルツル)
+float CalcSmoothness(float power)
+{
+	// 1に近過ぎると、ピーキーになりすぎてハイライトがでないので、0.2～0.98の間に抑える
+	return saturate((log(power) / log(2) - 1) / 8.0) * 0.96 + 0.02;
+}
+static float CustomSmoothness = CalcSmoothness(SpecularPower);
+#else
+static float CustomSmoothness = saturate(Smoothness) * 0.96 + 0.02;
+#endif
+#endif
+static float CustomIntensity = saturate(Intensity);
+
+
+bool	 spadd;	// スフィアマップ加算合成フラグ
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+	texture = <ObjectTexture>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;
+	ADDRESSV  = WRAP;
+};
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;
+	ADDRESSV  = WRAP;
+};
+
+
+#if defined(USE_SEPARATE_MAP)
+#if defined(METALNESSMAP_FILENAME)
+texture2D MetalnessMap <
+    string ResourceName = METALNESSMAP_FILENAME;
+>;
+sampler MetalnessMapSamp = sampler_state {
+	texture = <MetalnessMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = None;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+#if defined(SMOOTHNESSMAP_FILENAME)
+texture2D SmoothnessMap <
+    string ResourceName = SMOOTHNESSMAP_FILENAME;
+>;
+sampler SmoothnessMapSamp = sampler_state {
+	texture = <SmoothnessMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = None;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+#if defined(INTENSITYMAP_FILENAME)
+texture2D IntensityMap <
+    string ResourceName = INTENSITYMAP_FILENAME;
+>;
+sampler IntensityMapSamp = sampler_state {
+	texture = <IntensityMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = None;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+#if defined(SSSMAP_FILENAME)
+texture2D SSSMap <
+    string ResourceName = SSSMAP_FILENAME;
+>;
+sampler SSSMapSamp = sampler_state {
+	texture = <SSSMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = None;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+
+#elif defined(USE_MATERIALMAP)
+texture2D MaterialMap <
+    string ResourceName = MATERIALMAP_MAIN_FILENAME;
+>;
+sampler MaterialMapSamp = sampler_state {
+	texture = <MaterialMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = None;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+
+#ifdef USE_NORMALMAP
+//メイン法線マップ
+#define ANISO_NUM 16
+
+#if !defined(USE_NCHL_SETTINGS)
+texture2D NormalMap <
+    string ResourceName = NORMALMAP_MAIN_FILENAME;
+>;
+sampler NormalMapSamp = sampler_state {
+    texture = <NormalMap>;
+	MINFILTER = ANISOTROPIC;
+	MAGFILTER = ANISOTROPIC;
+	MIPFILTER = ANISOTROPIC;
+	
+	MAXANISOTROPY = ANISO_NUM;
+};
+#endif
+
+//サブ法線マップ
+texture2D NormalMapSub <
+    string ResourceName = NORMALMAP_SUB_FILENAME;
+>;
+sampler NormalMapSampSub = sampler_state {
+    texture = <NormalMapSub>;
+	MINFILTER = ANISOTROPIC;
+	MAGFILTER = ANISOTROPIC;
+	MIPFILTER = ANISOTROPIC;
+	
+	MAXANISOTROPY = ANISO_NUM;
+};
+#endif
+
+shared texture PPPNormalMapRT: RENDERCOLORTARGET;
+shared texture PPPMaterialMapRT: RENDERCOLORTARGET;
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 
+float3x3 compute_tangent_frame(float3 Normal, float3 View, float2 UV)
+{
+  float3 dp1 = ddx(View);
+  float3 dp2 = ddy(View);
+  float2 duv1 = ddx(UV);
+  float2 duv2 = ddy(UV);
+
+  float3x3 M = float3x3(dp1, dp2, cross(dp1, dp2));
+  float2x3 inverseM = float2x3(cross(M[1], M[2]), cross(M[2], M[0]));
+  float3 Tangent = mul(float2(duv1.x, duv2.x), inverseM);
+  float3 Binormal = mul(float2(duv1.y, duv2.y), inverseM);
+
+  return float3x3(normalize(Tangent), normalize(Binormal), Normal);
+}
+
+float4 CalcNormal(float2 Tex,float3 Eye,float3 Normal)
+{
+#if !defined(USE_NORMALMAP) && !defined(USE_NCHL_SETTINGS)
+	return float4(Normal,1);
+#else
+	float4 Norm = 1;
+
+	#if !defined(USE_NCHL_SETTINGS)
+	float2 tex = Tex* NormalMapMainLoopNum;//メイン
+	float4 NormalColor = tex2D( NormalMapSamp, tex) * 2 - 1;
+	NormalColor.rg *= NormalMapMainHeightScale;
+	#else
+	float4 NormalColor = tex2D( ObjSphareSampler, Tex) * 2 - 1;
+	#endif
+	NormalColor.rgb = normalize(NormalColor.rgb);
+
+	#if defined(USE_NORMALMAP)
+	float2 texSub = Tex * NormalMapSubLoopNum;//サブ
+	float4 NormalColorSub = tex2D( NormalMapSampSub, texSub)*2-1;	//-1～1の値にする
+	NormalColorSub.rg *= NormalMapSubHeightScale;
+	NormalColorSub.rgb = normalize(NormalColorSub.rgb);//正規化
+
+	NormalColor.rg += NormalColorSub.rg;
+	NormalColor.rgb = normalize(NormalColor.rgb);
+	#endif
+
+	NormalColor.a = 1;
+
+	float3x3 tangentFrame = compute_tangent_frame(Normal, Eye, Tex);
+	Norm.rgb = normalize(mul(NormalColor.rgb, tangentFrame));
+
+	return Norm;
+#endif
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT
+{
+	float4 Pos	: POSITION;
+	float3 Normal	: TEXCOORD0;
+	float2 Tex	: TEXCOORD1;
+	float3 WPos	: TEXCOORD2;
+	float Distance	: TEXCOORD3;
+	float2 SpTex	: TEXCOORD4;
+};
+
+struct PS_OUT_MRT
+{
+	float4 Color		: COLOR0;
+	float4 Normal		: COLOR1;
+	float4 Material		: COLOR2;
+};
+
+VS_OUTPUT Basic_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex: TEXCOORD0,
+	 uniform bool useTexture, uniform bool useSphereMap)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	Out.Pos = mul( Pos, matWVP );
+	Out.Normal = normalize(mul(Normal,(float3x3)matW));
+	Out.Tex = Tex;
+
+	Out.WPos = mul( Pos, matW ).xyz;
+	Out.Distance = mul(Pos, matWV).z;
+
+	if ( useSphereMap && !spadd) {
+		float2 NormalWV = normalize(mul( Normal, (float3x3)matWV )).xy;
+		Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+		Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+	}
+
+	return Out;
+}
+
+
+PS_OUT_MRT Basic_PS( VS_OUTPUT IN, uniform bool useTexture, uniform bool useSphereMap) : COLOR
+{
+	float4 Color = DiffuseColor;
+	if ( useTexture ) {
+		float4 TexColor = tex2D( ObjTexSampler, IN.Tex );
+		Color *= TexColor;
+	}
+
+	clip(Color.a - AlphaThreshold);
+
+	#if !defined(USE_NCHL_SETTINGS)
+	if ( useSphereMap && !spadd) {
+		// 加算のスフィアマップは擬似スペキュラだと思われるので無視
+		float4 TexColor = tex2D(ObjSphareSampler,IN.SpTex);
+		Color.rgb *= TexColor.rgb;
+	}
+	#endif
+
+	const float3 V = normalize(CameraPosition - IN.WPos);
+	const float3 N = CalcNormal(IN.Tex, V, normalize(IN.Normal)).xyz;
+
+	float4 params = 1;
+	#if defined(USE_MATERIALMAP) && !defined(USE_SEPARATE_MAP)
+		float2 tex = IN.Tex * MaterialMapLoopNum;
+		params = tex2D( MaterialMapSamp, tex);
+	#elif defined(USE_NCHL_SETTINGS)
+		float spec = tex2D( ObjSphareSampler, IN.Tex).a;
+		params.x = CustomMetalness;
+		#if defined(NCHL_ALPHA_AS_SMOOTHNESS)
+			params.y = spec;
+		#else
+			params.y = CustomSmoothness;
+		#endif
+		#if defined(NCHL_ALPHA_AS_INTENSITY)
+			params.z = spec;
+		#else
+			params.z = CustomIntensity;
+		#endif
+		params.w = SSSValue;
+	#else
+		params = float4(CustomMetalness, CustomSmoothness, CustomIntensity, SSSValue);
+	#endif
+	#if defined(USE_SEPARATE_MAP)
+		#if defined(METALNESSMAP_FILENAME)
+			params.x = tex2D( MetalnessMapSamp, IN.Tex * MetalnessMapLoopNum).r;
+		#endif
+		#if defined(SMOOTHNESSMAP_FILENAME)
+			params.y = tex2D( SmoothnessMapSamp, IN.Tex * SmoothnessMapLoopNum).r;
+		#endif
+		#if defined(INTENSITYMAP_FILENAME)
+			params.z = tex2D( IntensityMapSamp, IN.Tex * IntensityMapLoopNum).r;
+		#endif
+		#if defined(SSSMAP_FILENAME)
+			params.w = tex2D( SSSMapSamp, IN.Tex * SSSMapLoopNum).r;
+		#endif
+	#endif
+
+	PS_OUT_MRT Out;
+	Out.Material = params;
+	Out.Normal = float4(N, IN.Distance);
+
+	// 金属の場合、スペキュラの色＝反射色とみなす
+	float metalness = params.x;
+	float3 spColor = (Degamma(Color.rgb) * 0.5 + 0.5) * SpecularColor;
+	Color.rgb = lerp(NonmetalF0, spColor, metalness);
+
+	Out.Color = Color;
+
+	return Out;
+}
+
+#define OBJECT_TEC(name, mmdpass, tex, sphere) \
+	technique name < string MMDPass = mmdpass; bool UseTexture = tex; bool UseSphereMap = sphere; \
+	string Script = \
+		"RenderColorTarget0=;" \
+		"RenderColorTarget1=PPPNormalMapRT;" \
+		"RenderColorTarget2=PPPMaterialMapRT;" \
+		"RenderDepthStencilTarget=;" \
+		"Pass=DrawObject;" \
+		"RenderColorTarget1=;" \
+		"RenderColorTarget2=;" \
+	; \
+	> { \
+		pass DrawObject { \
+			AlphaTestEnable = FALSE; AlphaBlendEnable = FALSE; \
+			VertexShader = compile vs_3_0 Basic_VS(tex, sphere); \
+			PixelShader  = compile ps_3_0 Basic_PS(tex, sphere); \
+		} \
+	}
+
+
+OBJECT_TEC(MainTec0, "object", false, false)
+OBJECT_TEC(MainTec1, "object", true, false)
+OBJECT_TEC(MainTec2, "object", false, true)
+OBJECT_TEC(MainTec3, "object", true, true)
+OBJECT_TEC(MainTecBS0, "object_ss", false, false)
+OBJECT_TEC(MainTecBS1, "object_ss", true, false)
+OBJECT_TEC(MainTecBS2, "object_ss", false, true)
+OBJECT_TEC(MainTecBS3, "object_ss", true, true)
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTech < string MMDPass = "shadow";  > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////

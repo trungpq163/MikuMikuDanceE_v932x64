@@ -1,0 +1,151 @@
+// パラメータ宣言
+
+// 描画を無視するアルファ値の閾値を設定します
+// NormalMap.fxsubと合わせてください
+float TransparentThreshold = 0.7;
+
+#define fmRange        0.8f
+
+//-----------------------------------------------------
+//ここから先はエフェクトに詳しい方はいじらないほうが良いです
+
+// 座法変換行列
+float4x4 matWVP        : WORLDVIEWPROJECTION;
+float4x4 matWV        : WORLDVIEW;
+float4x4 matProj    : PROJECTION;
+
+float3   CameraPosition    : POSITION  < string Object = "Camera"; >;
+float4x4 WorldMatrix              : WORLD;
+
+// マテリアル色
+float4   MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+#ifndef MIKUMIKUMOVING
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+#endif
+
+struct VS_OUTPUT
+{
+    float4 Pos        : POSITION;        // 射影変換座標
+    float2 TexCoord    : TEXCOORD0;    // UV
+    float4 Depth    : TEXCOORD1;    // 頂点深度
+    float4 Depth2    : TEXCOORD2;    // 頂点深度
+    float4 WorldPos  : TEXCOORD3;
+};
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state
+{
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+bool use_texture;  //テクスチャの有無
+bool use_toon;     //トゥーンの有無
+
+//　頂点シェーダ
+#ifndef MIKUMIKUMOVING
+VS_OUTPUT Basic_VS(float4 Pos: POSITION, float2 Tex: TEXCOORD0)
+#else
+VS_OUTPUT Basic_VS(MMM_SKINNING_INPUT IN)
+#endif
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+    
+    matProj._11 *= fmRange;
+    matProj._22 *= fmRange;
+    
+    //　MikuMikuMoving 独自のスキニング関数(MMM_SkinnedPosition)。
+    #ifdef MIKUMIKUMOVING
+    float4 Pos = MMM_SkinnedPosition(IN.Pos, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+    float2 Tex = IN.Tex;
+    #endif
+    
+    Out.Pos = mul(Pos, mul(matWV, matProj));
+    
+    Out.Depth = Out.Pos;
+    Out.Depth2 = mul(Pos, matWV);
+    Out.WorldPos = mul(Pos, WorldMatrix);
+    
+    Out.TexCoord = Tex;
+    
+    return Out;
+}
+
+// ピクセルシェーダ
+float4 Basic_PS(VS_OUTPUT IN, uniform bool useTex) : COLOR
+{
+    float a = MaterialDiffuse.a;
+    
+    if(useTex) a *= tex2D(ObjTexSampler,IN.TexCoord).a;
+    
+    a = (a > TransparentThreshold);
+    
+    float d, w;
+    
+    d = IN.Depth2.z;
+    w = 1.0 / (1.0 - IN.Depth.z / IN.Depth.w);
+    
+    return float4(d, w, 0, a);
+}
+
+// オブジェクト描画用テクニック
+technique MainTec <
+    string MMDPass = "object";
+    bool UseTexture = false;
+> {
+    pass DrawObject
+    {
+        AlphaTestEnable = TRUE;
+        VertexShader = compile vs_2_0 Basic_VS();
+        PixelShader  = compile ps_2_0 Basic_PS(false);
+    }
+}
+// オブジェクト描画用テクニック
+technique MainTexTec <
+    string MMDPass = "object";
+    bool UseTexture = true;
+> {
+    pass DrawObject
+    {
+        AlphaTestEnable = TRUE;
+        VertexShader = compile vs_2_0 Basic_VS();
+        PixelShader  = compile ps_2_0 Basic_PS(true);
+    }
+}
+
+// オブジェクト描画用テクニック
+technique MainTecBS  <
+    string MMDPass = "object_ss";
+    bool UseTexture = false;
+> {
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = TRUE;
+        VertexShader = compile vs_2_0 Basic_VS();
+        PixelShader  = compile ps_2_0 Basic_PS(false);
+    }
+}
+// オブジェクト描画用テクニック
+technique MainTexTecBS  <
+    string MMDPass = "object_ss";
+    bool UseTexture = true;
+> {
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = TRUE;
+        VertexShader = compile vs_2_0 Basic_VS();
+        PixelShader  = compile ps_2_0 Basic_PS(true);
+    }
+}
+technique EdgeTec < string MMDPass = "edge"; > {
+
+}
+technique ShadowTech < string MMDPass = "shadow"; > {
+
+}

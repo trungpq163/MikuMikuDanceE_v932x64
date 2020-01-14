@@ -1,0 +1,146 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#include "../ikPolishShader.fxsub"
+
+#include "../Sources/constants.fxsub"
+#include "../Sources/colorutil.fxsub"
+#include "../Sources/mmdparameter.fxsub"
+#include "../Sources/mmdutil.fxsub"
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 鏡面座標変換パラメータ
+
+// 鏡面アクセのワールド変換行列
+float4x4 matMirrorW : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "平面反射";>;
+static float3 PlaneOrigin = mul( float4(0,0,0,1), matMirrorW ).xyz;
+static float3 PlaneNormal = normalize( mul( float3(0,1,0), (float3x3)matMirrorW ) );
+
+// 座標の鏡像変換
+float4 TransMirrorPos( float4 Pos )
+{
+	Pos.xyz -= PlaneNormal * 2.0f * dot(PlaneNormal, Pos.xyz - PlaneOrigin);
+	return Pos;
+}
+
+float3 CameraPosition : POSITION  < string Object = "Camera"; >;
+
+// 鏡面表裏判定(座標とカメラが両方鏡面の表側にある時だけ＋)
+float IsFace( float4 Pos )
+{
+	return min( dot(Pos.xyz-PlaneOrigin, PlaneNormal),
+				dot(CameraPosition-PlaneOrigin, PlaneNormal) );
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座標変換行列
+float4x4 matW	: WORLD;
+float4x4 matV	: VIEW;
+float4x4 matP	: PROJECTION;
+float4x4 matVP	: VIEWPROJECTION;
+
+static float4 DiffuseColor  = float4(saturate((MaterialAmbient.rgb+MaterialEmissive.rgb)),MaterialDiffuse.a);
+
+shared texture PPP_PlReflectionNDMap: RENDERCOLORTARGET;
+
+struct VS_OUTPUT {
+	float4 Pos		: POSITION;
+	float4 Tex		: TEXCOORD0;
+	float4 Normal	: TEXCOORD1;
+	float4 WPos		: TEXCOORD3;
+};
+
+struct PS_OUT_MRT
+{
+	float4 Color		: COLOR0;
+	float4 Normal		: COLOR1;
+};
+
+// 頂点シェーダ(鏡像反転)
+VS_OUTPUT BasicMirror_VS(
+		float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0,
+		uniform bool useTexture, uniform bool useToon)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	float4 pos = mul( Pos, matW );
+	Out.WPos = pos;
+
+	// 鏡像位置への座標変換
+	float4 refPos = TransMirrorPos( pos );
+	Out.Pos = mul(refPos, matVP );
+	Out.Pos.x = -Out.Pos.x;
+		// ポリゴンが裏返らないように左右反転にして描画
+		// FACE_CCWで反転すると両面ポリがおかしくなる。
+
+	Out.Normal.xyz = normalize( mul( Normal, (float3x3)matW ) );
+	// 反射した位置での深度
+	Out.Normal.w = mul(refPos, matV ).z;
+	Out.Tex.xy = Tex;
+
+	return Out;
+}
+
+PS_OUT_MRT Basic_PS(VS_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+	PS_OUT_MRT Out = (PS_OUT_MRT)0;
+
+	// 鏡面の裏側にある部位は鏡像表示しない
+	clip( IsFace( IN.WPos ) );
+
+	float2 texCoord = IN.Tex.xy;
+	float4 Color = DiffuseColor;
+	if ( useTexture ) Color *= GetTextureColor(texCoord);
+	#if IS_RGBM == 0
+	clip(Color.a - AlphaThreshold);
+	#endif
+//	if ( useSphereMap && !spadd) albedo.rgb *= GetSphereColor(IN.SpTex).rgb;
+	Color.rgb = Degamma(Color.rgb);
+
+	float emissive = 0;
+	#if IS_RGBM > 0
+	Color.rgb = Color.rgb * Color.a * RGBM_SCALE_FACTOR;
+	emissive = 1;
+	#endif
+
+	#if IS_MASK == 0
+	Out.Color = float4(Color.rgb, emissive * 0.5 + 0.5);
+	#else
+	Out.Color = 0.0;
+	#endif
+
+	float3 N = normalize(IN.Normal.xyz);
+	float depth = IN.Normal.w;
+	Out.Normal = float4(N, depth);
+
+	return Out;
+}
+
+
+#define OBJECT_TEC(name, mmdpass, tex, toon) \
+	technique name < string MMDPass = mmdpass; \
+	string Script = \
+		"RenderColorTarget0=;" \
+		"RenderColorTarget1=PPP_PlReflectionNDMap;" \
+		"Pass=DrawObject;" \
+	; \
+	> { \
+		pass DrawObject { \
+			AlphaTestEnable = FALSE; AlphaBlendEnable = FALSE; \
+			VertexShader = compile vs_3_0 BasicMirror_VS(tex, toon); \
+			PixelShader  = compile ps_3_0 Basic_PS(tex); \
+		} \
+	}
+
+OBJECT_TEC(MainTec0, "object", use_texture, use_toon)
+OBJECT_TEC(MainTecBS0, "object_ss", use_texture, use_toon)
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTec < string MMDPass = "shadow"; > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////

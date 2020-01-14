@@ -1,0 +1,183 @@
+// autoLuminous 用のコード
+
+
+#define SPECULAR_BASE 100
+
+//フレーム数に同期させるかどうか
+#define SYNC false
+
+#ifndef AL_Power
+#define AL_Power	1.0
+#endif
+
+#ifndef PI
+#define	PI	(3.14159265359)
+#endif
+
+
+// スフィアマップのテクスチャ
+sampler ObjSphereSamplerAL = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = POINT;MAGFILTER = POINT;MIPFILTER = NONE;
+	AddressU  = CLAMP; AddressV = CLAMP;
+};
+sampler ObjSphereSamplerAL2 = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = LINEAR; MAGFILTER = LINEAR; MIPFILTER = NONE;
+	AddressU  = CLAMP; AddressV = CLAMP;
+};
+
+float4 EgColor; 
+float4 SpcColor;
+#define	ALSpecularPower		(SpcColor.a)
+#define	materialAlpha		(EgColor.a)
+
+float LightUp : CONTROLOBJECT < string name = "(self)"; string item = "LightUp"; >;
+float LightUpE : CONTROLOBJECT < string name = "(self)"; string item = "LightUpE"; >;
+float LightOff : CONTROLOBJECT < string name = "(self)"; string item = "LightOff"; >;
+float Blink : CONTROLOBJECT < string name = "(self)"; string item = "LightBlink"; >;
+float BlinkSq : CONTROLOBJECT < string name = "(self)"; string item = "LightBS"; >;
+float BlinkDuty : CONTROLOBJECT < string name = "(self)"; string item = "LightDuty"; >;
+float BlinkMin : CONTROLOBJECT < string name = "(self)"; string item = "LightMin"; >;
+float LClockUp : CONTROLOBJECT < string name = "(self)"; string item = "LClockUp"; >;
+float LClockDown : CONTROLOBJECT < string name = "(self)"; string item = "LClockDown"; >;
+
+//時間
+float ftime : TIME <bool SyncInEditMode = SYNC;>;
+
+static float duty = (BlinkDuty <= 0) ? 0.5 : BlinkDuty;
+static float timerate = ((Blink > 0) ? ((1 - cos(saturate(frac(ftime / (Blink * 10)) / (duty * 2)) * 2 * PI)) * 0.5) : 1.0)
+					 * ((BlinkSq > 0) ? (frac(ftime / (BlinkSq * 10)) < duty) : 1.0);
+static float timerate1 = timerate * (1 - BlinkMin) + BlinkMin;
+
+static float ClockShift = (1 + LClockDown * 5) / (1 + LClockUp * 5);
+
+static bool IsEmission = (SPECULAR_BASE < ALSpecularPower)/* && (ALSpecularPower <= (SPECULAR_BASE + 100))*/ && (length(MaterialSpecular) < 0.01);
+static float EmissionPower0 = IsEmission ? ((ALSpecularPower - SPECULAR_BASE) / 7.0) : 1;
+static float EmissionPower1 = EmissionPower0 * (LightUp * 2 + 1.0) * pow(400, LightUpE) * (1.0 - LightOff);
+
+#if defined(AL_NAME)
+bool ALExist : CONTROLOBJECT < string name = AL_NAME; >;
+float4x4 ALMatWorld : CONTROLOBJECT < string name = AL_NAME; >; 
+float ALScaling0 : CONTROLOBJECT < string name = AL_NAME; >;
+static float AL_Scaling = (ALExist ? ALScaling0 * 0.1 * (1.0 + ALMatWorld._43 / 100) : 1.0) * AL_Power;
+#else
+float AL_Scaling = AL_Power;
+#endif
+
+
+float texlight(float3 rgb){
+	float val = saturate((length(rgb) - LightThreshold) * 3);
+	val *= 0.2;
+	return val;
+}
+
+float3 HSV_to_RGB(float3 hsv)
+{
+	float3 hcol = saturate((abs(frac(hsv.x + float3(3,2,1)/3)*6 - 3) - 1));
+	return lerp(1, hcol, hsv.y) * hsv.z;
+}
+
+// 追加UVがAL用データかどうか判別
+
+bool DecisionSystemCode(float4 SystemCode){
+	bool val = (0.199 < SystemCode.r) && (SystemCode.r < 0.201)
+			&& (0.699 < SystemCode.g) && (SystemCode.g < 0.701);
+	return val;
+}
+
+
+float4 getFlags(float flagcode){
+	float4 val = frac(flagcode * float4(0.1, 0.01, 0.001, 0.0001));
+	val = floor(val * 10 + 0.001);
+	return val;
+}
+
+
+float2 DecisionSequenceCode(float4 color){
+	bool val = (color.r > 0.99) && (abs(color.g - 0.5) < 0.02)
+			&& ((color.b < 0.01) || (color.g > 0.99));
+	
+	return float2(val, (color.b < 0.01));
+}
+
+
+float4 DecodeALInfo(float4 SystemCode, float4 ColorCode, float4 AppendCode, out float2 Tex)
+{
+	bool IsALCode = DecisionSystemCode(SystemCode);
+	float4 flags = getFlags(SystemCode.w);
+
+	float4 Color = MaterialDiffuse;
+	Color.a = materialAlpha;
+	Color.rgb += MaterialEmissive / 2;
+	Color.rgb *= 0.5;
+	Color.rgb = IsEmission ? Color.rgb : float3(0,0,0);
+
+	float3 UVColor = ColorCode.rgb;
+	UVColor = lerp(UVColor, HSV_to_RGB(UVColor), flags.y);
+	UVColor *= ColorCode.a;
+	
+	Color.rgb += IsALCode ? UVColor : float3(0,0,0);
+	
+	float Tv = SystemCode.z * ClockShift;
+	float Ph = AppendCode.y * ClockShift;
+	float timerate2 = (Tv > 0) ? ((1 - cos(saturate(frac((ftime + Ph) / Tv) / (duty * 2)) * 2 * PI)) * 0.5)
+					: ((Tv < 0) ? (frac((ftime + Ph) / (-Tv / PI * 180)) < duty) : 1.0);
+	Color.rgb *= max(timerate2 * (1 - BlinkMin) + BlinkMin, !IsALCode);
+	Color.rgb *= max(timerate1, SystemCode.z != 0);
+
+	Tex.x = IsALCode * AppendCode.x;
+	Tex.y = IsALCode * flags.x;
+
+	return Color;
+}
+
+
+float4 GetEmissiveColor(float4 Color, float4 Tex)
+{
+	float4 texcolor;
+
+	if(use_spheremap){
+		//float4 spcolor1 = tex2Dlod(ObjSphereSamplerAL, float4(1,0,0,0));
+		float4 spcolor2 = tex2Dlod(ObjSphereSamplerAL, float4(1,1,0,0));
+		float4 spcolor3 = tex2Dlod(ObjSphereSamplerAL, float4(0,1,0,0));
+
+		float Ts = spcolor3.r * (255 * 60) + spcolor3.g * 255 + spcolor3.b * (255 / 100.0);
+		Ts *= ClockShift;
+
+		float t1 = frac((ftime/* + Ph * IsALCode*/) / Ts);
+		float4 spcolor4 = tex2Dlod(ObjSphereSamplerAL, float4(t1 * 0.25,0,0,0));
+		float4 spcolor5 = tex2Dlod(ObjSphereSamplerAL2, float4(t1 * 0.25,0,0,0));
+		
+		float2 sel = DecisionSequenceCode(spcolor2);
+		
+		Color.rgb *= lerp(float3(1,1,1), lerp(spcolor5.rgb, spcolor4.rgb, sel.y), sel.x);
+		
+	}
+
+	if(use_texture) {
+		texcolor = tex2D(ObjTexSampler, Tex.xy);
+		texcolor.rgb = saturate(texcolor.rgb - Tex.z);
+		
+		#ifdef TEXTURE_SELECTLIGHT
+			Color = texcolor;
+			Color.rgb *= texlight(Color.rgb);
+		#else
+			float4 Color2, Color3;
+			Color2 = Color * texcolor;
+			Color3 = Color * texcolor;
+			Color3.rgb *= texlight(texcolor.rgb);
+			Color = (Tex.w < 0.1) ? Color2 : ((Tex.w < 1.1) ? Color : Color3);
+		#endif
+	}
+
+	float emissionPower = lerp(EmissionPower0, EmissionPower1, (float)use_toon) * AL_Scaling;
+
+	// 明るさを引き上げる
+	float3 scale = 1.0 / max(Color.rgb, 0.1); // 10倍を限界にする。
+	emissionPower *= min(min(scale.r, scale.g), scale.b);
+
+	Color.rgb *= emissionPower;
+
+	return Color;
+}

@@ -1,0 +1,635 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Clone.fxm
+//  作成: そぼろ
+//  原作: Mogg(SampleBase.fxm)
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+//サポート関数宣言(変更不可)
+float4 rot_x(float4 pos, float deg);
+float4 rot_y(float4 pos, float deg);
+float4 rot_z(float4 pos, float deg);
+float4x4 inverseDir(float4x4 mat);
+
+//サポート変数定義
+float Scale  : CONTROLOBJECT < string name = "(self)"; >;
+float3 Offset : CONTROLOBJECT < string name = "(self)"; >;
+float3 MasterPos : CONTROLOBJECT < string name = "(self)"; string item = "全ての親"; >;
+float4x4 MasterWorldMat : CONTROLOBJECT < string name = "(self)"; string item = "全ての親"; >;
+float Time1 : TIME <bool SyncInEditMode=true;>;
+float Time2 : TIME <bool SyncInEditMode=false;>;
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+//複製数
+int CloneCount = 100;
+
+//ループ変数（初期値は0固定）
+int CloneIndex = 0;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 複製の位置をコントロールする関数・ここを改造して好みの配置にしてください。
+// 不要な変化は削除可　行頭に「//」がある行はコメント文です。
+
+// サポート関数
+//   rot_x：X軸周りの回転
+//   rot_y：Y軸周りの回転
+//   rot_z：Z軸周りの回転
+
+// ※ Z→X→Y の順に回転させるとMMDの回転方式と一致します。
+
+// サポート変数
+//   CloneIndex：複製番号
+//   Scale：拡大率。アクセサリのデフォルトは10です。
+//   Offset：元アクセサリが移動した位置。PMDでは常に0です。
+//   MasterPos：「全ての親」ボーンの位置。存在しなければ0です。
+//   Time1 : フレーム時間です。単位は秒です。
+//   Time2 : フレーム時間です。単位は秒です。編集中も進み続けます。
+
+
+float4 ClonePos(float4 Pos) 
+{
+    const float row_count = 16; //16列に配置
+    float center = (int)(row_count / 2); //オリジナルと同じ位置に配置する番号
+    float cindex = CloneIndex - center;
+    
+    float column = (int)(CloneIndex / row_count);    //行番号
+    float row = ((CloneIndex % row_count) - center); //列番号
+    
+    float scatter = 4.2; //ばらつき係数
+    
+    //全ての親ボーンの位置を回転中心にする
+    Pos.xyz = Pos.xyz - MasterPos;
+    
+    //回転
+    //Pos = rot_z(Pos, 10);
+    //Pos = rot_x(Pos, 45);
+    Pos = rot_y(Pos, cindex * 30);
+    
+    //全ての親ボーンの位置を回転中心にする(さっき引いた分を戻す)
+    Pos.xyz = Pos.xyz + MasterPos;
+    
+    //移動
+    Pos.x += row * 15;
+    Pos.z += column * 15;
+    
+    //ばらつきを付加
+    Pos.x += (sin(cindex) + sin(cindex * 3)) * scatter;
+    Pos.z += (sin(cindex * 3.2) + sin(cindex * 5)) * scatter;
+    
+    
+    return Pos;
+}
+
+///////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////
+//これ以降はエフェクトの知識のある人以外は触れないこと
+
+
+// サポート関数定義
+
+#define PI 3.14159
+#define DEG_TO_RAD (PI / 180)
+
+float4 rot_x(float4 pos, float deg){
+    deg = DEG_TO_RAD * deg;
+    float4x4 rot = {
+        {1,         0,        0 , 0},
+        {0,  cos(deg), sin(deg) , 0},
+        {0, -sin(deg), cos(deg) , 0},
+        {0,         0,        0 , 1},
+    }; // X軸回転行列
+    
+    return mul(pos, rot);
+}
+
+float4 rot_y(float4 pos, float deg){
+    deg = DEG_TO_RAD * deg;
+    float4x4 rot = {
+        {cos(deg), 0, -sin(deg), 0},
+        {       0, 1,         0, 0},
+        {sin(deg), 0,  cos(deg), 0},
+        {       0, 0,         0, 1},
+    }; // Y軸回転行列
+    
+    return mul(pos, rot);
+}
+
+float4 rot_z(float4 pos, float deg){
+    deg = DEG_TO_RAD * deg;
+    float4x4 rot = {
+        { cos(deg), sin(deg), 0, 0},
+        {-sin(deg), cos(deg), 0, 0},
+        {        0,        0, 1, 0},
+        {        0,        0, 0, 1},
+    }; // Z軸回転行列
+    
+    return mul(pos, rot);
+}
+
+
+float4x4 inverseDir(float4x4 mat){
+    return float4x4(
+        mat._11, mat._21, mat._31, 0,
+        mat._12, mat._22, mat._32, 0,
+        mat._13, mat._23, mat._33, 0,
+        0,0,0,1
+    );
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+//外部インクルードされている場合は、これ以降の全てを無視する
+#ifndef CLONE_PARAMINCLUDE
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+//ループ用スクリプト
+
+#define LOOPSCR "LoopByCount=CloneCount;" \
+                "LoopGetIndex=CloneIndex;" \
+                "Pass=DrawObject;" \
+                "LoopEnd=;"
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+float Script : STANDARDSGLOBAL <
+    string ScriptOutput = "color";
+    string ScriptClass = "object";
+    string ScriptOrder = "standard";
+> = 0.8;
+
+
+//座標変換行列
+float4x4 WorldViewProjMatrix    : WORLDVIEWPROJECTION;
+float4x4 WorldMatrix        : WORLD;
+float4x4 ViewMatrix        : VIEW;
+
+//ライト関連
+bool     LightEnables[MMM_LightCount]        : LIGHTENABLES;        // 有効フラグ
+float4x4 LightWVPMatrices[MMM_LightCount]    : LIGHTWVPMATRICES;    // 座標変換行列
+float3   LightDirection[MMM_LightCount]        : LIGHTDIRECTIONS;    // 方向
+float3   LightPositions[MMM_LightCount]        : LIGHTPOSITIONS;    // ライト位置
+float    LightZFars[MMM_LightCount]            : LIGHTZFARS;        // ライトzFar値
+
+//材質モーフ関連
+float4     AddingTexture          : ADDINGTEXTURE;    // 材質モーフ加算Texture値
+float4     AddingSphere          : ADDINGSPHERE;    // 材質モーフ加算SphereTexture値
+float4     MultiplyTexture      : MULTIPLYINGTEXTURE;    // 材質モーフ乗算Texture値
+float4     MultiplySphere          : MULTIPLYINGSPHERE;    // 材質モーフ乗算SphereTexture値
+
+//カメラ位置
+float3     CameraPosition        : POSITION  < string Object = "Camera"; >;
+
+// マテリアル色
+float4   MaterialDiffuse    : DIFFUSE  < string Object = "Geometry"; >;
+float3   MaterialAmbient    : AMBIENT  < string Object = "Geometry"; >;
+float3   MaterialEmmisive    : EMISSIVE < string Object = "Geometry"; >;
+float3   MaterialSpecular    : SPECULAR < string Object = "Geometry"; >;
+float    SpecularPower        : SPECULARPOWER < string Object = "Geometry"; >;
+float4   MaterialToon        : TOONCOLOR;
+float4   EdgeColor            : EDGECOLOR;
+float    EdgeWidth            : EDGEWIDTH;
+float4   GroundShadowColor    : GROUNDSHADOWCOLOR;
+
+bool     spadd;                // スフィアマップ加算合成フラグ
+bool     usetoontexturemap;    // Toonテクスチャフラグ
+
+// ライト色
+float3   LightDiffuses[MMM_LightCount]      : LIGHTDIFFUSECOLORS;
+float3   LightAmbients[MMM_LightCount]      : LIGHTAMBIENTCOLORS;
+float3   LightSpeculars[MMM_LightCount]     : LIGHTSPECULARCOLORS;
+
+// ライト色
+static float4 DiffuseColor[3]  = { MaterialDiffuse * float4(LightDiffuses[0], 1.0f)
+                 , MaterialDiffuse * float4(LightDiffuses[1], 1.0f)
+                 , MaterialDiffuse * float4(LightDiffuses[2], 1.0f)};
+static float3 AmbientColor[3]  = { saturate(MaterialAmbient * LightAmbients[0]) + MaterialEmmisive
+                 , saturate(MaterialAmbient * LightAmbients[1]) + MaterialEmmisive
+                 , saturate(MaterialAmbient * LightAmbients[2]) + MaterialEmmisive};
+static float3 SpecularColor[3] = { MaterialSpecular * LightSpeculars[0]
+                 , MaterialSpecular * LightSpeculars[1]
+                 , MaterialSpecular * LightSpeculars[2]};
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+    texture = <ObjectSphereMap>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+struct VS_OUTPUT {
+    float4 Pos        : POSITION;        // 射影変換座標
+    float2 Tex        : TEXCOORD0;    // テクスチャ
+    float4 SubTex    : TEXCOORD1;    // サブテクスチャ/スフィアマップテクスチャ座標
+    float3 Normal    : TEXCOORD2;    // 法線
+    float3 Eye        : TEXCOORD3;    // カメラとの相対位置
+    float4 SS_UV1   : TEXCOORD4;    // セルフシャドウテクスチャ座標
+    float4 SS_UV2   : TEXCOORD5;    // セルフシャドウテクスチャ座標
+    float4 SS_UV3   : TEXCOORD6;    // セルフシャドウテクスチャ座標
+    float4 Color    : COLOR0;        // ライト0による色
+};
+
+//==============================================
+// 頂点シェーダ
+// MikuMikuMoving独自の頂点シェーダ入力(MMM_SKINNING_INPUT)
+//==============================================
+VS_OUTPUT Basic_VS(MMM_SKINNING_INPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon, uniform bool useSelfShadow)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPositionNormal)。座標と法線を取得する。
+    //================================================================================
+    MMM_SKINNING_OUTPUT SkinOut = MMM_SkinnedPositionNormal(IN.Pos, IN.Normal, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+    
+    //Clone変形
+    float4 pos = SkinOut.Position;
+    float4 pos_norm = pos + float4(SkinOut.Normal, 0);
+    pos = ClonePos(pos);
+    pos_norm = ClonePos(pos_norm);
+    SkinOut.Normal = normalize(pos_norm - pos).xyz;
+    SkinOut.Position = pos;
+    
+    // 頂点座標
+    Out.Pos = mul(SkinOut.Position, WorldViewProjMatrix);
+
+    // カメラとの相対位置
+    Out.Eye = CameraPosition - mul( SkinOut.Position.xyz, WorldMatrix );
+    // 頂点法線
+    Out.Normal = normalize( mul( SkinOut.Normal, (float3x3)WorldMatrix ) );
+
+    // ディフューズ色＋アンビエント色 計算
+    float3 color = float3(0, 0, 0);
+    float3 ambient = float3(0, 0, 0);
+    float count = 0;
+    for (int i = 0; i < 3; i++) {
+        if (LightEnables[i]) {
+            color += (float3(1,1,1) - color) * (max(0, DiffuseColor[i] * dot(Out.Normal, -LightDirection[i])));
+            ambient += AmbientColor[i];
+            count = count + 1.0;
+        }
+    }
+    Out.Color.rgb = saturate(ambient / count + color);
+    Out.Color.a = MaterialDiffuse.a;
+
+    // テクスチャ座標
+    Out.Tex = IN.Tex;
+    Out.SubTex.xy = IN.AddUV1.xy;
+
+    if ( useSphereMap ) {
+        // スフィアマップテクスチャ座標
+        float2 NormalWV = mul( Out.Normal, (float3x3)ViewMatrix );
+        Out.SubTex.z = NormalWV.x * 0.5f + 0.5f;
+        Out.SubTex.w = NormalWV.y * -0.5f + 0.5f;
+    }
+    
+    if (useSelfShadow) {
+        float4 dpos = mul(SkinOut.Position, WorldMatrix);
+        //デプスマップテクスチャ座標
+        Out.SS_UV1 = mul(dpos, LightWVPMatrices[0]);
+        Out.SS_UV2 = mul(dpos, LightWVPMatrices[1]);
+        Out.SS_UV3 = mul(dpos, LightWVPMatrices[2]);
+        
+        Out.SS_UV1.y = -Out.SS_UV1.y;
+        Out.SS_UV2.y = -Out.SS_UV2.y;
+        Out.SS_UV3.y = -Out.SS_UV3.y;
+
+        Out.SS_UV1.z = (length(LightPositions[0] - SkinOut.Position) / LightZFars[0]);
+        Out.SS_UV2.z = (length(LightPositions[1] - SkinOut.Position) / LightZFars[1]);
+        Out.SS_UV3.z = (length(LightPositions[2] - SkinOut.Position) / LightZFars[2]);
+    }
+
+    return Out;
+}
+
+//==============================================
+// ピクセルシェーダ
+// 入力は特に独自形式なし
+//==============================================
+float4 Basic_PS(VS_OUTPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon, uniform bool useSelfShadow) : COLOR0
+{
+    float4 Color = IN.Color;
+    float4 texColor = float4(1,1,1,1);
+    float  texAlpha = MultiplyTexture.a + AddingTexture.a;
+
+    //スペキュラ色計算
+    float3 HalfVector;
+    float3 Specular = 0;
+    for (int i = 0; i < 3; i++) {
+        if (LightEnables[i]) {
+            HalfVector = normalize( normalize(IN.Eye) + -LightDirection[i] );
+            Specular += pow( max(0,dot( HalfVector, normalize(IN.Normal) )), SpecularPower ) * SpecularColor[i];
+        }
+    }
+
+    // テクスチャ適用
+    if (useTexture) {
+        texColor = tex2D(ObjTexSampler, IN.Tex);
+        texColor.rgb = (texColor.rgb * MultiplyTexture.rgb + AddingTexture.rgb) * texAlpha + (1.0 - texAlpha);
+    }
+    Color.rgb *= texColor.rgb;
+
+    // スフィアマップ適用
+    if ( useSphereMap ) {
+        // スフィアマップ適用
+        if(spadd) Color.rgb = Color.rgb + (tex2D(ObjSphareSampler,IN.SubTex.zw).rgb * MultiplySphere.rgb + AddingSphere.rgb);
+        else      Color.rgb = Color.rgb * (tex2D(ObjSphareSampler,IN.SubTex.zw).rgb * MultiplySphere.rgb + AddingSphere.rgb);
+    }
+    // アルファ適用
+    Color.a = IN.Color.a * texColor.a;
+
+    // セルフシャドウなしのトゥーン適用
+    float3 color;
+    if (!useSelfShadow && useToon && usetoontexturemap ) {
+        //================================================================================
+        // MikuMikuMovingデフォルトのトゥーン色を取得する(MMM_GetToonColor)
+        //================================================================================
+        color = MMM_GetToonColor(MaterialToon, IN.Normal, LightDirection[0], LightDirection[1], LightDirection[2]);
+        Color.rgb *= color;
+    }
+    // セルフシャドウ
+    if (useSelfShadow) {
+
+        if (useToon && usetoontexturemap) {
+            //================================================================================
+            // MikuMikuMovingデフォルトのセルフシャドウ色を取得する(MMM_GetSelfShadowToonColor)
+            //================================================================================
+            float3 shadow = MMM_GetToonColor(MaterialToon, IN.Normal, LightDirection[0], LightDirection[1], LightDirection[2]);
+            color = MMM_GetSelfShadowToonColor(MaterialToon, IN.Normal, IN.SS_UV1, IN.SS_UV2, IN.SS_UV3, false, useToon);
+
+            Color.rgb *= min(shadow, color);
+        }
+        else {
+            Color.rgb *= MMM_GetSelfShadowToonColor(MaterialToon, IN.Normal, IN.SS_UV1, IN.SS_UV2, IN.SS_UV3, false, useToon);
+        }
+    }
+
+    // スペキュラ適用
+    Color.rgb += Specular;
+
+    return Color;
+}
+
+//==============================================
+// オブジェクト描画テクニック
+// UseSelfShadowが独自に追加されています。
+//==============================================
+technique MainTec0 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = false; bool UseSelfShadow = false; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, false, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, false, false);
+    }
+}
+
+technique MainTec1 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = false; bool UseSelfShadow = false; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, false, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, false, false);
+    }
+}
+
+technique MainTec2 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = false; bool UseSelfShadow = false; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, true, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, false, false);
+    }
+}
+
+technique MainTec3 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = false; bool UseSelfShadow = false; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, true, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, false, false);
+    }
+}
+
+technique MainTec4 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = true; bool UseSelfShadow = false; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, false, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, true, false);
+    }
+}
+
+technique MainTec5 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = true; bool UseSelfShadow = false; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, false, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, true, false);
+    }
+}
+
+technique MainTec6 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = true; bool UseSelfShadow = false; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, true, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, true, false);
+    }
+}
+
+technique MainTec7 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = true; bool UseSelfShadow = false; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, true, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, true, false);
+    }
+}
+technique MainTec8 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = false; bool UseSelfShadow = true; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, false, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, false, true);
+    }
+}
+
+technique MainTec9 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = false; bool UseSelfShadow = true; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, false, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, false, true);
+    }
+}
+
+technique MainTec10 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = false; bool UseSelfShadow = true; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, true, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, false, true);
+    }
+}
+
+technique MainTec11 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = false; bool UseSelfShadow = true; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, true, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, false, true);
+    }
+}
+
+technique MainTec12 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = true; bool UseSelfShadow = true; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, false, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, true, true);
+    }
+}
+
+technique MainTec13 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = true; bool UseSelfShadow = true; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, false, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, true, true);
+    }
+}
+
+technique MainTec14 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = true; bool UseSelfShadow = true; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, true, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, true, true);
+    }
+}
+
+technique MainTec15 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = true; bool UseSelfShadow = true; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, true, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, true, true);
+    }
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 輪郭描画
+
+//==============================================
+// 頂点シェーダ
+//==============================================
+float4 Edge_VS(MMM_SKINNING_INPUT IN) : POSITION 
+{
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    MMM_SKINNING_OUTPUT SkinOut = MMM_SkinnedPositionNormal(IN.Pos, IN.Normal, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+    
+    //Clone変形
+    float4 pos = SkinOut.Position;
+    float4 pos_norm = pos + float4(SkinOut.Normal, 0);
+    pos = ClonePos(pos);
+    pos_norm = ClonePos(pos_norm);
+    SkinOut.Normal = normalize(pos_norm - pos).xyz;
+    SkinOut.Position = pos;
+    
+    float4 position = SkinOut.Position + float4(SkinOut.Normal, 0) * IN.EdgeWeight * EdgeWidth * distance(SkinOut.Position.xyz, CameraPosition);
+
+    return mul( position, WorldViewProjMatrix );
+}
+
+//==============================================
+// ピクセルシェーダ
+//==============================================
+float4 Edge_PS() : COLOR
+{
+    // 輪郭色で塗りつぶし
+    return EdgeColor;
+}
+
+//==============================================
+// 輪郭描画テクニック
+//==============================================
+technique EdgeTec < string MMDPass = "edge"; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS();
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 影（非セルフシャドウ）描画
+
+//==============================================
+// 頂点シェーダ
+//==============================================
+float4 Shadow_VS(MMM_SKINNING_INPUT IN) : POSITION
+{
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    float4 position = MMM_SkinnedPosition(IN.Pos, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+    
+    
+    // カメラ視点のワールドビュー射影変換
+    return mul( ClonePos(position), WorldViewProjMatrix );
+}
+
+//==============================================
+// ピクセルシェーダ
+//==============================================
+float4 Shadow_PS() : COLOR
+{
+    return GroundShadowColor;
+}
+
+//==============================================
+// 地面影描画テクニック
+//==============================================
+technique ShadowTec < string MMDPass = "shadow"; 
+                     string Script = LOOPSCR;
+> {
+    pass DrawObject {
+        VertexShader = compile vs_2_0 Shadow_VS();
+        PixelShader  = compile ps_2_0 Shadow_PS();
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+
+#endif //CLONE_PARAMINCLUDE
+
+
+
+
+

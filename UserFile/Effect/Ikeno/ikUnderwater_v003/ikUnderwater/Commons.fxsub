@@ -1,0 +1,154 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// 各エフェクトの共通処理
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// ライト用シャドウマップのnear-far
+#define PROJ_FAR  2000
+#define PROJ_NEAR 3
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define	PI	(3.14159265359)
+#define DEG_TO_RAD (PI / 180.0)
+
+float4x4 matW			: WORLD;
+float3 CameraPosition	: POSITION  < string Object = "Camera"; >;
+float4x4 WaveObjectMatrix : CONTROLOBJECT < string name = CTRL_NAME; string item = "全ての親"; >;
+
+float mLightDistance : CONTROLOBJECT < string name = CTRL_NAME; string item = "ライト距離"; >;
+float mLightAngle : CONTROLOBJECT < string name = CTRL_NAME; string item = "ライト角度"; >;
+
+float mEffectAmount : CONTROLOBJECT < string name = CTRL_NAME; string item = "エフェクト強度"; >;
+float mFogAmount : CONTROLOBJECT < string name = CTRL_NAME; string item = "フォグ強度"; >;
+float mDepthFogAmount : CONTROLOBJECT < string name = CTRL_NAME; string item = "深度フォグ強度"; >;
+
+float mFogR : CONTROLOBJECT < string name = CTRL_NAME; string item = "フォグR"; >;
+float mFogG : CONTROLOBJECT < string name = CTRL_NAME; string item = "フォグG"; >;
+float mFogB : CONTROLOBJECT < string name = CTRL_NAME; string item = "フォグB"; >;
+float mFogA : CONTROLOBJECT < string name = CTRL_NAME; string item = "フォグ明度"; >;
+
+static const float WaveLightRad = lerp(WaveLightAngleMin, WaveLightAngleMax, mLightAngle) * DEG_TO_RAD;
+
+
+float4x4 GetLightViewMatrix(float4x4 mat, float3 pos)
+{
+	// z軸ではなく、y軸を基準にライトの向きを決める
+	float3 tmp = mat[2].xyz;
+	mat[2].xyz =-mat[1].xyz;
+	mat[1].xyz = tmp;
+
+	float3x3 matRot = transpose((float3x3)mat);
+
+	return float4x4(
+		matRot[0], 0,
+		matRot[1], 0,
+		matRot[2], 0,
+		mul(-pos, matRot), 1);
+}
+
+float4x4 GetLightProjMatrix()
+{
+	const float ProjFar = PROJ_FAR;
+	const float ProjNear = PROJ_NEAR;
+	const float Sz = ProjFar / (ProjFar - ProjNear);
+	const float Sx = 1 / tan(WaveLightRad);
+	
+	float4x4 out1 = {
+		Sx,0 ,0 ,0,
+		0 ,Sx,0 ,0,
+		0 ,0 , Sz,1,
+		0 ,0 ,-Sz * ProjNear, 0
+	};
+
+	return out1;
+}
+
+float4x4 GetInverseMatrix(float4x4 mat)
+{
+	float3x3 matRot = transpose((float3x3)mat);
+	return float4x4(
+		matRot[0], 0,
+		matRot[1], 0,
+		matRot[2], 0,
+		mul(-mat._41_42_43, matRot), 1);
+}
+
+float4x4 GetInverseProjMatrix(float4x4 mat)
+{
+	float a = mat._11;
+	float b = mat._22;
+	float c = mat._33;
+	float d = mat._34;
+	float e = mat._43;
+
+	float4x4 out1 = {
+		1/a,0 ,0 ,0,
+		0 ,1/b,0 ,0,
+		0 ,0 , 0,1/e,
+		0 ,0 ,1/d, -c/(d*e)
+	};
+
+	return out1;
+}
+
+
+static const float3 WaveObjectPosition = WaveObjectMatrix._41_42_43;
+static const float3 WaveLightDirection = normalize(-WaveObjectMatrix._21_22_23);
+static const float3 WaveLightPosition = WaveObjectPosition - WaveLightDirection * lerp(WaveLightAngleMin, WaveLightAngleMax, mLightDistance * mLightDistance);
+
+static const float4x4 matWaveV = GetLightViewMatrix(WaveObjectMatrix, WaveLightPosition);
+static const float4x4 matWaveP = GetLightProjMatrix();
+static const float4x4 matWaveVP = mul(matWaveV, matWaveP);
+static const float4x4 matWaveWVP = mul(matW, matWaveVP);
+
+static const float4x4 matWaveInvV = GetInverseMatrix(matWaveV);
+static const float4x4 matWaveInvP = GetInverseProjMatrix(matWaveP);
+static const float4x4 matWaveInvVP = mul(matWaveInvP, matWaveInvV);
+
+static bool IsInWater = (WaveObjectPosition.y > CameraPosition.y);
+
+// 表情モーフのパラメータを計算する
+inline float CalcVariable(float s, float e, float t, float d)
+{
+	#if ENABLE_DEFAULT_VALUE > 0
+	return (t==0.0) ? d : lerp(s,e,t);
+	#else
+	return lerp(s,e,t);
+	#endif
+}
+
+static float EffectAmount = CalcVariable(0.0, 1.0, mEffectAmount, 1.0);
+static float FogAmount = CalcVariable(FogAmountMin, FogAmountMax, mFogAmount, FogAmountDefault);
+static float3 FogColor = float3(mFogR,mFogG,mFogB);
+static float DepthFogAmount = CalcVariable(DepthFogAmountMin, DepthFogAmountMax, mDepthFogAmount * mDepthFogAmount, DepthFogAmountDefault) * EffectAmount;
+
+
+float3 CalcFogColor(float3 Color, float thickness)
+{
+	float outColor = 1.0 - exp(-thickness * FogAmount);
+	float3 fogColor = lerp(FogColor, 0, outColor * (1.0 - mFogA));
+	return lerp(Color, fogColor, outColor * EffectAmount);
+
+}
+
+// 適当な深度フォグ
+inline float CalcDepthFog(float3 v, float thickness)
+{
+	float y0 = max(WaveObjectPosition.y - CameraPosition.y, 0);
+	float y1 = max(y0 - thickness * v.y, 0);
+	float depthFog = abs(y0 - y1) * 0.5 + min(y0, y1);
+	return pow(0.8, depthFog * DepthFogAmount);
+	// Color *= exp(-depthFog * 0.01);		// 0.5～0.01, 0.01
+}
+
+
+// 水面までの距離を計算
+inline float DistanceToWater(float3 pos, float3 v)
+{
+	return (WaveObjectPosition.y - pos.y) / v.y;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////
+

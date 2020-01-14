@@ -1,0 +1,157 @@
+
+// 影を落とすアルファの閾値
+#define CasterAlphaThreshold	0.2
+// 影を受けるアルファの閾値
+#define RecieverAlphaThreshold	0.01
+
+// シャドウマップの描画範囲を示すカメラからの距離。
+// 大きいほど遠くまで影が描画されるが影が粗くなる。10で1m弱の距離。
+// CascadeZMax = 300でMMDの影範囲8000に相当。1300で9500相当。
+const float CascadeZMax = 2000.0;		// シャドウマップの最大距離 (500～4000程度)
+const float CascadeZMin = 3.0;			// シャドウマップの最小距離 (5～10程度)
+
+// シャドウマップの分割位置。0.5～1.0程度。
+// 小さいほど各シャドマップのサイズが等間隔になる。
+// 大きいほど手前の精度が上がり、奥の精度が下がる。
+const float CascadeScale = 0.9;
+
+const float LightZMax = 4000.0;	// ライトの最大深度
+const float LightZMin = 1;		// ライトの最小深度
+const float LightDistance = 1000;	// カメラ位置からライトまでの距離
+// ※ 夕日などカメラとライトが正対する場合、
+// LightZMaxとLightDistanceが CascadeZMaxより大きい必要がある。
+
+#define WARP_RANGE	8		// シャドウマップを重ねるサイズ(pixel単位)
+
+
+//-----------------------------------------------------------------------------
+// ikScreenBuffer.fxsub 用の設定
+
+#define BIAS_SCALE		0.005	// 深度値のバイアス
+	// (1.0/200.0)
+
+
+//-----------------------------------------------------------------------------
+
+float4x4 CreateLightViewMatrix(float3 foward)
+{
+	const float3 up1 = float3(0,0,1);
+	const float3 up2 = float3(1,0,0);
+#if 0
+	float3 right = cross(up1, foward);
+	right = normalize(!any(right) ? cross(up2, foward) : right);
+#else
+	// カメラ方向に合わせる
+	float3 camDir = CameraDirection; // normalize(floor(CameraDirection*8.0)/8.0);
+	float3 right = cross(camDir, foward);
+	right = !any(right) ? cross(up1, foward) : right;
+	right = !any(right) ? cross(up2, foward) : right;
+	right = normalize(right);
+#endif
+
+	float3x3 mat;
+	mat[2].xyz = foward;
+	mat[0].xyz = right;
+	mat[1].xyz = normalize(cross(foward, right));
+
+	float3x3 matRot = transpose((float3x3)mat);
+	float3 pos = CameraPosition + foward * -LightDistance;
+
+	return float4x4(
+		matRot[0], 0,
+		matRot[1], 0,
+		matRot[2], 0,
+		mul(-pos, matRot), 1);
+}
+
+static float4x4 matLightVs = CreateLightViewMatrix(normalize(LightDirection));
+static float4x4 matLightProjectionToCameraView = mul(matInvV, matLightVs);
+
+static float4x4 matLightPs = {
+	1,	0,	0,	0,
+	0,	1,	0,	0,
+	0,	0,	1.0 / LightZMax,	0,
+	0,	0,	0,	1
+};
+
+float CalculateSplitPosition(float i)
+{
+	float p0 = CascadeZMin + ((CascadeZMax - CascadeZMin) / CascadeZMin) * (i / 4.0);
+	float p1 = CascadeZMin * pow(CascadeZMax / CascadeZMin, i / 4.0);
+//	return lerp(p0, p1, CascadeScale);
+	return p0 * (1 - CascadeScale) + p1 * CascadeScale;
+}
+
+float4 CreateFrustumFromProjection()
+{
+	float3 i = float3(1,-1,0);
+	float4 r = mul(i.xzxx, matInvP);
+	float4 l = mul(i.yzxx, matInvP);
+	float4 t = mul(i.zxxx, matInvP);
+	float4 b = mul(i.zyxx, matInvP);
+
+	return float4(r.x / r.z, l.x / l.z, t.y / t.z, b.y / b.z);
+}
+
+float4 CreateLightProjParameter(float4 frustumInfo, float near, float far)
+{
+	float4 znear = float4(near.xxx, 1);
+	float4 zfar = float4(far.xxx, 1);
+
+	float4 rtn = float4(frustumInfo.xz, 1, 1) * znear;
+	float4 rtf = float4(frustumInfo.xz, 1, 1) * zfar;
+	float4 lbn = float4(frustumInfo.yw, 1, 1) * znear;
+	float4 lbf = float4(frustumInfo.yw, 1, 1) * zfar;
+	float4 rbn = float4(rtn.x, lbn.yzw), rbf = float4(rtf.x, lbf.yzw);
+	float4 ltn = float4(lbn.x, rtn.yzw), ltf = float4(lbf.x, rtf.yzw);
+
+	float4 vpos;
+	#define CalcMinMax(inV1, inV2) \
+		vpos.xy = mul(inV1, matLightProjectionToCameraView).xy; \
+		vpos.zw = mul(inV2, matLightProjectionToCameraView).xy;
+	#define CompMinMax(inV1, inV2) \
+		CalcMinMax(inV1, inV2) \
+		minBB = min(vpos, minBB);	maxBB = max(vpos, maxBB);
+	CalcMinMax(rtn, rtf)
+	float4 minBB = vpos, maxBB = vpos;
+	CompMinMax(lbn, lbf);
+	CompMinMax(rbn, rbf);	CompMinMax(ltn, ltf);
+	float4 orthographicBB = float4(min(minBB.xy, minBB.zw), max(maxBB.xy, maxBB.zw));
+
+	const float normalizeByBufferSize = 2.0 / SHADOW_TEX_SIZE;
+	const float scaleDuetoBlureAMT = (WARP_RANGE * 2.0 + 1) * normalizeByBufferSize * 0.5;
+
+	orthographicBB += (orthographicBB.xyzw - orthographicBB.zwxy) * scaleDuetoBlureAMT;
+	float4 unit = (orthographicBB.zwzw - orthographicBB.xyxy) * normalizeByBufferSize;
+	orthographicBB = floor(orthographicBB / unit) * unit;
+
+	float2 invBB = 1.0 / (orthographicBB.zw - orthographicBB.xy);
+	float2 endPos = -(orthographicBB.xy + orthographicBB.zw);
+	return float4(2.0, 2.0, endPos.xy) * invBB.xyxy;
+}
+
+static float SplitPositions[] = {
+	CascadeZMin,
+	CalculateSplitPosition(1.0),
+	CalculateSplitPosition(2.0),
+	CalculateSplitPosition(3.0),
+	CascadeZMax
+};
+
+float4x4 CreateLightProjParameters()
+{
+	float4 frustumInfo = CreateFrustumFromProjection();
+
+	float z0 = SplitPositions[0];
+	float z1 = SplitPositions[1];
+	float z2 = SplitPositions[2];
+	float z3 = SplitPositions[3];
+	float z4 = SplitPositions[4];
+
+	return float4x4(
+		CreateLightProjParameter(frustumInfo, z0, z1),
+		CreateLightProjParameter(frustumInfo, z1, z2),
+		CreateLightProjParameter(frustumInfo, z2, z3),
+		CreateLightProjParameter(frustumInfo, z3, z4));
+}
+

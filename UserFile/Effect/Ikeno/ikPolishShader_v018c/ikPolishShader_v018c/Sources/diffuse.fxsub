@@ -1,0 +1,64 @@
+
+
+// ‹tŒõ‚É‚æ‚éŒõ‚Ì“§‰ß
+float CalcBackLight(float3 L, float3 N, float3 V)
+{
+	const float Distortion = 0.2;
+	float3 bentL = normalize(N * Distortion + -L); // –@ü•ûŒü‚ÉŒü‚¯‚é
+	float backlight = dot(V, bentL) * 0.5 + 0.5;
+	return saturate(backlight);
+}
+
+
+// ŠÂ‹«ƒ}ƒbƒv‚©‚çŠÂ‹«Œõ‚ðŽæ“¾
+float3 CalcIndirectlight(float3 L, float3 N, float3 V, float2 texCoord, MaterialParam mat, float shadow, float3 albedo)
+{
+	float NV = abs(dot(N, V)) + 1e-5;
+	float3 dominantN = GetDiffuseDominantDir(N, V, NV, mat.roughness);
+	float3 ambient = GetEnvColor(dominantN, 1.0).rgb;
+
+	float brdf = tex2D(EnvironmentBRDF, float2(mat.roughness, NV)).z;
+	ambient *= brdf;
+
+	float4 ambientOccu = GetSSAOFull(texCoord);
+	float ao = ambientOccu.w;
+	ambient = ambient * lerp(albedo * mat.sssValue, 1, ao);
+	ambient += ambientOccu.rgb;
+
+	return ambient * AmbientScale;
+}
+
+
+// ŠgŽU”½ŽË€‚ÌŒvŽZ
+float4 PS_CalcDiffuse( float4 Tex: TEXCOORD0 ) : COLOR
+{
+	float2 texCoord = Tex.xy;
+
+	float3 albedo = tex2D(ColorMap, texCoord).rgb;
+	MaterialParam mat = GetMaterial(texCoord, albedo);
+	GeometryInfo geom = GetWND(texCoord);
+	float2 shadowInfo = tex2D(ShadowmapSamp, texCoord).xy;
+
+	float3 V = normalize(CameraPosition - geom.wpos);
+	float3 L = -LightDirection;
+	float3 N = geom.nd.normal;
+
+	float shadow = shadowInfo.x;
+	float translucence = shadowInfo.y;
+
+	float diffuse = CalcDiffuse(L, N, V, mat.roughness) * shadow;
+//	float3 scatter = translucence * albedo + (1.0 - albedo) * diffuse;
+	float3 scatter = (translucence - diffuse) * albedo + diffuse;
+	float3 directlight = lerp(diffuse.xxx, scatter, mat.sssValue) * LightColor;
+
+	#if EXTRA_LIGHTS > 0
+	directlight += tex2D(LightMapSamp, texCoord).rgb * LightScale;
+	#endif
+
+	float3 indirectlight = CalcIndirectlight(L, N, V, texCoord, mat, shadow, albedo);
+	float3 light = directlight + indirectlight;
+
+	return float4(light * (1.0 - mat.metalness), shadow);
+}
+
+

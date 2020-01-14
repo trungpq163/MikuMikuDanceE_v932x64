@@ -1,0 +1,155 @@
+// ikUnderwater用の設定ファイル
+
+// このファイルを書き換えても、MMEの自動更新の対象にはならない。
+// MMD実行中に編集した場合、MMEの「すべて更新」を選択して明示的に変更する必要がある。
+
+
+// ゴッドレイを表示するか? 0:表示しない。1:表示する
+// 無効にすると高速になる
+// ※ ここでのゴッドレイは水中にでる光の筋を指す。
+#define ENABLE_GODRAY			1
+
+// 1ピクセルあたりのゴッドレイ用調査回数(4～64程度)。
+// 大きな値ほど正確になる代わりに重くなる。
+#define RayMarchCount	8
+
+// ゴッドレイ探索距離の最大値
+#define MaxRayDistance		(1000.0)
+
+
+// 水面を表示するか? 0:表示しない。1:表示する
+// 無効にすると高速になる
+#define ENABLE_WATERPLANE		1
+
+// 屈折用のマップを自作するか?
+// 0の場合、描画済みのスクリーンを歪ませて代用する。
+// 水中にあるものが水上にあるように見えたりするが、違和感が無いことも多い。
+// ENABLE_WATERPLANE が無効な場合、自動で無効になる。
+#define ENABLE_REFRACTION_MAP	1
+
+// 屈折用のマップにエフェクトを適用するか?
+// 有効にしないと水上から水中を見たときに波の揺れとエフェクトがズレる。
+// 水上から水面下を見下ろさない場合は重くなるだけ。
+#define ENABLE_REFRACTION_EFFECT	1
+
+
+// ゴッドレイのバッファサイズ。2のべき乗(1,2,4など)にする。2なら実画面の1/2のサイズになる。
+// バッファサイズが小さいほど高速になるが、画質が悪くなる。
+#define FOG_BUFFER_SCALE	2
+
+// 水面のバッファサイズ
+// 水面への屈折や映り込みの合成結果を格納するバッファのサイズ
+#define DISTORTION_BUFFER_SCALE	1
+
+// 反射・屈折面のバッファサイズ
+// 水面に映り込むものを別途描画するためのバッファサイズ
+#define REFLECTION_BUFFER_SCALE	2
+
+
+// 独自セルフシャドウマップのサイズ(ピクセル単位)
+// コースティクスの遮蔽された部分のジャギが気になる場合は、4096にする。
+#define SHADOW_BUFSIZE	2048
+
+// コースティクスのバッファサイズ(ピクセル単位)
+// コースティクス自体のジャギが気になる場合は、1024などにする。大きくすると重くなる。
+#define CAUSTICS_BUFSIZE	512
+
+
+// コントローラの名称
+#define CTRL_NAME	"ikUWController.pmx"
+
+
+//-----------------------------------------------------------------------------
+
+// コースティクスの太さ(2～5:大きいほど細くなる)
+#define CausticsStroke			(3.0)
+
+// 水面の半透明度
+#define WaterTranslucency		0.5
+
+
+//-----------------------------------------------------------------------------
+// 以下はモーフで指定するパラメータの最小値、最大値、デフォルト値を指定。
+// コントローラから指定できるので、あまり弄る必要はないはず。
+
+// デフォルト値を利用するか? 0:しない、1:する
+// デフォルト値が有効な場合、モーフの0はデフォルト値になる。
+// 最小値を指定したい場合は0.01などを使用する。
+#define ENABLE_DEFAULT_VALUE	1
+
+// ゴッドレイの強度
+#define GodrayIntensityMin		(0.0)
+#define GodrayIntensityMax		(0.5)
+#define GodrayIntensityDefault	(0.2)
+// ***Min, ***Max, ***Defaultとあるものは、コントローラの表情モーフでの
+// 最小値と最大値、0を指定した場合の値を設定している。
+
+// コースティクスの強度
+#define CausticsIntensityMin		(0.0)
+#define CausticsIntensityMax		(6.0)
+#define CausticsIntensityDefault	(2.0)
+
+// 水面のハイライトの強度
+#define SpecularIntensityMin		(0.0)
+#define SpecularIntensityMax		(5.0)
+#define SpecularIntensityDefault	(2.0)
+
+// 水中フォグの強さ
+#define FogAmountMin			(1.0e-4)
+#define FogAmountMax			(5.0e-2)
+#define FogAmountDefault		(1.0e-2)
+
+// 深度フォグの強さ
+#define DepthFogAmountMin		(0.01)
+#define DepthFogAmountMax		(2.0)
+#define DepthFogAmountDefault	(0.1)
+
+// 波の密度
+#define WaveFreqMin			(0.1)
+#define WaveFreqMax			(1.0)
+#define WaveFreqDefault		(0.3)
+
+// 波の速度
+#define WaveSpeedMin			(0.5)
+#define WaveSpeedMax			(5.0)
+#define WaveSpeedDefault		(1.0)
+
+// 波の高さ(擬似)
+#define WaveHeightMin			(0.0)
+#define WaveHeightMax			(5.0)
+#define WaveHeightDefault		(1.0)
+
+
+// ライトの角度
+#define WaveLightAngleMin	20
+#define WaveLightAngleMax	60		// 90度以下にすること
+
+// ライトの距離
+// コントローラから仮想光源までの距離
+#define WaveLightDistanceMin	(50.0)
+#define WaveLightDistanceMax	(200.0)
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// あんまり弄らないほうがいい項目
+
+// 深度バッファのテクスチャ形式
+#define DEPTH_TEXFORMAT		"D3DFMT_G16R16"		// Rにデプス、Gに陰影の計算結果が入る。
+#define SHADOW_TEXFORMAT	"D3DFMT_R32F"		// Rにデプス
+	// R16Fでは精度が足りない。G16R16のほうがR16Fよりマシ。
+
+// オリジナル画像のテクスチャ
+#define SCREEN_TEXFORMAT	"A8R8G8B8"
+
+// ゴッドレイ用のバッファ
+#define FOG_TEXFORMAT	"R16F"
+
+// 映り込み用バッファのスケール
+// 反射屈折用の画面を小さく描画することで、画面端の歪みを軽減する
+float FrameScale = 0.8;
+
+// 線形デプスバッファのデフォルト深度。
+#define FAR_Z	1000
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////

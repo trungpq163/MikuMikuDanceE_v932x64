@@ -1,0 +1,256 @@
+//=============================================================================
+// ボクセル関係
+//=============================================================================
+
+
+//-----------------------------------------------------------------------------
+//
+
+inline float4 WorldPositionToVoxelpoint(float3 wpos)
+{
+	float3 lpos = (wpos - GridCenterPosition + FarDepth * 0.5) * INV_GRID_SIZE;
+
+	// xだけは範囲外チェックが必要
+	float x = clamp(lpos.x, 0.5, VOXEL_SIZE - 0.5);
+	float isInRange = (x == lpos.x);
+		// NOTE: フォールオフにする?
+		// float isInRange = saturate(1.5 - abs(x - lpos.x));
+
+	return float4(x, lpos.yz, isInRange);
+}
+
+inline float3 VoxelPointToWorldPosition(float3 vpos)
+{
+	float3 wpos = (vpos + 0.5) * GRID_SIZE_ + GridCenterPosition - FarDepth * 0.5;
+	return wpos;
+}
+
+inline float3 GetAlignedVoxelPosition(float3 vpos)
+{
+	float3 lpos = (vpos - GridCenterPosition + FarDepth * 0.5) * INV_GRID_SIZE;
+	float3 wpos = floor(lpos + 0.5) * GRID_SIZE_ + GridCenterPosition - FarDepth * 0.5;
+	return wpos;
+}
+
+inline float4 GetPointVoxelColor(float3 wpos)
+{
+	const float BaseSize = VOXEL_SIZE;
+
+	float4 vpos = WorldPositionToVoxelpoint(wpos);
+	vpos.xyz = floor(vpos.xyz);
+	float2 uv0 = float2((vpos.x + vpos.z * BaseSize + 0.5) / (BaseSize * BaseSize), (vpos.y + 0.5) / BaseSize);
+
+	return tex2Dlod(VoxelSamp2Point, float4(uv0, 0, 0)) * vpos.w;
+}
+
+inline float4 GetVoxelColorAndNormal(float3 wpos, out float4 normal)
+{
+	const float BaseSize = VOXEL_SIZE;
+	const float kU = 1.0 / (BaseSize * BaseSize);
+
+	float4 vpos = WorldPositionToVoxelpoint(wpos);
+	float x = vpos.x;
+	float isInRange = vpos.w;
+	float y = vpos.y * (1.0 / BaseSize);
+	float zi = floor(vpos.z);
+	float zf = saturate(vpos.z - zi);
+
+	float2 uv0 = float2((x + zi * BaseSize) * kU, y);
+	float2 uv1 = float2((x + (zi + 1) * BaseSize) * kU, y);
+
+	float4 col0 = tex2Dlod(VoxelSamp2, float4(uv0, 0, 0));
+	float4 col1 = tex2Dlod(VoxelSamp2, float4(uv1, 0, 0));
+	float4 col = lerp(col0, col1, zf) * isInRange;
+
+	float4 nrm0 = tex2Dlod(VoxelNormalSamp, float4(uv0, 0, 0));
+	float4 nrm1 = tex2Dlod(VoxelNormalSamp, float4(uv1, 0, 0));
+	normal = normalize(lerp(nrm0, nrm1, zf));
+
+	return col;
+}
+
+// Lv.1 mipmap
+inline float4 GetVoxelColor1(float3 wpos)
+{
+	const float BaseSize = VOXEL_SIZE;
+	const float kU = 1.0 / (BaseSize * BaseSize);
+
+	float3 lpos = ((wpos - GridCenterPosition) + FarDepth * 0.5) / (GRID_SIZE_ * 2.0);
+
+	float x = clamp(lpos.x, 0.5, BaseSize - 0.5);
+	float isInRange = (x == lpos.x);
+	float y = lpos.y * (1.0 / BaseSize);
+	float z = lpos.z;
+	float zi = floor(z);
+
+	float2 uv0 = float2((x + zi * BaseSize) * kU, y);
+	float2 uv1 = float2((x + (zi + 1) * BaseSize) * kU, y);
+
+	float4 col0 = tex2Dlod(VoxelSamp2, float4(uv0, 0, 0));
+	float4 col1 = tex2Dlod(VoxelSamp2, float4(uv1, 0, 0));
+	return lerp(col0, col1, saturate(z - zi)) * isInRange;
+}
+
+// Lv.2 mipmap
+inline float4 GetVoxelColor2(float3 wpos)
+{
+	const float BaseSize = VOXEL_SIZE / 2;
+	const float kU = 1.0 / (BaseSize * BaseSize);
+
+	float3 lpos = ((wpos - GridCenterPosition) + FarDepth * 0.5) / (GRID_SIZE_ * 2.0);
+
+	float x = clamp(lpos.x, 0.5, BaseSize - 0.5);
+	float isInRange = (x == lpos.x);
+	float y = lpos.y * (1.0 / BaseSize);
+	float z = lpos.z;
+	float zi = floor(z);
+
+	float2 uv0 = float2((x + zi * BaseSize) * kU, y);
+	float2 uv1 = float2((x + (zi + 1) * BaseSize) * kU, y);
+
+	float4 col0 = tex2Dlod(VoxelSamp3, float4(uv0, 0, 0));
+	float4 col1 = tex2Dlod(VoxelSamp3, float4(uv1, 0, 0));
+	return lerp(col0, col1, saturate(z - zi)) * isInRange;
+}
+
+// Lv.3 mipmap
+inline float4 GetVoxelColor3(float3 wpos)
+{
+	const float BaseSize = VOXEL_SIZE / 4;
+	const float kU = 1.0 / (BaseSize * BaseSize);
+
+	float3 lpos = ((wpos - GridCenterPosition) + FarDepth * 0.5) / (GRID_SIZE_ * 4.0);
+
+	float x = clamp(lpos.x, 0.5, BaseSize - 0.5);
+	float isInRange = (x == lpos.x);
+	float y = lpos.y * (1.0 / BaseSize);
+	float z = lpos.z;
+	float zi = floor(z);
+
+	float2 uv0 = float2((x + zi * BaseSize) * kU, y);
+	float2 uv1 = float2((x + (zi + 1) * BaseSize) * kU, y);
+
+	float4 col0 = tex2Dlod(VoxelSamp4, float4(uv0, 0, 0));
+	float4 col1 = tex2Dlod(VoxelSamp4, float4(uv1, 0, 0));
+	return lerp(col0, col1, saturate(z - zi)) * isInRange;
+}
+
+
+// コーントレース(モドキ)
+// NOTE: 本来はコーン角度に応じて、mipレベルを変更するべき。特にスペキュラの場合。
+float4 ConeTrace(float3 wpos, float3 v, float3 n)
+{
+	wpos += (n + v) * (GRID_SIZE_ * 0.5);
+	v *= GRID_SIZE_;
+	float4 sh_n = NormalToSH(n);
+
+	float4 col = 0;
+	int i = 0;
+
+	// Lv.1 mipmap
+	[unroll] for(; i < 1; i++)
+	{
+		float4 nrm0;
+		float4 col0 = GetVoxelColorAndNormal(wpos, nrm0);
+		col0.a *= max(1.0 - ShadeProbe(nrm0, sh_n), 0);
+			// 近い場所だと自分自身と比較している可能性があるので同じ方向なら軽減する
+		float a0 = col0.a;
+		col = float4(col0.rgb, 1) * a0;
+		wpos += v;
+	}
+
+	[unroll] for(; i < 2; i++)
+	{
+		float4 nrm0 = 0;
+		float4 col0 = GetVoxelColorAndNormal(wpos, nrm0);
+		col0.a *= max(1.0 - ShadeProbe(nrm0, sh_n), 0);
+		float a0 = col0.a * max(1.0 - col.a, 0);
+		col += float4(col0.rgb, 1) * a0;
+		wpos += v;
+	}
+
+	[unroll] for(; i < 3; i++)
+	{
+		float4 col0 = GetVoxelColor1(wpos);
+		float a0 = col0.a * max(1.0 - col.a, 0);
+		col += float4(col0.rgb, 1) * a0;
+		wpos += v;
+	}
+
+	// Lv.2 mipmap
+	wpos += v * 0.5;
+	for(; i < 6; i++)
+	{
+		float4 col0 = GetVoxelColor2(wpos);
+		float a0 = col0.a * max(1.0 - col.a, 0);
+		col += float4(col0.rgb, 1) * a0;
+		wpos += v * 1.5;
+	}
+
+	// Lv.3 mipmap
+	wpos += v * 0.5;
+	for(; i < 12; i++)
+	{
+		float4 col0 = GetVoxelColor3(wpos);
+		float a0 = col0.a * max(1.0 - col.a, 0);
+		col += float4(col0.rgb, 1) * a0;
+		wpos += v * 3.0;
+	}
+
+	col.a = saturate(col.a);
+	return col;
+}
+
+inline float3 GetLastFrameVoxelTexCoord(float3 vpos)
+{
+	// スケールが変更されていたら全部捨てる → IsNotTimeToResetに統合した。
+
+	float3 d = floor((GridCenterPosition - lastVoxelPosition.xyz) * INV_GRID_SIZE);
+	d.y *= -1;
+	vpos += d;
+
+	float x = clamp(vpos.x, 0.0, VOXEL_SIZE);
+	float isInRange = (x == vpos.x);
+
+	float u = vpos.z * VOXEL_SIZE + vpos.x;
+	float v = vpos.y;
+	float2 uv = (float2(u,v) + 0.5) / float2(TEX_WIDTH2, TEX_HEIGHT2);
+
+	return float3(uv, isInRange);
+}
+
+// 前フレームのボクセル情報を得る
+inline float4 GetLastFrameVoxel(float3 vpos)
+{
+	float3 uv = GetLastFrameVoxelTexCoord(vpos);
+	float4 lastVoxel = tex2D(BounceSamp, uv.xy);
+	return lastVoxel * uv.z;
+}
+
+
+// 確率的に配置されたオリジナルテクスチャの参照用uv位置を求める。
+inline float2 CalcPackTexcoord(int u, int v, int z, int mode)
+{
+	z = z % VOXEL_SIZE;
+	int zu = z % VOXEL_SIZE_SQRT;
+	int zv = floor(z / VOXEL_SIZE_SQRT);
+
+	float2 texCoord = float2(u * VOXEL_SIZE_SQRT + zu, v * VOXEL_SIZE_SQRT + zv);
+	texCoord = (texCoord + 0.5) * (1.0 / float2(TEX_WIDTH, TEX_HEIGHT));
+	texCoord.y = (texCoord.y + mode) * (1.0 / 3.0);
+	return texCoord;
+}
+
+inline void GetColorFromPack(int u, int v, int z, int mode, out float4 col)
+{
+	float2 texCoord = CalcPackTexcoord(u,v,z,mode);
+	col = tex2D(VoxelPackSamp2, texCoord);
+}
+
+inline void GetColorAndNormalFromPack(int u, int v, int z, int mode, out float4 col, out float4 nrm)
+{
+	float2 texCoord = CalcPackTexcoord(u,v,z,mode);
+	col = tex2D(VoxelPackSamp2, texCoord);
+	nrm = tex2D(VoxelPackNormalSamp2, texCoord);
+}
+

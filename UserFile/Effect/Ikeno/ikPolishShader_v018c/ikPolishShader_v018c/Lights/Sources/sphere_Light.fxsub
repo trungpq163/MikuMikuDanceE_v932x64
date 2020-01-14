@@ -1,0 +1,263 @@
+//-----------------------------------------------------------------------------
+//
+//
+//-----------------------------------------------------------------------------
+
+
+//-----------------------------------------------------------------------------
+
+#define CTRL_NAME	"(self)"
+
+#include "../ikPolishShader.fxsub"
+#include "../Sources/constants.fxsub"
+#include "./Sources/light.fxsub"
+
+float mLightSize : CONTROLOBJECT < string name = CTRL_NAME; string item = "ライトサイズ+"; >;
+static float LightSize = mLightSize * LightRadiusMax + LightRadiusMin;
+
+#define SHADOW_FX_FILE	"./Sources/omni_shadow.fx"
+#define	SHADOW_RT_DESCRIPTION	"shadowmap for sphere light"
+
+
+//-----------------------------------------------------------------------------
+
+// 光源用テクスチャ
+#if EnableLighTexture > 0
+texture OctTextureMap: RENDERCOLORTARGET <
+	int Width = TextureSize * 2;
+	int Height = TextureSize * 2;
+	int MipLevels = 0;
+	string Format = "A8R8G8B8";
+>;
+sampler OctLightSamp = sampler_state {
+	texture = <OctTextureMap>;
+	AddressU = CLAMP; AddressV = CLAMP;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+};
+#endif
+
+
+//-----------------------------------------------------------------------------
+
+#include "../Sources/structs.fxsub"
+#include "../Sources/colorutil.fxsub"
+#include "../Sources/gbuffer.fxsub"
+#include "../Sources/lighting.fxsub"
+#include "../Sources/octahedron.fxsub"
+
+#include "./Sources/omni_common.fxsub"
+#include "./Sources/omni_light.fxsub"
+
+//-----------------------------------------------------------------------------
+//
+
+#if EnableLighTexture > 0
+float3 GetTextureColor(float2 coord, float lod)
+{
+	return tex2Dlod(OctLightSamp, float4(coord,0,lod)).rgb;
+}
+#endif
+
+float4 CalcClosestPoint(float3 wpos, float3 v, float size)
+{
+	float3 lv = LightPosition - wpos;
+	float3 v2 = dot(lv, v) * v - lv;
+		// v2 = (dot(lv, v) * v + wpos) - LightPosition;
+	float l = length(v2);
+	float s = size / max(l, size);
+	float4 closestPos = float4(LightPosition + s * v2, l / size);
+
+	// 球と交差しているので球表面まで戻す
+	if (l <= size)
+	{
+		closestPos.xyz -= v * sqrt(size * size - l * l);
+	}
+
+	return closestPos;
+}
+
+
+//-----------------------------------------------------------------------------
+//
+
+#if EnableLighTexture > 0
+// テクスチャの再構成
+VS_OUTPUT VS_ConstructTexture( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.TexCoord.xy = Tex.xy + 0.5 / SHADOW_BUFSIZE;
+	return Out;
+}
+
+float4 PS_ConstructTexture( float2 Tex: TEXCOORD0 ) : COLOR
+{
+	float3 N = DecodeOctahedron( Tex );
+	float4 uv = GetTetrahedronUV(N);
+	return Degamma(tex2Dlod(LightSamp, uv));
+}
+#endif
+
+//-----------------------------------------------------------------------------
+//
+VS_OUTPUT VS_SetTexCoord( float4 Pos : POSITION, float4 Tex : TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.TexCoord = Tex.xy + ViewportOffset.xy;
+	return Out;
+}
+
+
+PS_OUT_MRT PS_DrawLight( float2 Tex: TEXCOORD0, uniform bool useShadow )
+{
+	float4 albedo = tex2D(ColorMap, Tex.xy);
+	MaterialParam material = GetMaterial(Tex.xy, albedo.rgb);
+	GeometryInfo geom = GetWND(Tex.xy);
+	float3 wpos = geom.wpos;
+	float depth = geom.nd.depth;
+
+	float3 V = normalize(CameraPosition - wpos);
+	float3 N = normalize(geom.nd.normal);
+	float3 lv = LightPosition - wpos;
+	float3 L = normalize(lv);
+
+	float shadow = 1;
+	if (useShadow) shadow = CalcShadow(float4(wpos,1), dot(N, L), Tex);
+
+	shadow *= CalcLightFalloff(wpos, LightPosition, LightRadius + LightSize);
+
+	//-----------------------------------------------------
+	// デフューズ
+
+#if EnableLighTexture > 0
+	// テクスチャ使用
+	float3x3 matInv = transpose((float3x3)LightObjectMatrix);
+	float3 localDir = normalize(mul(-L, matInv));
+	float2 uv = EncodeOctahedron(localDir);
+
+	float difflod = MaxLod - 2;
+	float3 diffuseColor = (
+		GetTextureColor(uv, difflod) +
+		GetTextureColor(uv, difflod + 1) +
+		GetTextureColor(uv, difflod + 2)) / 3.0;
+	diffuseColor = diffuseColor;
+#else
+	float3 diffuseColor = 1;
+#endif
+
+	float3 diffuse = diffuseColor * saturate(dot(N, L));
+	diffuse *= LightColor * MaterialEmissive * shadow;
+
+	//-----------------------------------------------------
+	// スペキュラ
+
+	float3 R = normalize(reflect(-V, N));
+	float4 closestPosR = CalcClosestPoint(wpos, R, LightSize);
+
+#if EnableLighTexture > 0
+	float a = material.roughness;
+	float lod = (1 - (1 - a) * (1 - a)) * (MaxLod - 1);
+
+	float3 R2 = lerp(R, L, lod / (MaxLod - 1));
+	float4 closestPosR2 = CalcClosestPoint(wpos, R2, LightSize);
+	float3 localDir2 = normalize(closestPosR2.xyz - LightPosition);
+
+	float edge = max(dot(localDir2, -R2), 0);
+	lod = lerp(MaxLod - 1, lod, edge);
+	float3 col1 = GetTextureColor(EncodeOctahedron(localDir2), lod);
+	float3 col2 = diffuseColor;
+	float3 specColor = lerp(col2, col1, edge);
+
+#else
+	float3 specColor = 1;
+#endif
+
+	float3 L1 = normalize(closestPosR.xyz - wpos);
+	float3 specular = CalcSpecular(L1, N, V, material.roughness, material.f0);
+	specular *= specColor;
+	specular *= LightColor * MaterialEmissive * shadow;
+
+	PS_OUT_MRT Out;
+	Out.Diffuse = float4(diffuse, 1);
+	Out.Specular = float4(specular, 1);
+
+	return Out;
+}
+
+
+//-----------------------------------------------------------------------------
+// 
+
+#if EnableShadowMap > 0
+#define	SHADOW_SCRIPT	"RenderColorTarget0=ShadowMap; Pass=ConstructShadow;"
+#define	SHADOW_PASS	\
+		pass ConstructShadow < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			VertexShader = compile vs_3_0 VS_ConstructShadow(); \
+			PixelShader  = compile ps_3_0 PS_ConstructShadow(); \
+		}
+#else
+#define	SHADOW_SCRIPT	
+#define	SHADOW_PASS		
+#endif
+
+#if EnableLighTexture > 0
+#define	TEXTURE_SCRIPT	"RenderColorTarget0=OctTextureMap; Pass=ConstructTexture;"
+#define	TEXTURE_PASS	\
+		pass ConstructTexture < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			VertexShader = compile vs_3_0 VS_ConstructTexture(); \
+			PixelShader  = compile ps_3_0 PS_ConstructTexture(); \
+		}
+#else
+#define	TEXTURE_SCRIPT	
+#define	TEXTURE_PASS	
+#endif
+
+
+#if EnableShadowMap > 0 || EnableLighTexture > 0
+#define OBJECT_TEC(name, mmdpass) \
+	technique name < string MMDPass = mmdpass; \
+		string Script =  \
+			"RenderDepthStencilTarget=DepthBuffer;" \
+			SHADOW_SCRIPT \
+			TEXTURE_SCRIPT \
+			"RenderDepthStencilTarget=;" \
+			"RenderColorTarget1=PPPSpecularMapRT;" \
+			"RenderColorTarget0=; Pass=DrawLight;" \
+			"RenderColorTarget1=;"; \
+	> { \
+		SHADOW_PASS \
+		TEXTURE_PASS \
+		pass DrawLight < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			SrcBlend = ONE; DestBlend = ONE; \
+			VertexShader = compile vs_3_0 VS_SetTexCoord(); \
+			PixelShader  = compile ps_3_0 PS_DrawLight(true); \
+		} \
+	}
+#else
+#define OBJECT_TEC(name, mmdpass) \
+	technique name < string MMDPass = mmdpass; \
+		string Script =  \
+			"RenderColorTarget1=PPPSpecularMapRT;" \
+			"Pass=DrawLight;" \
+			"RenderColorTarget1=;"; \
+	> { \
+		pass DrawLight < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			SrcBlend = ONE; DestBlend = ONE; \
+			VertexShader = compile vs_3_0 VS_SetTexCoord(); \
+			PixelShader  = compile ps_3_0 PS_DrawLight(false); \
+		} \
+	}
+#endif
+
+
+OBJECT_TEC(MainTec0, "object")
+OBJECT_TEC(MainTecBS0, "object_ss")
+
+//-----------------------------------------------------------------------------
+

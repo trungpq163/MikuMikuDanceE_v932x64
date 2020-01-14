@@ -1,0 +1,102 @@
+// G-Buffer
+
+// マテリアル値の取得
+MaterialParam UnpackMaterial(float4 rawdata, float4 albedo)
+{
+	float metalness = rawdata.x;
+
+	MaterialParam result;
+	result.metalness = metalness;
+	result.roughness = rawdata.y;
+	result.intensity = albedo.a * 2.0;
+
+	result.attribute = rawdata.w;
+	result.ambient = 1;
+	result.cavity = 1;
+	if (result.attribute >= MT_CAVITY)
+	{
+		result.cavity = saturate(result.intensity);
+		result.attribute -= MT_CAVITY;
+	}
+	if (result.attribute >= MT_AO)
+	{
+		result.ambient = saturate(result.intensity);
+		result.intensity = 1;
+		result.attribute -= MT_AO;
+	}
+	result.emissive = (result.attribute == MT_EMISSIVE) ? (rawdata.z * 8.0) : 0;
+	result.sssValue = (result.attribute == MT_EMISSIVE) ? 0 : rawdata.z;
+
+	float nonmetallicF0 = 0.05;
+	float f0 = metalness * (1.0 - nonmetallicF0) + nonmetallicF0;
+	result.f0 = lerp(f0, albedo.rgb, metalness);
+	result.albedo = albedo.rgb;
+
+	return result;
+}
+
+bool IsNotMask(MaterialParam material)
+{
+	return (material.attribute != MT_MASK);
+}
+
+MaterialParam GetMaterial(sampler materialmap, float2 uv, float4 albedo)
+{
+	return UnpackMaterial(tex2D(materialmap, uv), albedo);
+}
+
+MaterialParam GetMaterial(float2 uv, float4 albedo)
+{
+	return GetMaterial(MaterialMap, uv, albedo);
+}
+
+// アルベド抜きでマテリアル情報を生成
+MaterialParam GetMaterial(float2 uv)
+{
+	return GetMaterial(MaterialMap, uv, 1);
+}
+
+
+
+//-----------------------------------------------------------------------------
+// ジオメトリ関係
+float3 ReconstructWPos(float2 Tex, float depth)
+{
+	float2 coord = Tex.xy * float2(2,-2) + float2(-1,1);
+	float4 lpos = float4(coord, matP._33, 1) * depth;
+	lpos.z += matP._43;
+	return mul(lpos, matInvVP).xyz;
+}
+
+float3 GetViewDirection(float2 Tex)
+{
+	float3 wpos = ReconstructWPos(Tex, 1024.0);
+	return normalize(wpos - CameraPosition);
+}
+
+NormalDepth GetNormalDepthRaw(float2 Tex)
+{
+	return (NormalDepth)tex2D( NormalSamp, Tex);
+}
+NormalDepth GetNormalDepthRawLod(float2 Tex)
+{
+	return (NormalDepth)tex2Dlod( NormalSamp, float4(Tex,0,0));
+}
+
+GeometryInfo GetWND(float2 Tex)
+{
+	NormalDepth ND = GetNormalDepthRaw(Tex);
+	GeometryInfo tmp;
+	tmp.nd = ND;
+	tmp.wpos = ReconstructWPos(Tex, ND.depth);
+	return tmp;
+}
+
+GeometryInfo GetWNDLod(float2 Tex)
+{
+	NormalDepth ND = GetNormalDepthRawLod(Tex);
+	GeometryInfo tmp;
+	tmp.nd = ND;
+	tmp.wpos = ReconstructWPos(Tex, ND.depth);
+	return tmp;
+}

@@ -1,0 +1,589 @@
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+#ifdef DISABLE_SHADOW
+#define MMDPassString	"object"
+#else
+#define MMDPassString	"object_ss"
+#endif
+
+// 座法変換行列
+float4x4 matW			: WORLD;
+float4x4 matWV		: WORLDVIEW;
+//float4x4 matP		: PROJECTION;
+float4x4 matWVP		: WORLDVIEWPROJECTION;
+// static float4x4 matWVP = mul(matWV, matP);
+
+// マテリアル色
+float4	MaterialDiffuse	: DIFFUSE  < string Object = "Geometry"; >;
+float3	MaterialAmbient		: AMBIENT  < string Object = "Geometry"; >;
+float3	MaterialEmissive	: EMISSIVE < string Object = "Geometry"; >;
+float3	MaterialSpecular	: SPECULAR < string Object = "Geometry"; >;
+float	SpecularPower		: SPECULARPOWER < string Object = "Geometry"; >;
+
+float3   CameraPosition    : POSITION  < string Object = "Camera"; >;
+float3	LightDiffuse		: DIFFUSE   < string Object = "Light"; >;
+
+// 材質モーフ対応
+float4	TextureAddValue   : ADDINGTEXTURE;
+float4	TextureMulValue   : MULTIPLYINGTEXTURE;
+float4	SphereAddValue    : ADDINGSPHERETEXTURE;
+float4	SphereMulValue    : MULTIPLYINGSPHERETEXTURE;
+
+bool use_texture; //テクスチャ使用フラグ
+bool use_spheremap; //スフィアマップ使用フラグ
+
+static float4 DiffuseColor  = float4(saturate((MaterialAmbient.rgb+MaterialEmissive.rgb)),MaterialDiffuse.a);
+
+// ガンマ補正の近似。本来はpow(x, 2.2)
+#define Degamma(x)	((x)*(x))
+
+#if !defined(USE_NCHL_SETTINGS)
+static float3 SpecularColor = (Degamma(MaterialSpecular * (LightDiffuse.r * 9 + 1))) * 0.9 + 0.05;
+#else
+#define SpecularColor	(saturate(MaterialSpecular.g * 2) * 0.9 + 0.05)
+#endif
+
+
+#if defined(USE_AUTOREFLECTION_SETTINGS)
+// AutoReflection対応モデルのパラメータにより材質を決定する
+static float CustomMetalness = (saturate(frac(SpecularPower*100)+0.0001))%1.0;
+static float CustomSmoothness = (1.0 - saturate(1.0-clamp(SpecularPower,0,50.0)/50.0)) * 0.96 + 0.02;
+#else
+static float CustomMetalness = saturate(Metalness);
+
+#if defined(ENABLE_AUTO_SMOOTHNESS)
+// 謎の係数スペキュラーパワーを適当にスムースネスに置き換える。(0:マット。1:ツルツル)
+float CalcSmoothness(float power)
+{
+	// 1に近過ぎると、ピーキーになりすぎてハイライトがでないので、0.2～0.98の間に抑える
+	return saturate((log(power) / log(2) - 1) / 8.0) * 0.96 + 0.02;
+}
+static float CustomSmoothness = CalcSmoothness(SpecularPower);
+#else
+static float CustomSmoothness = saturate(Smoothness) * 0.96 + 0.02;
+#endif
+#endif
+static float CustomIntensity = saturate(Intensity);
+static float CustomSSS = saturate(SSSValue);
+
+
+bool	 spadd;	// スフィアマップ加算合成フラグ
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+	texture = <ObjectTexture>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;
+	ADDRESSV  = WRAP;
+};
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;
+	ADDRESSV  = WRAP;
+};
+
+shared texture PPPNormalMapRT: RENDERCOLORTARGET;
+shared texture PPPMaterialMapRT: RENDERCOLORTARGET;
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 
+float3x3 compute_tangent_frame(float3 Normal, float3 View, float2 UV)
+{
+  float3 dp1 = ddx(View);
+  float3 dp2 = ddy(View);
+  float2 duv1 = ddx(UV);
+  float2 duv2 = ddy(UV);
+
+  float3x3 M = float3x3(dp1, dp2, cross(dp1, dp2));
+  float2x3 inverseM = float2x3(cross(M[1], M[2]), cross(M[2], M[0]));
+  float3 Tangent = mul(float2(duv1.x, duv2.x), inverseM);
+  float3 Binormal = mul(float2(duv1.y, duv2.y), inverseM);
+
+  return float3x3(normalize(Tangent), normalize(Binormal), Normal);
+}
+
+
+inline float3 CalcNormalBase1(float2 Tex, float3 Eye, float3 Normal, float4 NormalColor)
+{
+	float4 Norm = 1;
+	float3x3 tangentFrame = compute_tangent_frame(Normal, Eye, Tex);
+	return normalize(mul(NormalColor.rgb, tangentFrame));
+}
+
+inline float3 CalcNormalBase2(float2 Tex, float3 Eye, float3 Normal, float4 NormalColor, float4 NormalColorSub)
+{
+	NormalColor.rg += NormalColorSub.rg;
+	NormalColor.rgb = normalize(NormalColor.rgb);
+	return CalcNormalBase1(Tex, Eye, Normal, NormalColor);
+}
+
+inline float4 GetNormal(float2 Tex, sampler normalSamp, float loop, float height)
+{
+	float2 tex = Tex * loop;
+	float4 NormalColor = tex2D( normalSamp, tex) * 2 - 1;
+	NormalColor.rg *= height;
+	NormalColor.rgb = normalize(NormalColor.rgb);
+	NormalColor.a = 1;
+	return NormalColor;
+}
+
+inline float4 GetNCHLNormal(float2 Tex)
+{
+	return tex2D( ObjSphareSampler, Tex) * 2 - 1;
+}
+
+inline float3 CalcNormal0(float2 Tex, float3 Eye, float3 Normal)
+{
+#if defined(USE_NCHL_SETTINGS)
+	float4 NormalColor = GetNCHLNormal(Tex);
+	return CalcNormalBase1(Tex, Eye, Normal, NormalColor);
+#else
+	return Normal;
+#endif
+}
+
+float3 CalcNormal1(float2 Tex, float3 Eye, float3 Normal, 
+	sampler NormalMapSamp, float loop0, float height0)
+{
+#if defined(USE_NCHL_SETTINGS)
+	float4 NormalColor = tex2D( ObjSphareSampler, Tex) * 2 - 1;
+#else
+	float4 NormalColor = GetNormal(Tex, NormalMapSamp, loop0, height0);
+#endif
+	return CalcNormalBase1(Tex, Eye, Normal, NormalColor);
+}
+
+float3 CalcNormal2(float2 Tex,float3 Eye, float3 Normal, 
+	sampler NormalMapSamp, float loop0, float height0, 
+	sampler NormalMapSampSub, float loop1, float height1)
+{
+#if defined(USE_NCHL_SETTINGS)
+	float4 NormalColor = tex2D( ObjSphareSampler, Tex) * 2 - 1;
+#else
+	float4 NormalColor = GetNormal(Tex, NormalMapSamp, loop0, height0);
+#endif
+	float4 NormalColorSub = GetNormal(Tex, NormalMapSampSub, loop1, height1);
+	return CalcNormalBase2(Tex, Eye, Normal, NormalColor, NormalColorSub);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 
+
+#if defined(USE_NCHL_SETTINGS) && (defined(NCHL_ALPHA_AS_SMOOTHNESS) || defined(NCHL_ALPHA_AS_INTENSITY))
+inline float4 SetParamFromSphare(float2 tex, float4 params)
+{
+	float spec = tex2D( ObjSphareSampler, tex).a;
+	#if defined(NCHL_ALPHA_AS_SMOOTHNESS)
+		params.y = spec;
+	#endif
+	#if defined(NCHL_ALPHA_AS_INTENSITY)
+		params.z = spec;
+	#endif
+}
+#else
+inline float4 SetParamFromSphare(float2 tex, float4 params) { return params; }
+#endif
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT
+{
+	float4 Pos	: POSITION;
+	float3 Normal	: TEXCOORD0;
+	float2 Tex	: TEXCOORD1;
+	float3 WPos	: TEXCOORD2;
+	float Distance	: TEXCOORD3;
+	float2 SpTex	: TEXCOORD4;
+};
+
+struct PS_OUT_MRT
+{
+	float4 Color		: COLOR0;
+	float4 Normal		: COLOR1;
+	float4 Material		: COLOR2;
+};
+
+VS_OUTPUT Basic_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex: TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	Out.Pos = mul( Pos, matWVP );
+	Out.Normal = normalize(mul(Normal,(float3x3)matW));
+	Out.Tex = Tex;
+
+	Out.WPos = mul( Pos, matW ).xyz;
+	Out.Distance = mul(Pos, matWV).z;
+
+	if ( use_spheremap && !spadd) {
+		float2 NormalWV = normalize(mul( Normal, (float3x3)matWV ));
+		Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+		Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+	}
+
+	return Out;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+#if defined(USE_NCHL_SETTINGS)
+#define CALC_SPHERE
+#else
+#define CALC_SPHERE	\
+	if ( use_spheremap && !spadd) { \
+		float4 TexColor = tex2D(ObjSphareSampler,IN.SpTex); \
+		Color.rgb *= TexColor.rgb; \
+	}
+#endif
+
+#define PS_HEAD \
+{ \
+	float4 Color = DiffuseColor; \
+	if ( use_texture ) { \
+		float4 TexColor = tex2D( ObjTexSampler, IN.Tex ); \
+		Color *= TexColor; \
+	} \
+ \
+	clip(Color.a - AlphaThreshold); \
+ \
+	CALC_SPHERE \
+ \
+	const float3 V = normalize(CameraPosition - IN.WPos); \
+
+
+#define CALC_NORMAL \
+	const float3 N = CalcNormal0(IN.Tex, V, normalize(IN.Normal));
+
+#define CALC_NORMAL1(samp, loop, height) \
+	const float3 N = CalcNormal1(IN.Tex, V, normalize(IN.Normal), samp, loop, height);
+
+#define CALC_NORMAL2(samp0, loop0, height0, samp1, loop1, height1) \
+	const float3 N = CalcNormal2(IN.Tex, V, normalize(IN.Normal), \
+				samp0, loop0, height0, samp1, loop1, height1);
+
+
+#define SET_PARAM_DEFAULT \
+	float4 params = SetParamFromSphare(IN.Tex, float4(CustomMetalness, CustomSmoothness, CustomIntensity, CustomSSS));
+
+#define SET_PARAM_TEX(samp, loop) \
+	float4 params = tex2D( samp, IN.Tex * loop);
+
+#if defined(ENABLE_AUTO_SMOOTHNESS)
+#define SET_PARAM_VAL(vals) \
+	float4 params = SetParamFromSphare(IN.Tex, float4(vals.x, CustomSmoothness, vals.zw));
+#else
+#define SET_PARAM_VAL(vals) \
+	float4 params = SetParamFromSphare(IN.Tex, vals);
+#endif
+
+
+#define PS_TAIL \
+	PS_OUT_MRT Out; \
+	Out.Material = params; \
+	Out.Normal = float4(N, IN.Distance); \
+ \
+	float metalness = params.x; \
+	float3 specularColor = (Degamma(Color.rgb) * 0.5 + 0.5) * SpecularColor; \
+	Color.rgb = lerp(NonmetalF0, specularColor, metalness); \
+ \
+	Out.Color = Color; \
+	return Out; \
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 法線:0
+PS_OUT_MRT Basic_PS00( VS_OUTPUT IN
+) : COLOR
+PS_HEAD
+	CALC_NORMAL
+	SET_PARAM_DEFAULT
+PS_TAIL
+
+PS_OUT_MRT Basic_PS01( VS_OUTPUT IN
+	, uniform sampler matSamp, uniform float loop2
+) : COLOR
+PS_HEAD
+	CALC_NORMAL
+	SET_PARAM_TEX(matSamp, loop2)
+PS_TAIL
+
+PS_OUT_MRT Basic_PS0V( VS_OUTPUT IN, uniform float4 valParams
+) : COLOR
+PS_HEAD
+	CALC_NORMAL
+	SET_PARAM_VAL(valParams)
+PS_TAIL
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 法線:1
+PS_OUT_MRT Basic_PS10( VS_OUTPUT IN
+	, uniform sampler mainNormal, uniform float loop0, uniform float height0
+) : COLOR
+PS_HEAD
+	CALC_NORMAL1(mainNormal, loop0, height0)
+	SET_PARAM_DEFAULT
+PS_TAIL
+
+PS_OUT_MRT Basic_PS11( VS_OUTPUT IN
+	, uniform sampler mainNormal, uniform float loop0, uniform float height0
+	, uniform sampler matSamp, uniform float loop2
+) : COLOR
+PS_HEAD
+	CALC_NORMAL1(mainNormal, loop0, height0)
+	SET_PARAM_TEX(matSamp, loop2)
+PS_TAIL
+
+PS_OUT_MRT Basic_PS1V( VS_OUTPUT IN
+	, uniform sampler mainNormal, uniform float loop0, uniform float height0
+	, float4 valParams
+) : COLOR
+PS_HEAD
+	CALC_NORMAL1(mainNormal, loop0, height0)
+	SET_PARAM_VAL(valParams)
+PS_TAIL
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 法線:2
+PS_OUT_MRT Basic_PS20( VS_OUTPUT IN
+	, uniform sampler mainNormal, uniform float loop0, uniform float height0
+	, uniform sampler subNormal, uniform float loop1, uniform float height1
+) : COLOR
+PS_HEAD
+	CALC_NORMAL2(mainNormal, loop0, height0, subNormal, loop1, height1);
+	SET_PARAM_DEFAULT
+PS_TAIL
+
+PS_OUT_MRT Basic_PS21( VS_OUTPUT IN
+	, uniform sampler mainNormal, uniform float loop0, uniform float height0
+	, uniform sampler subNormal, uniform float loop1, uniform float height1
+	, uniform sampler matSamp, uniform float loop2
+) : COLOR
+PS_HEAD
+	CALC_NORMAL2(mainNormal, loop0, height0, subNormal, loop1, height1);
+	SET_PARAM_TEX(matSamp, loop2)
+PS_TAIL
+
+PS_OUT_MRT Basic_PS2V( VS_OUTPUT IN
+	, uniform sampler mainNormal, uniform float loop0, uniform float height0
+	, uniform sampler subNormal, uniform float loop1, uniform float height1
+	, float4 valParams
+) : COLOR
+PS_HEAD
+	CALC_NORMAL2(mainNormal, loop0, height0, subNormal, loop1, height1);
+	SET_PARAM_VAL(valParams)
+PS_TAIL
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+#define PASS_STRING	\
+	string Script = \
+		"RenderColorTarget0=;" \
+		"RenderColorTarget1=PPPNormalMapRT;" \
+		"RenderColorTarget2=PPPMaterialMapRT;" \
+		"RenderDepthStencilTarget=;" \
+		"Pass=DrawObject;" \
+		"RenderColorTarget1=;" \
+		"RenderColorTarget2=;"
+
+#define ALPHA_STRING	\
+		AlphaTestEnable = FALSE; AlphaBlendEnable = FALSE
+
+#define OBJECT_TEC(name) \
+	technique name < string MMDPass = MMDPassString; \
+		PASS_STRING; \
+	> { \
+		pass DrawObject { \
+			ALPHA_STRING; \
+			VertexShader = compile vs_3_0 Basic_VS(); \
+			PixelShader  = compile ps_3_0 Basic_PS00(); \
+		} \
+	}
+
+
+// 法線マップ指定なし
+#define TECH00(UID, SUBSET, index) \
+	technique MainTec00_##UID##_##index \
+	< string MMDPass = MMDPassString; \
+		string Subset = SUBSET; PASS_STRING; \
+	> { \
+		pass DrawObject { \
+			ALPHA_STRING; \
+			VertexShader = compile vs_3_0 Basic_VS(); \
+			PixelShader  = compile ps_3_0 Basic_PS00(); \
+		} \
+	}
+
+#define TECH01(UID, SUBSET, MAT_NO, index) \
+	technique MainTec01_##UID##_##index \
+	< string MMDPass = MMDPassString; \
+		string Subset = SUBSET; PASS_STRING; \
+	> { \
+		pass DrawObject { \
+			ALPHA_STRING; \
+			VertexShader = compile vs_3_0 Basic_VS(); \
+			PixelShader  = compile ps_3_0 Basic_PS01( \
+				MaterialMapSamp##MAT_NO, MaterialMapLoopNum##MAT_NO \
+			); \
+		} \
+	}
+
+#define TECH0V(UID, SUBSET, M, S, I, SSS, index) \
+	technique MainTec0V_##UID##_##index \
+	< string MMDPass = MMDPassString; \
+		string Subset = SUBSET; PASS_STRING; \
+	> { \
+		pass DrawObject { \
+			ALPHA_STRING; \
+			VertexShader = compile vs_3_0 Basic_VS(); \
+			PixelShader  = compile ps_3_0 Basic_PS0V( \
+				float4(M, S, I, SSS) \
+			); \
+		} \
+	}
+
+
+// 法線マップ1枚
+#define TECH10(UID, SUBSET, NL0_NO, index) \
+technique MainTec10_##UID##_##index \
+	< string MMDPass = MMDPassString; \
+		string Subset = SUBSET; PASS_STRING; \
+	> { \
+		pass DrawObject { \
+			ALPHA_STRING; \
+			VertexShader = compile vs_3_0 Basic_VS(); \
+			PixelShader  = compile ps_3_0 Basic_PS10( \
+				NormalMapSamp##NL0_NO, NormalMapLoopNum##NL0_NO, NormalMapHeightScale##NL0_NO \
+			); \
+		} \
+	}
+
+#define TECH11(UID, SUBSET, NL0_NO, MAT_NO, index) \
+technique MainTec11_##UID##_##index \
+	< string MMDPass = MMDPassString; \
+		string Subset = SUBSET; PASS_STRING; \
+	> { \
+		pass DrawObject { \
+			ALPHA_STRING; \
+			VertexShader = compile vs_3_0 Basic_VS(); \
+			PixelShader  = compile ps_3_0 Basic_PS11( \
+				NormalMapSamp##NL0_NO, NormalMapLoopNum##NL0_NO, NormalMapHeightScale##NL0_NO \
+				, MaterialMapSamp##MAT_NO, MaterialMapLoopNum##MAT_NO \
+			); \
+		} \
+	}
+
+#define TECH1V(UID, SUBSET, NL0_NO, M, S, I, SSS, index) \
+technique MainTec1V_##UID##_##index \
+	< string MMDPass = MMDPassString; \
+		string Subset = SUBSET; PASS_STRING; \
+	> { \
+		pass DrawObject { \
+			ALPHA_STRING; \
+			VertexShader = compile vs_3_0 Basic_VS(); \
+			PixelShader  = compile ps_3_0 Basic_PS1V( \
+				NormalMapSamp##NL0_NO, NormalMapLoopNum##NL0_NO, NormalMapHeightScale##NL0_NO \
+				, float4(M, S, I, SSS) \
+			); \
+		} \
+	}
+
+
+// 法線マップ2枚
+#define TECH20(UID, SUBSET, NL0_NO, NL1_NO, index) \
+technique MainTec20_##UID##_##index \
+	< string MMDPass = MMDPassString; \
+		string Subset = SUBSET; PASS_STRING; \
+	> { \
+		pass DrawObject { \
+			ALPHA_STRING; \
+			VertexShader = compile vs_3_0 Basic_VS(); \
+			PixelShader  = compile ps_3_0 Basic_PS20( \
+				NormalMapSamp##NL0_NO, NormalMapLoopNum##NL0_NO, NormalMapHeightScale##NL0_NO \
+				, NormalMapSamp##NL1_NO, NormalMapLoopNum##NL1_NO, NormalMapHeightScale##NL1_NO \
+			); \
+		} \
+	}
+
+#define TECH21(UID, SUBSET, NL0_NO, NL1_NO, MAT_NO, index) \
+technique MainTec21_##UID##_##index \
+	< string MMDPass = MMDPassString; \
+		string Subset = SUBSET; PASS_STRING; \
+	> { \
+		pass DrawObject { \
+			ALPHA_STRING; \
+			VertexShader = compile vs_3_0 Basic_VS(); \
+			PixelShader  = compile ps_3_0 Basic_PS21( \
+				NormalMapSamp##NL0_NO, NormalMapLoopNum##NL0_NO, NormalMapHeightScale##NL0_NO \
+				, NormalMapSamp##NL1_NO, NormalMapLoopNum##NL1_NO, NormalMapHeightScale##NL1_NO \
+				, MaterialMapSamp##MAT_NO, MaterialMapLoopNum##MAT_NO \
+			); \
+		} \
+	}
+
+#define TECH2V(UID, SUBSET, NL0_NO, NL1_NO, M, S, I, SSS, index) \
+technique MainTec2V_##UID##_##index \
+	< string MMDPass = MMDPassString; \
+		string Subset = SUBSET; PASS_STRING; \
+	> { \
+		pass DrawObject { \
+			ALPHA_STRING; \
+			VertexShader = compile vs_3_0 Basic_VS(); \
+			PixelShader  = compile ps_3_0 Basic_PS2V( \
+				NormalMapSamp##NL0_NO, NormalMapLoopNum##NL0_NO, NormalMapHeightScale##NL0_NO \
+				, NormalMapSamp##NL1_NO, NormalMapLoopNum##NL1_NO, NormalMapHeightScale##NL1_NO \
+				, float4(M, S, I, SSS) \
+			); \
+		} \
+	}
+
+
+
+// 特に何もしない
+#define BEGIN_MATERIAL	
+
+// デフォルト設定を定義する
+#define END_MATERIAL	OBJECT_TEC(MainTecBS0)
+
+#define MATERIAL00(UID, SUBSET)			TECH00(UID, SUBSET, 0)
+#define MATERIAL01(UID, SUBSET, MAT_NO)		TECH01(UID, SUBSET, MAT_NO, 0)
+#define MATERIAL0V(UID, SUBSET, M, S, I, SSS)	TECH0V(UID, SUBSET, M, S, I, SSS, 0)
+
+#define MATERIAL10(UID, SUBSET, NL0_NO)		TECH10(UID, SUBSET, NL0_NO, 0)
+#define MATERIAL11(UID, SUBSET, NL0_NO, MAT_NO)	TECH11(UID, SUBSET, NL0_NO, MAT_NO, 0)
+#define MATERIAL1V(UID, SUBSET, NL0_NO, M, S, I, SSS)	TECH1V(UID, SUBSET, NL0_NO, M, S, I, SSS, 0)
+
+#define MATERIAL20(UID, SUBSET, NL0_NO, NL1_NO)		TECH20(UID, SUBSET, NL0_NO, NL1_NO, 0)
+#define MATERIAL21(UID, SUBSET, NL0_NO, NL1_NO, MAT_NO)	TECH21(UID, SUBSET, NL0_NO, NL1_NO, MAT_NO, 0)
+#define MATERIAL2V(UID, SUBSET, NL0_NO, NL1_NO, M, S, I, SSS) TECH2V(UID, SUBSET, NL0_NO, NL1_NO, M, S, I, SSS, 0)
+
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTech < string MMDPass = "shadow";  > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////

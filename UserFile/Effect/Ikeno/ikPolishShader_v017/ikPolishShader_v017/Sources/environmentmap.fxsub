@@ -1,0 +1,297 @@
+
+
+
+//-----------------------------------------------------------------------------
+// 
+
+#define ENV_WIDTH2		(ENV_WIDTH * 2)
+#define ENV_MARGIN		2.0
+
+static float MAX_MIP_LEVEL = log2(ENV_WIDTH) - 1.0;
+#define MAX_LEVEL	6
+
+texture EnvMapRT: OFFSCREENRENDERTARGET <
+	int Width = ENV_WIDTH2;
+	int Height = ENV_WIDTH2;
+	float4 ClearColor = { 0, 0, 0, 1 };
+	float ClearDepth = 1.0;
+	int Miplevels = 1;
+	string Format = EnvTexFormat;
+	string Description = "EnvironmentMap for ikPolishShader";
+		string DefaultEffect = 
+		HIDE_EFFECT
+		"*.pmx = hide;"		// キャラを対象外にする
+		"*.pmd = hide;"		// キャラを対象外にする
+		"rgbm_*.x = ./Environments/TEnvMap_rgbm.fx;"	// スカイドーム
+		"*.x =./Environments/TEnvMap.fx;"
+//		"*.x = hide;"
+		"* = hide;";
+>;
+
+sampler EnvMapWorkSamp = sampler_state {
+	texture = <EnvMapRT>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+texture EnvMap2: RENDERCOLORTARGET <
+	int Width = ENV_WIDTH2;
+	int Height = ENV_WIDTH2;
+	int Miplevels = 0;
+	string Format = EnvTexFormat;
+>;
+
+sampler EnvMapSamp0 = sampler_state {
+	texture = <EnvMap2>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU  = WRAP;	AddressV = WRAP;
+};
+
+#if ENV_MIPMAP > 0
+texture EnvMap3: RENDERCOLORTARGET <
+	int Width = ENV_WIDTH2;
+	int Height = ENV_WIDTH2;
+	int Miplevels = 1;
+	string Format = EnvTexFormat;
+>;
+
+sampler EnvMapSamp = sampler_state {
+	texture = <EnvMap3>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = NONE;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+#endif
+
+texture2D EnvDepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+	int Width = ENV_WIDTH2;
+	int Height = ENV_WIDTH2;
+>;
+
+
+// Octahedron normal vector encoding from Krzysztof Narkowicz
+// https://knarkowicz.wordpress.com/2014/04/16/octahedron-normal-vector-encoding/
+
+inline float2 OctWrap( float2 v )
+{
+#if 0
+	return ( 1.0 - abs( v.yx ) ) * ( v.xy >= 0.0 ? 1.0 : -1.0 );
+#else
+	// MMD 32bit版はこちらでないと正常に動作しない
+	float sx = v.x >= 0.0 ? 1.0 : -1.0;
+	float sy = v.y >= 0.0 ? 1.0 : -1.0;
+	return ( 1.0 - abs( v.yx ) ) * float2(sx,sy);
+#endif
+}
+
+inline float2 WrapXForSafetyBorder(float2 uv) { return float2((2 - abs(uv.x)) * sign(uv.x), -uv.y); }
+inline float2 WrapYForSafetyBorder(float2 uv) { return float2(-uv.x, (2 - abs(uv.y)) * sign(uv.y)); }
+
+inline float2 Encode( float3 n )
+{
+//	n.xy /= ( abs( n.x ) + abs( n.y ) + abs( n.z ) );
+	n.xy /= dot(abs(n),1);
+	n.xy = n.z > 0.0 ? n.xy : OctWrap( n.xy );
+//	return n.xy * 0.25 + 0.5;		// 二重にする場合用
+	return n.xy * (ENV_WIDTH / (ENV_WIDTH + ENV_MARGIN) * 0.5) + 0.5;
+}
+
+inline float2 EncodeDouble( float3 n )
+{
+	n.xy /= dot(abs(n),1);
+	n.xy = n.z > 0.0 ? n.xy : OctWrap( n.xy );
+	return n.xy * 0.25 + 0.5;		// 二重にする場合用
+}
+
+float3 Decode( float2 encN )
+{
+	// Mip-map用の重複部分を反転させる
+	encN = encN * 4.0 - 2.0;
+	encN = (abs(encN.x) > 1) ? WrapXForSafetyBorder(encN) : encN;
+	encN = (abs(encN.y) > 1) ? WrapYForSafetyBorder(encN) : encN;
+
+	float3 n;
+	n.z = 1.0 - abs( encN.x ) - abs( encN.y );
+	n.xy = n.z >= 0.0 ? encN.xy : OctWrap( encN.xy );
+
+	n = normalize( n );
+	return n;
+}
+
+float4 MipmapOffset(float lod)
+{
+	float lv = (lod >= 3);
+	lod -= (lv * 3);
+	float vx = fmod(lod, 2);
+	float vy = floor(lod / 2);
+
+	float scale = lv ? 0.25 : 0.5;
+	float2 offset = float2(vx, vy);
+	offset = offset * scale + lv * 0.5;
+
+	return float4(scale, scale, offset);
+}
+
+float4 GetEnvColor(float3 vec, float roughness)
+{
+	float s = 1 - roughness;
+	roughness = (1 - s * s);
+		// lod = sqrt(roughness) * MAX_LEVEL
+
+#if ENV_MIPMAP > 0
+	float2 uv = Encode(vec);
+
+	float lod = roughness * MAX_LEVEL;
+	float lod0 = floor(lod);
+	float4 scale_offset0 = MipmapOffset(lod0);
+	float4 scale_offset1 = MipmapOffset(min(lod0+1, MAX_LEVEL));
+	float2 uv0 = uv * scale_offset0.xy + scale_offset0.zw;
+	float2 uv1 = uv * scale_offset1.xy + scale_offset1.zw;
+	float4 col0 = tex2Dlod(EnvMapSamp, float4(uv0,0,0));
+	float4 col1 = tex2Dlod(EnvMapSamp, float4(uv1,0,0));
+
+	return lerp(col0, col1, lod - lod0);
+#else
+	float lod = roughness * MAX_MIP_LEVEL;
+	float2 uv = EncodeDouble(vec);
+	return tex2Dlod(EnvMapSamp0, float4(uv,0,lod));
+#endif
+}
+
+
+//-----------------------------------------------------------------------------
+// 環境マップの作成
+
+float3 TEnvVec0 = normalize(float3( 1, 1, 1));
+float3 TEnvVec1 = normalize(float3(-1, 1,-1));
+float3 TEnvVec2 = normalize(float3( 1,-1,-1));
+float3 TEnvVec3 = normalize(float3(-1,-1, 1));
+
+float3x3 CalcViewMat(float3 v0, float3 v1)
+{
+	float3 v2 = normalize(cross(v1, v0));
+	v1 = normalize(cross(v0, v2));
+	return (float3x3(
+		float3(v2.x, v1.x, v0.x),
+		float3(v2.y, v1.y, v0.y),
+		float3(v2.z, v1.z, v0.z)));
+}
+
+float4 GetTetrahedronUV(float3 N)
+{
+	N = normalize(N);
+
+	float d0 = dot(TEnvVec0, N);
+	float d1 = dot(TEnvVec1, N);
+	float d2 = dot(TEnvVec2, N);
+	float d3 = dot(TEnvVec3, N);
+
+	float3 v0, v1;
+	float2 offset;
+	if (d0 > d1 && d0 > d2 && d0 > d3)
+	{
+		v0 = TEnvVec0;
+		v1 = TEnvVec1;
+		offset = float2(1,1) / 4.0;
+	}
+	else if (d1 > d2 && d1 > d3)
+	{
+		v0 = TEnvVec1;
+		v1 = TEnvVec2;
+		offset = float2(3,1) / 4.0;
+	}
+	else if (d2 > d3)
+	{
+		v0 = TEnvVec2;
+		v1 = TEnvVec3;
+		offset = float2(1,3) / 4.0;
+	}
+	else
+	{
+		v0 = TEnvVec3;
+		v1 = TEnvVec0;
+		offset = float2(3,3) / 4.0;
+	}
+
+	float3x3 mat = CalcViewMat(v0, v1);
+	float3 texCoord = mul(N, mat);
+	texCoord.xy *= ((1 / 2.6) * float2(0.25, -0.25)) / texCoord.z;
+
+	return float4(texCoord.xy + offset, 0,0);
+}
+
+
+
+VS_OUTPUT VS_EnvBuffer( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + 0.5 / ENV_WIDTH2;
+	Out.Tex.zw = (Out.Tex.xy * ENV_WIDTH * 2) / 16.0;
+	return Out;
+}
+
+float4 PS_SynthEnv( float2 Tex: TEXCOORD0 ) : COLOR
+{
+	float3 N = Decode( Tex );
+	float4 uv = GetTetrahedronUV(N);
+	float4 Color = tex2Dlod(EnvMapWorkSamp, uv);
+	return Color;
+}
+
+#if ENV_MIPMAP > 0
+float4 PS_CreateEnvMipmap( float4 Tex: TEXCOORD0 ) : COLOR
+{
+	#if 1
+	// ジッターを入れるとディザが見える場合がある。
+	float jitter = GetJitterOffset(Tex.zw);
+	#else
+	float jitter = 0;
+	#endif
+
+	float2 iuv = floor(Tex.xy * ENV_WIDTH * 2);
+	float2 ipart = fmod(iuv, ENV_WIDTH);
+	float2 iblock = floor(iuv / ENV_WIDTH);
+	float level = iblock.y * 2 + iblock.x;
+	if (level >= 3)
+	{
+		iuv = (iuv - ENV_WIDTH) * 2;
+		ipart = fmod(iuv, ENV_WIDTH);
+		iblock = floor(iuv / ENV_WIDTH);
+		level += (iblock.y * 2 + iblock.x);
+	}
+
+	const float s = (ENV_WIDTH + ENV_MARGIN) / ENV_WIDTH;
+	float2 uv = ipart * (1.0 / ENV_WIDTH2) + 0.25 + (0.5 / ENV_WIDTH2);
+	uv = uv * s + ((-s + 1.0) * 0.5);
+
+	float targetlod = level * MAX_MIP_LEVEL / MAX_LEVEL;
+	float lod = max(targetlod - 1, 0); //targetlod;
+	float4 uv1 = float4(0,0,0, lod);
+
+	float radius = exp2(targetlod) * (2.0 / ENV_WIDTH) * (1.0 / ENV_BLUR_STEP);
+	float angmul = 2.0 * PI * (1.5 / 8);
+	float angadd = jitter * PI * 2.0;
+
+	float3 vN = Decode(uv);
+	float3 vRight = Decode(uv + float2(0.1, 0.0));
+	float3 vTangentY = normalize(cross(vN, vRight));
+	float3 vTangentX = normalize(cross(vTangentY, vN));
+	float3x3 matTangent = {vTangentX, vTangentY, vN};
+
+	float4 color = 0;
+	for(int i = 0; i < ENV_BLUR_STEP; i++)
+	{
+		float2 sc;
+		sincos(i * angmul + angadd, sc.x, sc.y);
+		float l = i * radius;
+		float3 v = float3(sc.xy * l, sqrt(1 - l*l));
+		float3 vL = mul(v, matTangent);
+		uv1.xy = EncodeDouble(vL);
+		float4 c = tex2Dlod(EnvMapSamp0, uv1);
+		color += c * v.z; // v.z == dot(vL, vN);
+	}
+
+	return float4(color.rgb / color.w, 1);
+}
+#endif

@@ -1,0 +1,43 @@
+
+// G-Buffer
+
+float3 ReconstructWPos(float2 Tex, float depth)
+{
+	float2 coord = Tex.xy * float2(2,-2) + float2(-1,1);
+	float4 lpos = float4(coord, matP._33, 1) * depth;
+	lpos.z += matP._43;
+	return mul(lpos, matInvVP).xyz;
+}
+
+NormalDepth GetNormalDepthRaw(float2 Tex)
+{
+	return (NormalDepth)tex2D( NormalSamp, Tex);
+}
+NormalDepth GetNormalDepthRawLod(float2 Tex)
+{
+	return (NormalDepth)tex2Dlod( NormalSamp, float4(Tex,0,0));
+}
+
+GeometryInfo GetWND(float2 Tex)
+{
+	NormalDepth ND = GetNormalDepthRaw(Tex);
+	GeometryInfo tmp;
+	tmp.nd = ND;
+	tmp.wpos = ReconstructWPos(Tex, ND.depth);
+	return tmp;
+}
+
+GeometryInfo GetWNDLod(float2 Tex)
+{
+	NormalDepth ND = GetNormalDepthRawLod(Tex);
+	GeometryInfo tmp;
+	tmp.nd = ND;
+	tmp.wpos = ReconstructWPos(Tex, ND.depth);
+	return tmp;
+}
+
+MaterialParam GetMaterial(float2 uv, float3 albedo)
+{
+	return UnpackMaterial(tex2D( MaterialMap, uv), albedo);
+}
+

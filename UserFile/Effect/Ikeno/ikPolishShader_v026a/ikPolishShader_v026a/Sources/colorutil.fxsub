@@ -1,0 +1,42 @@
+
+// ガンマ補正
+const float gamma = 2.2;
+
+float3 Degamma(float3 col) { return pow(max(col,epsilon), gamma); }
+float3 Gamma(float3 col) { return pow(max(col,epsilon), 1.0/gamma); }
+float4 Degamma4(float4 col) { return float4(Degamma(col.rgb), col.a); }
+float4 Gamma4(float4 col) { return float4(Gamma(col.rgb), col.a); }
+
+float4 Degamma(float4 col) { col.rgb = Degamma(col.rgb); return col; }
+float4 Gamma(float4 col) { col.rgb = Gamma(col.rgb); return col; }
+
+// アルファを考慮したガンマ補正。
+// NOTE: 結局はノンリニアなので正しくない
+float4 GammaAlpha(float4 col)
+{
+	col.rgb = Gamma(col.rgb * col.a) / max(col.a, 1.0/1024);
+	return col;
+}
+
+
+float Luminance(float3 rgb)
+{
+	return dot(float3(0.299, 0.587, 0.114), max(rgb,0));
+}
+
+float max3(float3 x) { return max(max(x.x, x.y), x.z); }
+float min3(float3 x) { return min(min(x.x, x.y), x.z); }
+
+float Brightness(float3 rgb) { return max3(rgb); }
+
+// チラツキ対策
+// http://graphicrants.blogspot.jp/2013/12/tone-mapping.html
+float3 Tonemap(float3 col)
+{
+	return col / (1.0 + Luminance(col));
+}
+
+float3 InverseTonemap(float3 col)
+{
+	return col / max(1.0 - Luminance(col), 1e-5);
+}

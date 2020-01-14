@@ -1,0 +1,162 @@
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// RSM
+
+#if defined(RSMCount) && RSMCount > 0
+
+// ライト座標系での奥行きを出力
+texture RSMMapRT : OFFSCREENRENDERTARGET <
+	string Description = "ReflectiveShadowMap for ikPolishShader";
+	int Width = RSM_TEX_SIZE;
+	int Height = RSM_TEX_SIZE;
+	string Format = "A16B16G16R16F";	// 法線+深度
+	float4 ClearColor = { 0, 0, 0, 0 };
+	float ClearDepth = 1.0;
+	int MipLevels = 1;
+	string DefaultEffect = 
+		HIDE_EFFECT
+		"*.pmd = RSM/RSMLightBuffer.fx;"
+		"*.pmx = RSM/RSMLightBuffer.fx;"
+		"*.x =   RSM/RSMLightBuffer.fx;"
+		"* = hide;" ;
+>;
+
+sampler RSMLightSamp = sampler_state {
+	texture = <RSMMapRT>;
+	MinFilter = POINT; MagFilter = POINT;	MipFilter = NONE;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+shared texture PPPRSMAlbedoMapRT : RENDERCOLORTARGET <
+	int Width = RSM_TEX_SIZE;
+	int Height = RSM_TEX_SIZE;
+	string Format = "A8R8G8B8" ;
+	int MipLevels = 1;
+>;
+sampler RSMAlbedoSamp = sampler_state {
+	texture = <PPPRSMAlbedoMapRT>;
+	MinFilter = POINT; MagFilter = POINT;	MipFilter = NONE;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+
+//-----------------------------------------------------------------------------
+//
+
+float3 TargetPosition : CONTROLOBJECT < string name = "(self)"; >;
+#include "./RSM/rsm_common.fxsub"
+
+// シャドウマップの深度からWPosの再構築＆比較
+inline GeometryInfo ReconstructWPosFromLight(float2 texCoord, float4x4 lightInvMatV)
+{
+	NormalDepth nd = (NormalDepth)tex2Dlod(RSMLightSamp, float4(texCoord, 0,0));
+	float depth = nd.depth;
+
+//	float2 uv = (texCoord * 2 - 1.0) * float2(1,-1) * 0.5;
+	float2 uv = (texCoord * float2(1,-1) - (float2(1,-1) * 0.5)) * RSM_ShadowSize;
+
+	GeometryInfo tmp;
+	tmp.nd = nd;
+	tmp.wpos = mul(float4(uv, depth, 1), lightInvMatV).xyz;
+	return tmp;
+}
+
+
+
+//-----------------------------------------------------------------------------
+//
+struct VS_RSM_OUTPUT {
+	float4 Pos		: POSITION;		// 射影変換座標
+	float4 Tex		: TEXCOORD0;	// テクスチャ
+
+	float4 LightMat0	: TEXCOORD1;
+	float4 LightMat1	: TEXCOORD2;
+	float4 LightMat2	: TEXCOORD3;
+	float4 LightMat3	: TEXCOORD4;
+};
+
+VS_RSM_OUTPUT  VS_CalcRSM( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_RSM_OUTPUT Out = (VS_RSM_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset2;
+	Out.Tex.zw = Out.Tex.xy * WorkSize / 16.0; // for jitter
+
+	float4x4 lightInvMatV = GetLightInverseViewMatrix(LightDirection, float3(0,0,1), TargetPosition);
+	Out.LightMat0 = lightInvMatV[0];
+	Out.LightMat1 = lightInvMatV[1];
+	Out.LightMat2 = lightInvMatV[2];
+	Out.LightMat3 = lightInvMatV[3];
+
+	return Out;
+}
+
+float4 PS_CalcRSM(VS_RSM_OUTPUT IN) : COLOR
+{
+	float2 texCoord = IN.Tex.xy;
+
+	float4x4 lightInvMatV = {
+		IN.LightMat0,
+		IN.LightMat1,
+		IN.LightMat2,
+		IN.LightMat3
+	};
+	float4x4 lightMatV = CalcViewMatrixFromInverseViewMatrix(lightInvMatV);
+	float4x4 lightMatVP = mul(lightMatV, lightMatP);
+
+	GeometryInfo geom0 = GetWND(texCoord);
+
+	float4 lightPPos = mul(float4(geom0.wpos, 1), lightMatVP);
+	texCoord = lightPPos.xy / lightPPos.w * float2(0.5, -0.5) + 0.5;
+
+	float angleMul = 7.0 / RSMCount * (PI * 2.0);
+	float angleAdd = GetJitterOffset(IN.Tex.zw) * (PI * 2.0);
+	float radiusMul = RSMRadius * 1.0 / (RSM_ShadowSize * RSMCount);
+	float radiusAdd = 1.0 / RSM_TEX_SIZE;
+	float scale = RSMRadius * RSMRadius * 2.0 / (RSMCount * RSMCount);
+
+	float4 bounce = 0;
+
+	// [unroll]
+	for(int j = 0; j < RSMCount; j++)
+	{
+		float2 sc;
+		sincos(j * angleMul + angleAdd, sc.x, sc.y);
+		float2 uv = sc * (j * radiusMul + radiusAdd) + texCoord;
+
+		GeometryInfo geom1 = ReconstructWPosFromLight(uv, lightInvMatV);
+
+		float3 v = geom1.wpos - geom0.wpos;
+		float invl2 = 1.0 / max(dot(v, v), 1.0);
+		float2 w01 = float2(dot(geom0.nd.normal, v), -dot(geom1.nd.normal, v));
+		w01 = max(w01 * invl2, 0);
+			// dot(-,v) * dot(-,v) * invl2 * invl2 で 1.0 / length(v)^2 相当
+
+		float w2 = (j + 0.5);	// sample weight
+			// 近くほど探索密度が高いので、結果に占める割合を減らす。
+			// 実際は w2 = (j + 0.5) * 2.0 / RSMCount だが、定数はscale に追い出してある。
+
+		float4 col = tex2Dlod(RSMAlbedoSamp, float4(uv, 0,0));
+		bounce += float4(col.rgb, 1) * (w01.x * w01.y * w2);
+	}
+
+	bounce = saturate(bounce * scale);
+	bounce.rgb *= LightColor;
+
+	return bounce;
+}
+
+inline float4 GetRSMColor(float2 Tex)
+{
+	return tex2D(HalfWorkSamp2, Tex);
+}
+
+#else
+
+inline float4 GetRSMColor(float2 Tex) { return 0; }
+
+#endif
+
+

@@ -1,0 +1,14 @@
+//-----------------------------------------------------------------------------
+// ポイントライト・スフィアライトでの共通処理
+
+//-----------------------------------------------------------------------------
+float4x4 matW			: WORLD;
+float3 CameraPosition	: POSITION  < string Object = "Camera"; >;
+float4x4 LightObjectMatrix : CONTROLOBJECT < string name = CTRL_NAME; string item = "全ての親"; >;
+static const float3 LightPosition = LightObjectMatrix._41_42_43;
+
+
+// ライト用シャドウマップのnear-far
+#define PROJ_NEAR 2
+#define PROJ_FAR  (LightShadowDistance)
+

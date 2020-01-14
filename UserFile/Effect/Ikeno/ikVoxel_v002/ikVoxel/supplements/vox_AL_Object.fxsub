@@ -1,0 +1,496 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// AutoLuminous用のボクセル描画処理
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+//発光部分を少し前面に押し出す
+// 0で無効、1で有効
+#define POPUP_LIGHT 0
+
+//テクスチャ高輝度識別フラグ
+//#define TEXTURE_SELECTLIGHT
+
+//テクスチャ高輝度識別閾値
+float LightThreshold = 0.9;
+
+//フレーム数に同期させるかどうか
+#define SYNC false
+
+
+//----------------------------------------------------------------------------
+// voxel用パラメータ宣言
+
+// ブロックのサイズ。0.1～1.0程度。
+float VoxelGridSize = 0.5;
+
+// テクスチャの解像度を下げる。8～32程度。
+// 8でテクスチャを8分割する。小さいほど粗くなる。
+float VoxelTextureGridSize = 16;
+
+
+// 無視する透明度の閾値
+float VoxelAlphaThreshold = 0.05;
+
+// ブロックを描画するとき半透明を考慮する?
+// 0:不透明で描画、1:半透明度を利用する。
+#define VOXEL_ENBALE_ALPHA_BLOCK	1
+
+// ブロックのフチを丸めるか? 0.0～0.1程度 大きいほどエッジ部分が強調される
+// ※ 0にしても計算誤差でエッジが見える場合があります。
+float VoxelBevelOffset = 0.05;
+
+// チェック回数。4～16程度。多いほど正確になるが重くなる。
+#define VOXEL_ITERATION_NUMBER	6
+
+// 外部からブロックサイズをコントロールするアクセサリ名
+#define VOXEL_CONTROLLER_NAME	"ikiVoxelSize.x"
+
+
+// ブロック表面にテクスチャを追加する場合のテクスチャ名。
+// コメントアウト(行頭に"//"をつける)すると無効になる。
+#define VOXEL_TEXTURE	"../grid.png"
+
+// 付き抜けチェックをする? 0:しない、1:チェックする。
+// 1にすることで床が抜けるのを回避できる。代わりに見た目がおかしくなる。
+#define VOXEL_ENABLE_FALLOFF		0
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+#define SPECULAR_BASE 100
+
+// 座法変換行列
+float4x4 matWVP			: WORLDVIEWPROJECTION;
+float4x4 matWV			: WORLDVIEW;
+float4x4 matVP			: VIEWPROJECTION;
+float4x4 matW			: WORLD;
+float4x4 matV			: VIEW;
+float4x4 matP			: PROJECTION;
+float4x4 matLightVP		: VIEWPROJECTION < string Object = "Light"; >;
+
+float3   CameraPosition	: POSITION  < string Object = "Camera"; >;
+float3   CameraDirection : DIRECTION  < string Object = "Camera"; >;
+
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+
+bool use_toon;     //トゥーンの有無
+
+
+// マテリアル色
+float4   MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+float3   MaterialAmbient   : AMBIENT  < string Object = "Geometry"; >;
+float3   MaterialEmmisive  : EMISSIVE < string Object = "Geometry"; >;
+float3   MaterialSpecular  : SPECULAR < string Object = "Geometry"; >;
+
+    float4 EgColor; 
+    float4 SpcColor;
+    static float SpecularPower = SpcColor.a;
+    static float materialAlpha = EgColor.a;
+
+
+#define PI 3.14159
+
+float LightUp : CONTROLOBJECT < string name = "(self)"; string item = "LightUp"; >;
+float LightUpE : CONTROLOBJECT < string name = "(self)"; string item = "LightUpE"; >;
+float LightOff : CONTROLOBJECT < string name = "(self)"; string item = "LightOff"; >;
+float Blink : CONTROLOBJECT < string name = "(self)"; string item = "LightBlink"; >;
+float BlinkSq : CONTROLOBJECT < string name = "(self)"; string item = "LightBS"; >;
+float BlinkDuty : CONTROLOBJECT < string name = "(self)"; string item = "LightDuty"; >;
+float BlinkMin : CONTROLOBJECT < string name = "(self)"; string item = "LightMin"; >;
+float LClockUp : CONTROLOBJECT < string name = "(self)"; string item = "LClockUp"; >;
+float LClockDown : CONTROLOBJECT < string name = "(self)"; string item = "LClockDown"; >;
+
+//時間
+float ftime : TIME <bool SyncInEditMode = SYNC;>;
+
+static float duty = (BlinkDuty <= 0) ? 0.5 : BlinkDuty;
+static float timerate = ((Blink > 0) ? ((1 - cos(saturate(frac(ftime / (Blink * 10)) / (duty * 2)) * 2 * PI)) * 0.5) : 1.0)
+                      * ((BlinkSq > 0) ? (frac(ftime / (BlinkSq * 10)) < duty) : 1.0);
+static float timerate1 = timerate * (1 - BlinkMin) + BlinkMin;
+
+static float ClockShift = (1 + LClockDown * 5) / (1 + LClockUp * 5);
+
+static bool IsEmittion = (SPECULAR_BASE < SpecularPower)/* && (SpecularPower <= (SPECULAR_BASE + 100))*/ && (length(MaterialSpecular) < 0.01);
+static float EmittionPower0 = IsEmittion ? ((SpecularPower - SPECULAR_BASE) / 7.0) : 1;
+static float EmittionPower1 = EmittionPower0 * (LightUp * 2 + 1.0) * pow(400, LightUpE) * (1.0 - LightOff);
+
+
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+    
+    // オブジェクトのテクスチャ
+    texture ObjectTexture: MATERIALTEXTURE;
+    sampler ObjTexSampler = sampler_state {
+        texture = <ObjectTexture>;
+        MINFILTER = ANISOTROPIC;
+        MAGFILTER = ANISOTROPIC;
+        //MINFILTER = LINEAR;
+        //MAGFILTER = LINEAR;
+        MIPFILTER = LINEAR;
+        MAXANISOTROPY = 16;
+    };
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+    texture = <ObjectSphereMap>;
+    MINFILTER = POINT;
+    MAGFILTER = POINT;
+    MIPFILTER = NONE;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+};
+sampler ObjSphareSampler2 = sampler_state {
+    texture = <ObjectSphereMap>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = NONE;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+};
+
+
+
+#define VOXEL_ENABLE_OUPUT_COLOR
+#include "../vox_commons.fxsub"
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+    struct MMM_SKINNING_INPUT{
+        float4 Pos : POSITION;
+        float2 Tex : TEXCOORD0;
+        float4 AddUV1 : TEXCOORD1;
+        float4 AddUV2 : TEXCOORD2;
+        float4 AddUV3 : TEXCOORD3;
+        float4 Normal : NORMAL;
+        
+    };
+    
+    #define GETPOS (IN.Pos)
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+float texlight(float3 rgb){
+    float val = saturate((length(rgb) - LightThreshold) * 3);
+    
+    val *= 0.2;
+    
+    return val;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+float3 HSV_to_RGB(float3 hsv){
+    float H = frac(hsv.x);
+    float S = hsv.y;
+    float V = hsv.z;
+    
+    float3 Color = 0;
+    
+    float Hp3 = H * 6.0;
+    float h = floor(Hp3);
+    float P = V * (1 - S);
+    float Q = V * (1 - S * (Hp3 - h));
+    float T = V * (1 - S * (1 - (Hp3 - h)));
+    
+    /*if(h <= 0.01)      { Color.rgb = float3(V, T, P); }
+    else if(h <= 1.01) { Color.rgb = float3(Q, V, P); }
+    else if(h <= 2.01) { Color.rgb = float3(P, V, T); }
+    else if(h <= 3.01) { Color.rgb = float3(P, Q, V); }
+    else if(h <= 4.01) { Color.rgb = float3(T, P, V); }
+    else               { Color.rgb = float3(V, P, Q); }*/
+    
+    Color.rgb += float3(V, T, P) * max(0, 1 - abs(h - 0));
+    Color.rgb += float3(Q, V, P) * max(0, 1 - abs(h - 1));
+    Color.rgb += float3(P, V, T) * max(0, 1 - abs(h - 2));
+    Color.rgb += float3(P, Q, V) * max(0, 1 - abs(h - 3));
+    Color.rgb += float3(T, P, V) * max(0, 1 - abs(h - 4));
+    Color.rgb += float3(V, P, Q) * max(0, 1 - abs(h - 5));
+    
+    return Color;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 追加UVがAL用データかどうか判別
+
+bool DecisionSystemCode(float4 SystemCode){
+    bool val = (0.199 < SystemCode.r) && (SystemCode.r < 0.201)
+            && (0.699 < SystemCode.g) && (SystemCode.g < 0.701);
+    return val;
+}
+
+
+float4 getFlags(float flagcode){
+    float4 val = frac(flagcode * float4(0.1, 0.01, 0.001, 0.0001));
+    val = floor(val * 10 + 0.001);
+    return val;
+}
+
+
+float2 DecisionSequenceCode(float4 color){
+    bool val = (color.r > 0.99) && (abs(color.g - 0.5) < 0.02)
+            && ((color.b < 0.01) || (color.g > 0.99));
+    
+    return float2(val, (color.b < 0.01));
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT {
+    float4 Pos        : POSITION;    // 射影変換座標
+    float4 Color      : TEXCOORD0;   // 色
+    float4 Tex        : TEXCOORD1;   // UV
+	float4 Distance   : TEXCOORD2;
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// ブロック単位で色を塗るための情報を出力する
+VS_OUTPUT DrawInfo_VS(MMM_SKINNING_INPUT IN)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+    
+    
+    float4 SystemCode = IN.AddUV1;
+    float4 ColorCode = IN.AddUV2;
+    float4 AppendCode = IN.AddUV3;
+    
+    bool IsALCode = DecisionSystemCode(SystemCode);
+    float4 flags = getFlags(SystemCode.w);
+    
+    
+    // カメラ視点のワールドビュー射影変換
+    float4 pos = GETPOS; //位置取得
+    
+    pos.xyz += IsALCode * AppendCode.z * IN.Normal.xyz;
+    
+    Out.Pos = mul( pos, matWVP );
+    
+    Out.Color = MaterialDiffuse;
+    Out.Color.a = materialAlpha;
+    Out.Color.rgb += MaterialEmmisive / 2;
+    Out.Color.rgb *= 0.5;
+    Out.Color.rgb = IsEmittion ? Out.Color.rgb : float3(0,0,0);
+    
+    // 頂点発光 ////////////////////////
+    
+    float3 UVColor = ColorCode.rgb;
+    UVColor = lerp(UVColor, HSV_to_RGB(UVColor), flags.y);
+    UVColor *= ColorCode.a;
+    
+    Out.Color.rgb += IsALCode ? UVColor : float3(0,0,0);
+    
+    float Tv = SystemCode.z * ClockShift;
+    float Ph = AppendCode.y * ClockShift;
+    float timerate2 = (Tv > 0) ? ((1 - cos(saturate(frac((ftime + Ph) / Tv) / (duty * 2)) * 2 * PI)) * 0.5)
+                     : ((Tv < 0) ? (frac((ftime + Ph) / (-Tv / PI * 180)) < duty) : 1.0);
+    Out.Color.rgb *= max(timerate2 * (1 - BlinkMin) + BlinkMin, !IsALCode);
+    Out.Color.rgb *= max(timerate1, SystemCode.z != 0);
+    
+    ////////////////////////
+    
+    Out.Tex.xy = IN.Tex; //テクスチャUV
+    Out.Tex.z = IsALCode * AppendCode.x;
+    Out.Tex.w = IsALCode * flags.x;
+    
+    #if POPUP_LIGHT
+        Out.Pos.z -= 0.01 * saturate(length(Out.Color.rgb));
+    #endif
+
+	Out.Distance = mul( pos, matWV );
+
+    return Out;
+}
+
+float4 DrawInfo_PS(VS_OUTPUT IN, uniform bool useTexture, uniform bool useSphereMap) : COLOR0
+{
+    float4 Color = IN.Color;
+    float4 texcolor;
+    
+    
+    // 発光シーケンス ////////////////////////
+    
+    if(useSphereMap){
+        //float4 spcolor1 = tex2Dlod(ObjSphareSampler, float4(1,0,0,0));
+        float4 spcolor2 = tex2Dlod(ObjSphareSampler, float4(1,1,0,0));
+        
+        float4 spcolor3 = tex2Dlod(ObjSphareSampler, float4(0,1,0,0));
+        
+        float Ts = spcolor3.r * (255 * 60) + spcolor3.g * 255 + spcolor3.b * (255 / 100.0);
+        Ts *= ClockShift;
+        
+        float t1 = frac((ftime/* + Ph * IsALCode*/) / Ts);
+        float4 spcolor4 = tex2Dlod(ObjSphareSampler, float4(t1 * 0.25,0,0,0));
+        float4 spcolor5 = tex2Dlod(ObjSphareSampler2, float4(t1 * 0.25,0,0,0));
+        
+        float2 sel = DecisionSequenceCode(spcolor2);
+        
+        Color.rgb *= lerp(float3(1,1,1), lerp(spcolor5.rgb, spcolor4.rgb, sel.y), sel.x);
+        
+    }
+    
+    
+    if(useTexture){
+        
+        texcolor = tex2D(ObjTexSampler,AlignTexture(IN.Tex.xy));
+        texcolor.rgb = saturate(texcolor.rgb - IN.Tex.z);
+        
+        #ifdef TEXTURE_SELECTLIGHT
+            Color = texcolor;
+            Color.rgb *= texlight(Color.rgb);
+        #else
+            float4 Color2, Color3;
+            
+            Color2 = Color * texcolor;
+            Color3 = Color * texcolor;
+            Color3.rgb *= texlight(texcolor.rgb);
+            
+            Color = (IN.Tex.w < 0.1) ? Color2 : ((IN.Tex.w < 1.1) ? Color : Color3);
+            
+        #endif
+        
+    }
+
+	clip(Color.a - VoxelAlphaThreshold);
+
+    Color.rgb *= lerp(EmittionPower0, EmittionPower1, (float)use_toon);
+	Color.w = IN.Distance.z;
+
+    return Color;
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+//
+struct BufferShadow_OUTPUT
+{
+	float4 Pos		: POSITION;	 // 射影変換座標
+	float4 ZCalcTex : TEXCOORD0;	// Z値
+	float2 Tex		: TEXCOORD1;	// テクスチャ
+	float3 Normal   : TEXCOORD2;	// 法線
+	float4 Distance	: TEXCOORD3;
+	float4 WPos		: TEXCOORD4;	// Z値
+};
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// ブロックにヒットするか調べながら描画する
+
+BufferShadow_OUTPUT DrawObject_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0,
+	uniform bool bExpand)
+{
+	BufferShadow_OUTPUT Out = (BufferShadow_OUTPUT)0;
+
+	Out.WPos = mul( Pos, matW );
+	Out.Normal = normalize( mul( Normal, (float3x3)matW ) );
+
+	if (bExpand)
+	{
+		// 法線方向に拡大
+		float3 vNormal = normalize(Out.Normal - dot(Out.Normal, CameraDirection));
+		Out.WPos.xyz += vNormal * VoxelScaledGridSize;
+	}
+
+	Out.Pos = mul( Out.WPos, matVP );
+	Out.Tex = Tex;
+
+	#if defined(VOXEL_TEXTURE)
+	Out.Distance.x = mul(Out.WPos, matV).z;
+	Out.Distance.yz = mul(float4(0,VoxelScaledGridSize,Out.Distance.x,1), matP).yw;
+	Out.Distance.y *= ViewportSize.y * 0.5 / 2.0;
+	#endif
+
+	return Out;
+}
+
+
+// ピクセルシェーダ
+float4 DrawObject_PS(BufferShadow_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+	#if defined(VOXEL_ENBALE_ALPHA_BLOCK) && VOXEL_ENBALE_ALPHA_BLOCK > 0
+	// 透明なら破棄
+	float alpha = MaterialDiffuse.a;
+	if ( useTexture ) alpha *= tex2D( ObjTexSampler, AlignTexture(IN.Tex)).a;
+	clip(alpha - VoxelAlphaThreshold);
+	#endif
+
+	float3 V = AdjustVector(normalize(CameraPosition - IN.WPos.xyz));
+
+	//-----------------------------------------------------------
+	// どのブロックにヒットするか探す
+	float3 hitblock = 0;
+	float4 albedo = Raytrace(IN.WPos, -V, hitblock);
+	clip(albedo.w - 1e-3); // ヒットしなかった
+
+	#if defined(VOXEL_TEXTURE)
+	// 法線の計算
+	float3 N = IN.Normal;
+	float3 hitpos = CalcPositionAndNormal(hitblock, N, V, IN.Distance.z / IN.Distance.y);
+	float2 griduv = CalcUV(N, hitpos * (1.0 / VoxelScaledGridSize));
+	float3 gridPattern = tex2D( VoxelPatternSmp, griduv).rgb;
+	albedo.rgb *= gridPattern;
+	#endif
+
+	//-----------------------------------------------------------
+
+	float4 Color = albedo;
+
+	#if defined(VOXEL_ENBALE_ALPHA_BLOCK) && VOXEL_ENBALE_ALPHA_BLOCK > 0
+	Color.a = alpha;
+	#else
+	Color.a = 1;
+	#endif
+
+	return Color;
+}
+
+
+#define OBJECT_TEC(name, mmdpass, tex, sphere) \
+	technique name < string MMDPass = mmdpass; bool UseTexture = tex; bool UseSphereMap = sphere; \
+	string Script = \
+		"RenderColorTarget0=VoxelInfoTex; RenderDepthStencilTarget=VoxelDepthBuffer;" \
+		"ClearSetColor=VoxelClearColor; ClearSetDepth=VoxelClearDepth; Clear=Color; Clear=Depth;" \
+		"Pass=DrawInfo;" \
+		"RenderColorTarget0=; RenderDepthStencilTarget=;" \
+		"Pass=DrawFalloff; Pass=DrawObject;" \
+; \
+	> { \
+		pass DrawInfo { \
+			AlphaBlendEnable = false; AlphaTestEnable = false; \
+			VertexShader = compile vs_3_0 DrawInfo_VS(); \
+			PixelShader  = compile ps_3_0 DrawInfo_PS(tex, sphere); \
+		} \
+		pass DrawFalloff { /* 拡大すると穴が開くことがあるので念のために */ \
+			VertexShader = compile vs_3_0 DrawObject_VS(false); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(tex); \
+		} \
+		pass DrawObject { \
+			CullMode = none; \
+			VertexShader = compile vs_3_0 DrawObject_VS(true); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(tex); \
+		} \
+	}
+
+OBJECT_TEC(MainTec0, "object", false, false)
+OBJECT_TEC(MainTec1, "object", true, false)
+OBJECT_TEC(MainTec2, "object", false, true)
+OBJECT_TEC(MainTec3, "object", true, true)
+
+OBJECT_TEC(MainTecBS0, "object_ss", false, false)
+OBJECT_TEC(MainTecBS1, "object_ss", true, false)
+OBJECT_TEC(MainTecBS2, "object_ss", false, true)
+OBJECT_TEC(MainTecBS3, "object_ss", true, true)
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+//影や輪郭は描画しない
+technique EdgeTec < string MMDPass = "edge"; > { }
+technique ShadowTec < string MMDPass = "shadow"; > { }
+technique ZplotTec < string MMDPass = "zplot"; > { }
+

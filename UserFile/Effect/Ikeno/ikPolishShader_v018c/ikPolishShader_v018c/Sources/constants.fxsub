@@ -1,0 +1,7 @@
+
+
+#define	PI		(3.14159265359)
+#define DEG_TO_RAD (PI / 180.0)
+
+#define LOG2_E	(1.44269504089)		// log(e)/log(2)
+

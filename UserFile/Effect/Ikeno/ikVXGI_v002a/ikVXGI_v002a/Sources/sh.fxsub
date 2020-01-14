@@ -1,0 +1,130 @@
+//=============================================================================
+// SH関係
+//=============================================================================
+
+static float4 ChannelToMaskArray[] = {
+	float4(1,0,0,0),
+	float4(0,1,0,0),
+	float4(0,0,1,0),
+	float4(0,0,0,1),
+};
+
+//-----------------------------------------------------------------------------
+//
+
+inline float4 NormalToSH(float3 n)
+{
+	return float4(n, INVSQRT3);
+}
+
+// 色情報をチャンネル毎に分離するためのマスクを返す
+inline float4 ChannelToMask(int ch)
+{
+/*
+	return (ch == 0) ? float4(1,0,0,0)
+		: ((ch == 1) ? float4(0,1,0,0)
+		: ((ch == 2) ? float4(0,0,1,0)
+		: float4(0,0,0,1)));
+*/
+	return ChannelToMaskArray[ch];
+}
+
+// 任意方向の色のSH係数を求める
+inline float4 CalcSHCoef(float4 col, float3 v, float4 mask)
+{
+	return NormalToSH(v) * dot(col, mask);
+}
+
+inline float4 GetSHCoef(float4 texCoord, float ch)
+{
+	float offset = ch * (VOXEL_SIZE / (VOXEL_SIZE * 4.0));
+	float2 uv0 = float2(texCoord.x, offset + texCoord.y);
+	float2 uv1 = float2(texCoord.z, offset + texCoord.y);
+
+	float4 c0 = tex2Dlod(VoxelSHSamp, float4(uv0,0,0));
+	float4 c1 = tex2Dlod(VoxelSHSamp, float4(uv1,0,0));
+
+	return lerp(c0, c1, texCoord.w);
+}
+
+inline float4 ToIrradianceProbe(float4 v)
+{
+	const float SHSharpness = 1.0;
+	float sh_c0 = (2.0 - SHSharpness) * 1.0;
+	float sh_c1 = SHSharpness * 2.0 / 3.0;
+	return float4(v.xyz * sh_c1, v.w * sh_c0);
+}
+
+inline float ShadeProbe(float4 sh, float4 n)
+{
+	return max(dot(sh, n), 0);
+}
+
+inline float4 ShadeProbe4(float4 sh0, float4 sh1, float4 sh2, float4 sh3, float4 n)
+{
+	float x = dot(sh0, n);
+	float y = dot(sh1, n);
+	float z = dot(sh2, n);
+	float w = dot(sh3, n);
+
+	return max(float4(x,y,z,w), 0);
+}
+
+/*
+float4 GetSHColor(float3 wpos, float3 n)
+{
+	float3 vpos = (wpos - GridCenterPosition + FarDepth * 0.5) * INV_GRID_SIZE;
+
+	float3 cpos = clamp(vpos, 0.5, VOXEL_SIZE - 0.5);
+	float isInRange = (vpos.x == cpos.x) * (vpos.y == cpos.y);
+		// zはアドレッシングモードで範囲外を判定できるので、明示的にはチェックしない。
+	float2 uv0 = float2(cpos.x + floor(vpos.z + 0) * VOXEL_SIZE, cpos.y);
+	float2 uv1 = float2(cpos.x + floor(vpos.z + 1) * VOXEL_SIZE, cpos.y);
+		// -1～0だと、floor(z+1)とfloor(z)+1の結果が変わる?
+	uv0 *= float2(1.0 / (VOXEL_SIZE * VOXEL_SIZE), 1.0 / (VOXEL_SIZE * 4.0));
+	uv1 *= float2(1.0 / (VOXEL_SIZE * VOXEL_SIZE), 1.0 / (VOXEL_SIZE * 4.0));
+
+	float4 uv = float4(uv0.xy, uv1.x, frac(vpos.z));
+
+	float4 sh_r = ToIrradianceProbe(GetSHCoef(uv, 0));
+	float4 sh_g = ToIrradianceProbe(GetSHCoef(uv, 1));
+	float4 sh_b = ToIrradianceProbe(GetSHCoef(uv, 2));
+	float4 sh_a = ToIrradianceProbe(GetSHCoef(uv, 3)); // 遮蔽度
+
+	float4 sh_n = NormalToSH(n);
+
+	// float s = 3.0 / (4.0 * PI * PI) * isInRange;
+	float s = isInRange;
+	return ShadeProbe4(sh_r, sh_g, sh_b, sh_a, sh_n) * s;
+}
+*/
+
+float4 GetSHColor2(float3 wpos, float3 n, float3 ref, out float4 colSpec, out float4 colSss)
+{
+	float3 vpos = (wpos - GridCenterPosition + FarDepth * 0.5) * INV_GRID_SIZE;
+
+	float3 cpos = clamp(vpos, 0.5, VOXEL_SIZE - 0.5);
+	float isInRange = (vpos.x == cpos.x) * (vpos.y == cpos.y);
+	float2 uv0 = float2(cpos.x + floor(vpos.z + 0) * VOXEL_SIZE, cpos.y);
+	float2 uv1 = float2(cpos.x + floor(vpos.z + 1) * VOXEL_SIZE, cpos.y);
+	uv0 *= float2(1.0 / (VOXEL_SIZE * VOXEL_SIZE), 1.0 / (VOXEL_SIZE * 4.0));
+	uv1 *= float2(1.0 / (VOXEL_SIZE * VOXEL_SIZE), 1.0 / (VOXEL_SIZE * 4.0));
+
+	float4 uv = float4(uv0.xy, uv1.x, frac(vpos.z));
+
+	float4 sh_r = ToIrradianceProbe(GetSHCoef(uv, 0));
+	float4 sh_g = ToIrradianceProbe(GetSHCoef(uv, 1));
+	float4 sh_b = ToIrradianceProbe(GetSHCoef(uv, 2));
+	float4 sh_a = ToIrradianceProbe(GetSHCoef(uv, 3));
+
+	float4 sh_n = NormalToSH(n);
+	float4 sh_ref = NormalToSH(ref);
+	float4 sh_in = NormalToSH(-n);
+
+	float s = isInRange;
+
+	colSpec = ShadeProbe4(sh_r, sh_g, sh_b, sh_a, sh_ref) * s;
+	colSss = ShadeProbe4(sh_r, sh_g, sh_b, sh_a, sh_in) * s;
+	return ShadeProbe4(sh_r, sh_g, sh_b, sh_a, sh_n) * s;
+}
+

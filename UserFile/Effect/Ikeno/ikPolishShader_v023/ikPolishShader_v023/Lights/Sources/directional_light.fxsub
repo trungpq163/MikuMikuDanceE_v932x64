@@ -1,0 +1,186 @@
+//-----------------------------------------------------------------------------
+// •ûŒü•t‚«ƒ‰ƒCƒg‚Å‚Ì‹¤’Êˆ—
+
+#if EnableShadowMap > 0
+texture LightSpaceDepth: OFFSCREENRENDERTARGET <
+	string Description = SHADOW_RT_DESCRIPTION;
+	string Format = "R32F";
+	int Width = SHADOW_BUFSIZE;
+	int Height = SHADOW_BUFSIZE;
+	int Miplevels = 1;
+	float4 ClearColor = { 1.0, 1.0, 0, 0 };
+	float ClearDepth = 1.0;
+	bool AntiAlias = false;
+	string DefaultEffect = 
+		"self = hide;"
+		"*.pmx = " SHADOW_FX_FILE ";"
+		"*.pmd = " SHADOW_FX_FILE ";"
+		"*.x = " SHADOW_FX_FILE ";"
+		"* = hide;" 
+	;
+>;
+sampler LightDepthSamp = sampler_state {
+	texture = <LightSpaceDepth>;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(1,0,0,0);
+//	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = NONE;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+};
+
+
+#if ShadowSampleCount > 0
+#define	NOISE_TEXTURE_SIZE	(256.0)
+texture2D NoiseTex <
+//	string ResourceName = "../Sources/Assets/noise.png";
+	string ResourceName = "../Sources/Assets/bluenoise.png";
+	int MipLevels = 1;
+>;
+sampler NoiseSamp = sampler_state {
+	texture = <NoiseTex>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU  = WRAP;	AddressV  = WRAP;
+};
+#endif
+#endif
+
+//-----------------------------------------------------------------------------
+//
+
+float ShadowMask(float2 TexCoord);
+
+float2 CalcLightCoord(float3 wpos, float3 v0, float z)
+{
+	float3 L = normalize(wpos - LightPosition);
+	float3 L0 = normalize(wpos - (LightPosition + v0));
+	float lstep = z * 1.0 / max(dot(L,L0), 0.1);
+	float3 lpos0 = L0 * lstep + LightPosition + v0;
+
+	float4 zcalc0 = mul(float4(lpos0,1), matLightVP);
+	return zcalc0.xy / zcalc0.w;
+}
+
+
+float CalcShadow(float4 WPos, float nl, float2 ppos)
+{
+	float4 zcalc = mul(WPos, matLightVP);
+	zcalc.xy /= zcalc.w;
+	float2 TexCoord = float2(1.0f + zcalc.x, 1.0f - zcalc.y) * 0.5;
+
+
+#if EnableShadowMap > 0
+	float bias = -0.25 - (1.0 - abs(nl)) * 0.5;
+	float receiver = zcalc.w;
+	float4 coord = float4(TexCoord, 0,0);
+
+#if ShadowSampleCount == 0
+	float blocker = tex2Dlod(LightDepthSamp, coord).x * PROJ_FAR;
+	float comp = CalcShadowRate(blocker, receiver, bias);
+#else
+
+	float jitter = tex2D(NoiseSamp, ppos.xy * ViewportSize / NOISE_TEXTURE_SIZE).x;
+
+	float2 sc;
+	sincos(jitter * PI * 0.5, sc.x, sc.y);
+	#if ShadowSampleCount > 3
+	sc *= 2.0 * 3.0 / (SHADOW_BUFSIZE * ShadowSampleCount);
+	#else
+	sc *= 2.0 / SHADOW_BUFSIZE;
+	#endif
+	float2x2 mat = {sc.y,-sc.x, sc.xy};
+
+#if EnableSoftShadow == 0
+
+	float sum = 0;
+	for(int x = -ShadowSampleCount; x <= ShadowSampleCount; x++){
+		for(int y = -ShadowSampleCount; y <= ShadowSampleCount; y++){
+			float4 coord1 = coord;
+			coord1.xy += mul(float2(x,y), mat);
+			float biasOffset = length(float2(x,y)) + 1.0;
+			float blocker = tex2Dlod(LightDepthSamp, coord1).x * PROJ_FAR;
+			sum += CalcShadowRate(blocker, receiver, bias * biasOffset);
+		}
+	}
+	float comp = sum / ((ShadowSampleCount*2+1) * (ShadowSampleCount*2+1));
+#else
+
+	// simple pcss
+	float nearBlocker = max(receiver * 2.0 / 3.0, receiver - max(LightSize.x, LightSize.y));
+	#if 0
+	// Search Blocker
+	float blockerSearched = tex2Dlod(LightDepthSamp, coord).x * PROJ_FAR;
+	if (blockerSearched < receiver) nearBlocker = max(blockerSearched - 1, nearBlocker);
+	#endif
+
+	float3 L = normalize(WPos.xyz - LightPosition);
+	float3 v0 = LightRight * LightSize.x + LightUp * LightSize.y;
+	float3 L0 = normalize(WPos.xyz - (LightPosition + v0));
+	float range = max(dot(L,L0), 0.1);
+	float2 TexCoord0 = CalcLightCoord(WPos.xyz, v0, nearBlocker);
+	float2 TexCoord1 = CalcLightCoord(WPos.xyz,-v0, nearBlocker);
+
+	float2 vTexCoord = (TexCoord1 - TexCoord0) / (ShadowSampleCount * 2.0);
+	TexCoord0 += vTexCoord * (float2(jitter, 1.0 - jitter) - 0.5);
+
+	float sum = 0;
+	for(int x = 0; x < ShadowSampleCount * 2; x++){
+		for(int y = 0; y < ShadowSampleCount * 2; y++){
+			float2 coord0 = vTexCoord * float2(x,y) + TexCoord0;
+			float4 coord1 = float4(coord0 * float2(0.5,-0.5) + 0.5,0,0);
+			float blocker = tex2Dlod(LightDepthSamp, coord1).x * PROJ_FAR;
+			float shadow = CalcShadowRate(blocker, receiver, bias);
+
+			float4 ppos = float4(coord0, matLightP._33, 1) * blocker;
+			ppos.z += matLightP._43;
+			float3 p1 = mul(ppos, matLightInvVP).xyz;
+			shadow = (dot(normalize(WPos.xyz - p1), L) < range) ? 1 : shadow;
+			sum += shadow;
+		}
+	}
+
+	float comp = sum / (ShadowSampleCount * ShadowSampleCount * 4.0);
+
+	// pcf
+	float fadeRateScale = 0.05 * LOG2_E * max(LightSize.x, LightSize.y);
+	float sum2 = 0;
+	for(int x = -ShadowSampleCount; x <= ShadowSampleCount; x++){
+		for(int y = -ShadowSampleCount; y <= ShadowSampleCount; y++){
+			float4 coord1 = coord;
+			coord1.xy += mul(float2(x,y), mat);
+			float biasOffset = length(float2(x,y)) + 1.0;
+			float blocker = tex2Dlod(LightDepthSamp, coord1).x * PROJ_FAR;
+			float shadow = CalcShadowRate(blocker, receiver, bias * biasOffset);
+			float rate = exp2(min((blocker - receiver) * fadeRateScale, 0));
+			sum2 += lerp(1, shadow, rate);
+		}
+	}
+	float comp2 = sum2 / ((ShadowSampleCount*2+1) * (ShadowSampleCount*2+1));
+	comp *= comp2;
+
+#endif
+
+#endif
+#else
+	float comp = 1;
+#endif
+
+	comp *= ShadowMask(TexCoord);
+
+	return comp;
+}
+
+
+float2 GetLightCoord(float3 pos)
+{
+	float3 lpos = pos - LightPosition;
+	float w = dot(lpos, LightRight);
+	float h = dot(lpos, LightUp);
+	return float2(w, h) / LightSize;
+}
+
+#if EnableLighTexture > 0
+float3 GetTextureColor(float2 coord, float lod)
+{
+	float3 lightPattern = tex2Dlod(LightSamp, float4(coord,0,lod)).rgb;
+	return lightPattern * GetEdgeFallOff(coord, lod, TextureSize);
+}
+
+#endif

@@ -1,0 +1,172 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// シャドウを受けない素材用
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+#include "../ikPolishShader.fxsub"
+#include "shadowCommons.fxsub"
+
+#define BORDER_RANGE	2		// 1/4画面の境界
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座法変換行列
+float4x4 matWVP				: WORLDVIEWPROJECTION;
+float4x4 matWV				: WORLDVIEW;
+float4x4 matW				: WORLD;
+
+static float4x4 lightMatWVP = mul(mul(matW, lightMatV), lightMatP);
+
+float4   MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+bool opadd;		// 加算合成フラグ
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	ADDRESSU  = WRAP;	ADDRESSV  = WRAP;
+};
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// テクスチャ座標がどれだけエッジに近いか?
+// テクスチャ座標の範囲は[-1,1]
+inline float CalcEdgeFalloff(float2 texCoord)
+{
+	const float m = (SHADOW_TEX_SIZE * 0.5 / WARP_RANGE);
+	const float a = (BORDER_RANGE * 1.0 / WARP_RANGE);
+	float2 falloff = abs(texCoord) * (-m * 4.0) + (m - a);
+	return saturate(min(falloff.x, falloff.y));
+}
+
+inline float4 CalcCascadePPos(float2 uv, float2 offset, float index)
+{
+	// u, v, カスケードのインデックス, 重み を格納。
+	return float4(uv + ((0.5 + offset) * 0.5 + (0.5 / SHADOW_TEX_SIZE)), index, CalcEdgeFalloff(uv));
+}
+
+#define TEX2D(samp, uv)		tex2Dlod(samp, float4(uv, 0,0))
+//#define TEX2D(samp, uv)		tex2D(samp, uv)
+
+//#define CalcLight(casterDepth, receiverDepth, rate)	(casterDepth >= receiverDepth)
+//#define CalcLight(casterDepth, receiverDepth, rate)	saturate((casterDepth - receiverDepth) * (LightZMax * 10.0) + 1.0)
+
+#define CalcLight(casterDepth, receiverDepth, rate)	(1.0 - saturate(max(receiverDepth - casterDepth, 0) * rate))
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウOFF）
+
+struct DrawObjectNoShadow_OUTPUT {
+    float4 Pos      : POSITION;     // 射影変換座標
+    float3 Tex      : TEXCOORD0;    // テクスチャ
+};
+
+DrawObjectNoShadow_OUTPUT DrawObjectNoShadow_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, uniform bool useTexture)
+{
+    DrawObjectNoShadow_OUTPUT Out = (DrawObjectNoShadow_OUTPUT)0;
+    Out.Pos = mul( Pos, matWVP );
+    Out.Tex.xy = Tex.xy;
+	Out.Tex.z = mul(Pos, matWV).z; // カメラからの距離
+    return Out;
+}
+
+float4 DrawObjectNoShadow_PS(DrawObjectNoShadow_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+	clip( !opadd - 0.001f );	// 加算半透明なら無視する
+	float alpha = MaterialDiffuse.a;
+	alpha *= (abs(MaterialDiffuse.a - 0.98) >= 0.01); // ??
+	if ( useTexture ) alpha *= tex2D( ObjTexSampler, IN.Tex.xy ).a;
+	clip(alpha - RecieverAlphaThreshold);
+	float distanceFromCamera = IN.Tex.z;
+	return float4(1, 0.0, distanceFromCamera, alpha);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウON）
+
+struct DrawObject_OUTPUT {
+    float4 Pos      : POSITION;
+    float4 Tex      : TEXCOORD0;
+	float3 Normal	: TEXCOORD1;
+};
+
+DrawObject_OUTPUT DrawObject_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, uniform bool useTexture)
+{
+    DrawObject_OUTPUT Out = (DrawObject_OUTPUT)0;
+
+    Out.Pos = mul( Pos, matWVP );
+	Out.Normal = mul(Normal, (float3x3)matW);
+
+	float4 PPos = mul(Pos, lightMatWVP);
+	PPos /= PPos.w;
+
+    Out.Tex.xy = Tex.xy;
+	Out.Tex.z = mul(Pos, matWV).z;	// カメラからの距離
+	Out.Tex.w = PPos.z;				// ライトからの距離
+
+    return Out;
+}
+
+float4 DrawObject_PS(DrawObject_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+    float alpha = MaterialDiffuse.a;
+    if ( useTexture ) alpha *= tex2D( ObjTexSampler, IN.Tex.xy ).a;
+	clip(alpha - RecieverAlphaThreshold);
+
+	float distanceFromCamera = IN.Tex.z;
+
+	float3 N = normalize(IN.Normal);
+	float dotNL = dot(N,-LightDirection);
+
+	float light = 1;
+	float thick = 0;
+
+	// light = min(light, dotNL);
+	// light = min(light, dotNL * 0.5 + 0.5);
+	light = min(light, (dotNL > 0.0));
+	return float4(light, thick, distanceFromCamera, alpha);
+}
+
+
+#define OBJECT_NO_SHADOW_TEC(name, mmdpass, tex) \
+	technique name < string MMDPass = mmdpass; bool UseTexture = tex; \
+	> { \
+		pass DrawObject { \
+			VertexShader = compile vs_3_0 DrawObjectNoShadow_VS(tex); \
+			PixelShader  = compile ps_3_0 DrawObjectNoShadow_PS(tex); \
+		} \
+	}
+
+#define OBJECT_TEC(name, mmdpass, tex) \
+	technique name < string MMDPass = mmdpass; bool UseTexture = tex; \
+	> { \
+		pass DrawObject { \
+			VertexShader = compile vs_3_0 DrawObject_VS(tex); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(tex); \
+		} \
+	}
+
+OBJECT_NO_SHADOW_TEC(MainTec2, "object", false)
+OBJECT_NO_SHADOW_TEC(MainTec3, "object", true)
+//technique MainTec0 < string MMDPass = "object";  > {}
+
+OBJECT_TEC(MainTecBS2, "object_ss", false)
+OBJECT_TEC(MainTecBS3, "object_ss", true)
+
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTec < string MMDPass = "shadow"; > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////

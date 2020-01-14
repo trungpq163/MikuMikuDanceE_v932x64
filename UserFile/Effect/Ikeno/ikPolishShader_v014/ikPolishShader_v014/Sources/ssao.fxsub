@@ -1,0 +1,124 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+// SSAO
+
+#if SSAORayCount > 0
+
+static float InvDepthLength6 = 1.0 / pow(DepthLength, 6);
+static float2 SSAORadiusB = (64.0 / 1024.0) / SSAORayCount * ViewportAspect;
+
+float4 PS_SSAO( float4 Tex: TEXCOORD0 ) : COLOR
+{
+	float2 texCoord = Tex.zw;
+
+	float3 WPos;
+	float3 N;
+	float Depth;
+	GetWND(texCoord, WPos, N, Depth);
+
+	int2 rndTexOffset = int2(texCoord * ViewportSize * WORKSPACE_SCALE);
+	float angleMul = 7.0 / SSAORayCount * (PI * 2.0);
+	float angleAdd = GetJitterOffset(rndTexOffset) * (PI * 2.0);
+
+	//float2 radiusMul = SSAORadiusA / Depth;
+	float2 radiusMul = SSAORadiusB;
+	float2 radiusAdd = SampStep * 2.0;
+
+	// 16bit深度だと望遠時に精度が足りずにモアレになる
+	#if (SSAO_QUALITY > 2) || (ENABLE_SSGI > 0 && SSAO_QUALITY >= 2)
+	float bias = mSSAOBias * 0.1 + Depth * (0.5 / 8388608.0);
+	#else
+	float bias = mSSAOBias * 0.1 + Depth * (0.5 / 1024.0);
+	#endif
+
+	#if defined(ENABLE_SSGI) && ENABLE_SSGI > 0
+	texCoord = texCoord * GIFrameScale + (-0.5 * GIFrameScale + 0.5);
+	radiusMul *= GIFrameScale;
+	#endif
+
+	float2 sum = 0;
+	float4 col = 0;
+
+	// MEMO: unrollするとレジスタを使い過ぎてコンパイルが通らない
+	// [unroll]
+	for(int j = 0; j < SSAORayCount; j++)
+	{
+		float2 sc;
+		sincos(j * angleMul + angleAdd, sc.x, sc.y);
+		float2 uv = sc * (j * radiusMul + radiusAdd) + texCoord;
+
+		#if defined(ENABLE_SSGI) && ENABLE_SSGI > 0
+		float3 RayPos = GetWPos_SSGI(uv);
+		#else
+		float3 RayPos = GetWPos(uv);
+		#endif
+		float3 v = RayPos - WPos;
+
+		float distance2 = dot(v, v);
+		v = v * rsqrt(max(distance2, 1e-4));
+		// float dotVN = max(dot(v, N) - bias, 0.0f);
+		float dotVN = max(dot(v, N) - bias, 0.0f);
+		float f = max((DepthLength * DepthLength) - distance2, 0.0f);
+		float falloff = f * f * f * InvDepthLength6;
+		float2 ao = float2(min(falloff * dotVN, 1.0), falloff);
+
+		#if defined(ENABLE_SSGI) && ENABLE_SSGI > 0
+		col += GetSSGI(uv) * ao.x;
+		#endif
+
+		sum += ao;
+	}
+
+	float s = saturate(1.0 - (sum.x / max(sum.y, 1e-3)) * AmbientPower);
+	return float4(col.rgb * (1.0 / SSAORayCount), s);
+}
+
+inline float GetSSAO(float2 tex) { return tex2D(SSAOWorkMapSamp, tex).w;}
+
+inline float4 GetSSAOFull(float2 tex)
+{
+	float4 col = tex2D(SSAOWorkMapSamp, tex);
+	#if defined(ENABLE_SSGI) && ENABLE_SSGI > 0
+	col.rgb *= GIScale;
+	#endif
+	return col;
+}
+
+#else
+
+inline float GetSSAO(float2 tex) { return 1.0;}
+inline float4 GetSSAOFull(float2 tex) { return float4(0,0,0,1); }
+
+#endif
+
+
+
+#if SSAORayCount > 0 || (defined(RSMCount) && RSMCount > 0)
+
+// SSAO用のボカし
+float4 PS_BlurSSAO( float4 Tex: TEXCOORD0, uniform bool isXBlur, uniform sampler smp) : COLOR
+{
+	float2 offset = (isXBlur) ? float2(SampStep.x, 0) : float2(0, SampStep.y);
+	float2 texCoord = Tex.zw;
+
+	float4 color0 = tex2D( smp, texCoord );
+	float4 color = color0;
+	float4 nd0 = GetNormalDepthRaw(texCoord);
+	float depthRate = 1.0 / max(nd0.w, 1.0);
+	float wsum = 1;
+
+	[unroll] for(int i = 1; i < 8; i ++)
+	{
+		float t2 = (i * i) * (-0.5 / (8.0 * 8.0));
+		float4 cp = tex2D(smp, texCoord + offset * i);
+		float4 cn = tex2D(smp, texCoord - offset * i);
+		float4 ndp = GetNormalDepthRaw(texCoord + offset * i);
+		float4 ndn = GetNormalDepthRaw(texCoord - offset * i);
+		float wp = CalcBlurWeight(nd0, ndp, t2, depthRate);
+		float wn = CalcBlurWeight(nd0, ndn, t2, depthRate);
+		color += cp * wp + cn * wn;
+		wsum += wp + wn;
+	}
+
+		return color / wsum;
+}
+#endif

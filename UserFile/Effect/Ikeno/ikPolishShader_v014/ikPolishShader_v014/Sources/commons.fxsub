@@ -1,0 +1,132 @@
+
+// 共通処理、カテゴリ分けから漏れた汎用処理
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// マクロ
+
+#define TO_STRING(str) #str
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ガンマ補正
+const float gamma = 2.2333;
+const float epsilon = 1.0e-6;
+inline float3 Degamma(float3 col) { return pow(max(col,epsilon), gamma); }
+inline float3 Gamma(float3 col) { return pow(max(col,epsilon), 1.0/gamma); }
+inline float4 Degamma4(float4 col) { return float4(Degamma(col.rgb), col.a); }
+inline float4 Gamma4(float4 col) { return float4(Gamma(col.rgb), col.a); }
+inline float rgb2gray(float3 rgb)
+{
+	return dot(float3(0.299, 0.587, 0.114), max(rgb,0));
+}
+
+
+// 法線と深度からワールド座標を再構築する
+static float4x4 matTex2Proj = {
+		 2, 0, 0, 0,
+		 0,-2, 0, 0,
+		-1, 1, matP._33, 1,
+		 0, 0, matP._43, 0
+	};
+static float4x4 matTex2World = mul(matTex2Proj, matInvVP);
+
+inline float3 ReconstructWPos(float2 Tex, float depth)
+{
+	// Tex.xy = (floor(Tex.xy * ViewportSize) + 0.5) / ViewportSize;
+	float4 wpos = mul(float4(float3(Tex.xy, 1) * depth, 1), matTex2World);
+	return wpos.xyz / wpos.w;
+}
+
+inline float4 GetNormalDepthRaw(float2 Tex)
+{
+	return tex2D( NormalSamp, Tex);
+}
+inline float4 GetNormalDepthRawLod(float2 Tex)
+{
+	return tex2Dlod( NormalSamp, float4(Tex,0,0));
+}
+
+inline void GetWND(float2 Tex, out float3 WPos, out float3 N, out float Depth)
+{
+	float4 ND = GetNormalDepthRaw(Tex);
+	N = ND.xyz;
+	Depth = ND.w;
+	WPos = ReconstructWPos(Tex, Depth);
+}
+
+inline void GetWNDLod(float2 Tex, out float3 WPos, out float3 N, out float Depth)
+{
+	float4 ND = GetNormalDepthRawLod(Tex);
+	N = ND.xyz;
+	Depth = ND.w;
+	WPos = ReconstructWPos(Tex, Depth);
+}
+
+// 座標だけ取得する
+inline float3 GetWPos(float2 Tex)
+{
+	return ReconstructWPos(Tex, GetNormalDepthRaw(Tex).w);
+}
+
+inline float3 GetNormalDepth(float2 Tex, out float depth)
+{
+	float4 nd = GetNormalDepthRaw(Tex);
+	depth = nd.w;
+	return nd.xyz;
+}
+
+// ブラーの強さを計算する
+inline float CalcBlurWeight(float4 nd0, float4 nd1, float r2, float depthRate)
+{
+	float d = (nd0.w - nd1.w) * 100 * depthRate;
+	float d2 = d * d;
+	return exp(r2 - d2) * saturate(dot(nd0.xyz, nd1.xyz) * 0.5 + 0.5);
+//	return exp(r2 - d2) * saturate(dot(nd0.xyz, nd1.xyz));
+}
+
+
+inline bool IsTimeToReset()
+{
+	return (time < 0.001f);
+}
+
+
+//-----------------------------------------------------------------------------
+// ジッター
+static float JitterOffsets[16] = {
+	 6/16.0, 1/16.0,12/16.0,11/16.0,
+	 9/16.0,14/16.0, 5/16.0, 2/16.0,
+	 0/16.0, 7/16.0,10/16.0,13/16.0,
+	15/16.0, 8/16.0, 3/16.0, 4/16.0,
+};
+
+inline float GetJitterOffset(int2 iuv)
+{
+	int index = (iuv.x % 4) * 4 + (iuv.y % 4);
+#if 0
+	return JitterOffsets[index];
+#else
+	int index2 = ((iuv.x/4) % 4) * 4 + ((iuv.y/4) % 4);
+	return (JitterOffsets[index] + JitterOffsets[index2] * (1/16.0));
+#endif
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+struct VS_OUTPUT {
+	float4 Pos			: POSITION;
+	float4 Tex			: TEXCOORD0;
+};
+
+VS_OUTPUT VS_Common( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex + ViewportOffset;
+	Out.Tex.zw = Tex + ViewportOffset2;
+	return Out;
+}

@@ -1,0 +1,154 @@
+//-----------------------------------------------------------------------------
+//
+//
+//-----------------------------------------------------------------------------
+
+
+//-----------------------------------------------------------------------------
+
+#define CTRL_NAME	"(self)"
+
+#include "../ikPolishShader.fxsub"
+#include "../Sources/constants.fxsub"
+#include "./Sources/light.fxsub"
+#include "./Sources/directional_common.fxsub"
+
+static float LightSize = 0.1;
+
+#define SHADOW_FX_FILE	"./Sources/directional_shadow.fx"
+#define	SHADOW_RT_DESCRIPTION	"shadowmap for spot light"
+
+#define EnableSoftShadow	0
+
+//-----------------------------------------------------------------------------
+
+#include "../Sources/structs.fxsub"
+#include "../Sources/colorutil.fxsub"
+#include "../Sources/gbuffer.fxsub"
+#include "../Sources/lighting.fxsub"
+
+#include "./Sources/directional_light.fxsub"
+
+//-----------------------------------------------------------------------------
+//
+
+// 円形にカット
+float ShadowMask(float2 TexCoord)
+{
+	float r = saturate(1.0 - length(TexCoord * 2.0 - 1.0));
+	return r * r;
+}
+
+//-----------------------------------------------------------------------------
+//
+VS_OUTPUT VS_SetTexCoord( float4 Pos : POSITION, float4 Tex : TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.TexCoord = Tex.xy + ViewportOffset.xy;
+
+	// matLightVPを生成してPSに送る
+
+	return Out;
+}
+
+PS_OUT_MRT PS_DrawLight( float2 Tex: TEXCOORD0, uniform bool useShadow )
+{
+	float4 albedo = tex2D(ColorMap, Tex.xy);
+	MaterialParam material = GetMaterial(Tex.xy, albedo);
+	GeometryInfo geom = GetWND(Tex.xy);
+	float3 wpos = geom.wpos;
+	float depth = geom.nd.depth;
+
+	float3 V = normalize(CameraPosition - wpos);
+	float3 N = normalize(geom.nd.normal);
+	float3 lv = LightPosition - wpos;
+	float dist = length(lv);
+	float3 L0 = normalize(lv);
+	float3 L = -LightDirection;
+
+	float shadow = CalcShadow(float4(wpos,1), dot(N, L), Tex);
+	shadow *= CalcLightFalloff(wpos, LightPosition, LightRadius + LightSize);
+	shadow *= saturate(dot(L, L0));
+
+	//-----------------------------------------------------
+	// デフューズ
+#if EnableLighTexture > 0
+	// テクスチャ使用
+	float4 zcalc = mul(float4(wpos, 1), matLightVP);
+	zcalc.xy = zcalc.xy / zcalc.w;
+	float2 uv = float2(1.0f - zcalc.x, 1.0f - zcalc.y) * 0.5;
+
+	float difflod = MaxLod - 2;
+	float3 diffuseCol = (
+		GetTextureColor(uv, difflod) +
+		GetTextureColor(uv, difflod + 1) +
+		GetTextureColor(uv, difflod + 2)) / 3.0;
+	diffuseCol = Degamma(diffuseCol);
+#else
+	float3 diffuseCol = 1;
+#endif
+	float3 diffuse = diffuseCol;
+	//@@@ 両面対応?
+	diffuse *= saturate(dot(N, L0));
+	diffuse *= LightColor * MaterialEmissive * shadow;
+
+	//-----------------------------------------------------
+	// スペキュラ
+	float3 R = normalize(reflect(-V, N));
+
+	float3 specColor = diffuseCol;
+	float3 specular = CalcSpecular(L0, N, V, material.roughness, material.f0);
+	specular *= specColor;
+	specular *= LightColor * MaterialEmissive * shadow;
+
+	PS_OUT_MRT Out;
+	Out.Diffuse = float4(diffuse, 1);
+	Out.Specular = float4(specular, 1);
+
+	return Out;
+}
+
+
+//-----------------------------------------------------------------------------
+// 
+
+#if EnableShadowMap > 0
+#define OBJECT_TEC(name, mmdpass) \
+	technique name < string MMDPass = mmdpass; \
+		string Script =  \
+			"RenderColorTarget1=PPPSpecularMapRT;" \
+			"RenderColorTarget0=; Pass=DrawLight;" \
+			"RenderColorTarget1=;"; \
+	> { \
+		pass DrawLight < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			SrcBlend = ONE; DestBlend = ONE; \
+			VertexShader = compile vs_3_0 VS_SetTexCoord(); \
+			PixelShader  = compile ps_3_0 PS_DrawLight(true); \
+		} \
+	}
+#else
+#define OBJECT_TEC(name, mmdpass) \
+	technique name < string MMDPass = mmdpass; \
+		string Script =  \
+			"RenderColorTarget1=PPPSpecularMapRT;" \
+			"Pass=DrawLight;" \
+			"RenderColorTarget1=;"; \
+	> { \
+		pass DrawLight < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			SrcBlend = ONE; DestBlend = ONE; \
+			VertexShader = compile vs_3_0 VS_SetTexCoord(); \
+			PixelShader  = compile ps_3_0 PS_DrawLight(false); \
+		} \
+	}
+#endif
+
+
+OBJECT_TEC(MainTec0, "object")
+OBJECT_TEC(MainTecBS0, "object_ss")
+
+//-----------------------------------------------------------------------------
+

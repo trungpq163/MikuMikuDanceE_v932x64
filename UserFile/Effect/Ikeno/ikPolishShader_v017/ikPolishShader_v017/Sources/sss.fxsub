@@ -1,0 +1,144 @@
+
+//-----------------------------------------------------------------------------
+// SSS
+
+#if SSSBlurCount > 0
+
+#define SssKernelSize	0.2 // ブラー径 0.2MMD ≒ 2cm
+static float2 SssKernelSizeScale = abs(SssKernelSize * matP._11 * 0.5) / matP._34
+	 / ((SSSBlurCount + 1.0) * (SSSBlurCount + 1.0)) * ViewportAspect;
+
+struct VS_SSS_OUTPUT {
+	float4 Pos		: POSITION;
+	float4 Tex		: TEXCOORD0;
+	float4 Tex2		: TEXCOORD1;
+};
+
+VS_SSS_OUTPUT VS_SSS( float4 Pos : POSITION, float2 Tex : TEXCOORD0)
+{
+	VS_SSS_OUTPUT Out = (VS_SSS_OUTPUT)0; 
+	Out.Pos = Pos;
+
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+	Out.Tex.zw = SampStep;
+	Out.Tex2.xy = SssKernelSizeScale;
+	Out.Tex2.zw = Out.Tex.xy * ViewportSize / 16.0;
+
+	return Out;
+}
+
+// ワールド空間での距離を考慮したブラー
+float4 PS_SSS( VS_SSS_OUTPUT IN, uniform sampler smp) : COLOR
+{
+	float2 texCoord = IN.Tex.xy;
+	float2 offset = IN.Tex.zw;
+	float2 kernelSize = IN.Tex2.xy;
+	float2 jitterIndex = IN.Tex2.zw;
+
+	float4 BaseColor = tex2D( smp, texCoord);
+
+	NormalDepth nd0 = GetNormalDepthRaw(texCoord);
+	float depth = nd0.depth;
+	float depthRate = 100.0 / max(depth, 1.0);
+//	nd0.depth *= depthRate;
+	nd0.depth = 100.0;
+	float3 absorption = CalcAbsorptionColor(texCoord);
+
+	MaterialParam mat = GetMaterial(texCoord);
+	float weight = mat.sssValue * saturate(ViewportSize.y * 0.05 / depth);
+	float sss = saturate(weight * SSSScale);
+
+	float angleMul = 7.0 / SSSBlurCount * (PI * 2.0);
+	float angleAdd = GetJitterOffset(jitterIndex) * (PI * 2.0);
+	float2 radiusMul = kernelSize * sss / max(depth, 1.0);
+	float2 radiusAdd = offset;
+
+	float3 Color = BaseColor.rgb;
+	float3 sumRgb = 1; // 重みも色毎に計算している。
+
+	for(int i = 0; i < SSSBlurCount; i++)
+	{
+		float t = (i + 0.5) * (i + 0.5);
+		float t2 = t * (-0.5 * LOG2_E / ((SSSBlurCount + 1) * (SSSBlurCount + 1)));
+
+		float2 sc;
+		sincos(i * angleMul + angleAdd, sc.x, sc.y);
+		float2 uv = sc * (t * radiusMul + SampStep.x) + texCoord;
+		NormalDepth nd1 = GetNormalDepthRawLod(uv.xy);
+		float4 col1 = tex2Dlod(smp, float4(uv,0,0));
+
+		float3 w = CalcBlurWeight3(nd0, nd1, t2 * absorption, depthRate);
+		Color += col1.rgb * w;
+		sumRgb += w;
+	}
+
+	BaseColor.rgb = lerp(BaseColor.rgb, Color / sumRgb, sss);
+	BaseColor.w = sss;
+
+	return BaseColor;
+}
+
+
+//-----------------------------------------------------------------------------
+// SSSのノイズを取るためのブラー
+VS_SSS_OUTPUT VS_BlurSSS( float4 Pos : POSITION, float2 Tex : TEXCOORD0)
+{
+	VS_SSS_OUTPUT Out = (VS_SSS_OUTPUT)0; 
+	Out.Pos = Pos;
+
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+	Out.Tex.zw = SampStep;
+	// Out.Tex2.xy = SssKernelSizeScale;
+
+	return Out;
+}
+
+float4 GetSSSNeighbourColor(float2 texCoord, NormalDepth nd0, float depthRate, uniform sampler smp)
+{
+	float4 c = tex2D(smp, texCoord);
+	NormalDepth nd1 = GetNormalDepthRaw(texCoord);
+	float weight = CalcBlurWeight(nd0, nd1, 0, depthRate);
+	weight *= c.w; // ステンシルでキャンセルされた色を拾わないように
+	return float4(c.rgb, 1) * weight;
+}
+
+float4 PS_BlurSSS( VS_SSS_OUTPUT IN, uniform sampler smp) : COLOR
+{
+	float2 texCoord = IN.Tex.xy;
+	float2 offset = IN.Tex.zw;
+
+	float4 BaseColor = tex2D(smp, texCoord );
+	float sss = BaseColor.w;
+
+	NormalDepth nd0 = GetNormalDepthRaw(texCoord);
+	float depth = nd0.depth;
+	float depthRate = 1.0 / max(depth, 1.0);
+	nd0.depth = 1.0; // nd0.depth *= depthRate;
+
+	float4 Color = BaseColor;
+	Color.w = 1;
+
+	#define SSS_BLUR_SUB(ofsx, ofsy)	\
+		GetSSSNeighbourColor(offset * float2(ofsx, ofsy) + texCoord, nd0, depthRate, smp)
+
+	Color += SSS_BLUR_SUB(-1,-1) * 0.25;
+	Color += SSS_BLUR_SUB( 0,-1) * 0.5;
+	Color += SSS_BLUR_SUB( 1,-1) * 0.25;
+	Color += SSS_BLUR_SUB(-1, 0) * 0.5;
+	Color += SSS_BLUR_SUB( 1, 0) * 0.5;
+	Color += SSS_BLUR_SUB(-1, 1) * 0.25;
+	Color += SSS_BLUR_SUB( 0, 1) * 0.5;
+	Color += SSS_BLUR_SUB( 1, 1) * 0.25;
+
+	BaseColor.rgb = lerp(BaseColor.rgb, Color.rgb / Color.w, sss);
+
+	float2 shadowInfo = tex2D(ShadowmapSamp, texCoord).xy;
+	float shadow = shadowInfo.x;
+	BaseColor.w = shadow;
+
+	return BaseColor;
+}
+
+#endif
+
+

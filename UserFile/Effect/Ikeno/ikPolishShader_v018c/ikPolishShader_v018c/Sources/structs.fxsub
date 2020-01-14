@@ -1,0 +1,54 @@
+
+//-----------------------------------------------------------------------------
+// 構造体
+
+struct NormalDepth
+{
+	float3 normal;
+	float depth;
+};
+
+struct GeometryInfo
+{
+	NormalDepth nd;		// normal and depth
+	float3 wpos;		// world position
+};
+
+struct MaterialParam
+{
+	float metalness;
+	float roughness;
+	float intensity;
+	float sssValue;
+
+	float3 f0;
+};
+
+// マテリアル値の取得
+MaterialParam UnpackMaterial(float4 rawdata, float3 albedo)
+{
+	float mi = floor(rawdata.x * 255.0);
+	float metalness = floor(mi / 8.0) * (8.0 / 255.0);
+	float f0 = fmod(mi, 8.0) * (0.2 / 7.0);
+
+	MaterialParam result;
+	result.metalness = metalness;
+	result.roughness = rawdata.y;
+	result.intensity = rawdata.z; 
+	result.sssValue = rawdata.w;
+
+	result.f0 = lerp(f0.xxx, albedo.rgb, metalness);
+
+	return result;
+}
+
+
+struct VS_AL_INPUT {
+	float4 Pos : POSITION;
+	float2 Tex : TEXCOORD0;
+	float4 AddUV1 : TEXCOORD1;
+	float4 AddUV2 : TEXCOORD2;
+	float4 AddUV3 : TEXCOORD3;
+	float4 Normal : NORMAL;
+};
+

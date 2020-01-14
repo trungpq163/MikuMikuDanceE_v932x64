@@ -1,0 +1,39 @@
+
+//-----------------------------------------------------------------------------
+// ç\ë¢ëÃ
+
+struct NormalDepth
+{
+	float3 normal;
+	float depth;
+};
+
+struct GeometryInfo
+{
+	NormalDepth nd;		// normal and depth
+	float3 wpos;		// world position
+};
+
+struct MaterialParam
+{
+	float metalness;
+	float roughness;
+	float intensity;
+	float sssValue;
+	float emissive;
+
+	float3 f0;
+	float attribute;
+
+	float3 albedo;
+};
+
+struct VS_AL_INPUT {
+	float4 Pos : POSITION;
+	float2 Tex : TEXCOORD0;
+	float4 AddUV1 : TEXCOORD1;
+	float4 AddUV2 : TEXCOORD2;
+	float4 AddUV3 : TEXCOORD3;
+	float4 Normal : NORMAL;
+};
+

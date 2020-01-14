@@ -1,0 +1,359 @@
+/////////////////////////////////////////////////////////////////////////////////////////
+// ikPolishShaderの材質指定用エフェクト
+
+// パーティクルの質感向上のためというより、パーティクルの後ろのモデルの材質が
+// パーティクルに適用されることで、見た目がおかしくなるのを避けるためのもの。
+// パーティクルが小さく動きが速いなどで、気にならないなら、
+// このエフェクトを使用せず、ColorMapRTタブのパーティクルのチェックを外したほうが高速。
+
+
+//-----------------------------------------------------------------------------
+// ikPolishShader用の設定
+
+// 金属かどうか。基本は0(非金属)、1(金属)のどちらか。
+const float Metalness = 0.0;
+
+// 表面の滑らかさ(0～1)
+const float Smoothness = 0.5;		// 自動設定しない場合の値。
+
+// 映り込み強度(0:映り込まない。1:映り込む)
+const float Intensity = 1.0;
+
+// 非金属の垂直反射率
+// 金属の場合は、色＝リフレクタンスとして扱う。
+const float NonmetalF0 = 0.05;
+
+// 皮下散乱度
+const float SSSValue = 0.5;
+
+
+//-----------------------------------------------------------------------------
+// パーティクル自身の設定
+
+// パーティクルの設定ファイル
+#include "ikParticleSettings.fxsub"
+
+// これ以下の透明度は無視する
+const float AlphaThroughThreshold = 0.5;
+
+// 描画サイズ
+float FrameScale = 1.0;
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+// 座法変換行列
+float4x4 matWV		: WORLDVIEW;
+float4x4 matV		: VIEW;
+float4x4 matVP		: VIEWPROJECTION;
+float4x4 matP		: PROJECTION;
+float4x4 CalcWVP(float4x4 wv, float4x4 p)
+{
+	p._11_22 *= FrameScale;
+	return mul(wv, p);
+}
+static float4x4 matWVP = CalcWVP(matWV, matP);
+
+float3	CameraPosition    : POSITION  < string Object = "Camera"; >;
+float3	LightDiffuse		: DIFFUSE   < string Object = "Light"; >;
+
+static float CustomMetalness = saturate(Metalness);
+static float CustomSmoothness = saturate(Smoothness) * 0.96 + 0.02;
+static float CustomIntensity = saturate(Intensity);
+
+shared texture PPPNormalMapRT: RENDERCOLORTARGET;
+shared texture PPPMaterialMapRT: RENDERCOLORTARGET;
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+#define TEX_WIDTH     UNIT_COUNT  // 座標情報テクスチャピクセル幅
+#define TEX_HEIGHT    1024        // 配置･乱数情報テクスチャピクセル高さ
+
+#define PAI 3.14159265f   // π
+
+float AcsTr  : CONTROLOBJECT < string name = "(self)"; string item = "Tr"; >;
+
+int RepeatCount = UNIT_COUNT;  // シェーダ内描画反復回数
+int RepeatIndex;               // 複製モデルカウンタ
+
+#if USE_BILLBOARD == 1
+float4x4 matVInv	: VIEWINVERSE;
+static float3x3 BillboardMatrix = {
+	normalize(matVInv[0].xyz),
+	normalize(matVInv[1].xyz),
+	normalize(matVInv[2].xyz),
+};
+#endif
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+    texture2D ParticleTex <
+        string ResourceName = TEX_FileName;
+        int MipLevels = 1;
+    >;
+    sampler ParticleTexSamp = sampler_state {
+        texture = <ParticleTex>;
+        MinFilter = LINEAR;
+        MagFilter = LINEAR;
+        MipFilter = NONE;
+        AddressU  = CLAMP;
+        AddressV  = CLAMP;
+    };
+
+#if defined(PALLET_FileName) && USE_PALLET > 0
+texture2D ColorPallet <
+	string ResourceName = PALLET_FileName;
+>;
+sampler ColorPalletSmp = sampler_state{
+	texture = <ColorPallet>;
+	MinFilter = POINT;
+	MagFilter = POINT;
+	MipFilter = NONE;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+
+// 粒子座標記録用
+shared texture COORD_TEX_NAME : RENDERCOLORTARGET;
+sampler CoordSmp : register(s3) = sampler_state
+{
+   Texture = <COORD_TEX_NAME>;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+    MinFilter = NONE;
+    MagFilter = NONE;
+    MipFilter = NONE;
+};
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 粒子の回転行列
+float3x3 RoundMatrix(int index, float etime)
+{
+   float rotX = ParticleRotSpeed * (1.0f + 0.3f*sin(247*index)) * etime + (float)index * 147.0f;
+   float rotY = ParticleRotSpeed * (1.0f + 0.3f*sin(368*index)) * etime + (float)index * 258.0f;
+   float rotZ = ParticleRotSpeed * (1.0f + 0.3f*sin(122*index)) * etime + (float)index * 369.0f;
+
+   float sinx, cosx;
+   float siny, cosy;
+   float sinz, cosz;
+   sincos(rotX, sinx, cosx);
+   sincos(rotY, siny, cosy);
+   sincos(rotZ, sinz, cosz);
+
+   float3x3 rMat = { cosz*cosy+sinx*siny*sinz, cosx*sinz, -siny*cosz+sinx*cosy*sinz,
+                    -cosy*sinz+sinx*siny*cosz, cosx*cosz,  siny*sinz+sinx*cosy*cosz,
+                     cosx*siny,               -sinx,       cosx*cosy,               };
+
+   return rMat;
+}
+
+// できるだけ正面を向く回転行列
+float3x3 FacingRoundMatrix(int index, float etime, float4 Pos0)
+{
+	float3 v = normalize(CameraPosition - Pos0);
+	float3x3 rMat = RoundMatrix(index, etime);
+
+	float3 z = normalize(v * 0.5 + rMat[2]);
+	float3 x = normalize(cross(rMat[1], z));
+	float3 y = normalize(cross(z, x));
+
+	float3x3 rMat2 = {x,y,z};
+	return rMat2;
+}
+
+float3x3 RoundMatrixZ(int index, float etime)
+{
+   float rotZ = ParticleRotSpeed * (1.0f + 0.3f*sin(122*index)) * etime + (float)index * 369.0f;
+
+   float sinz, cosz;
+   sincos(rotZ, sinz, cosz);
+
+   float3x3 rMat = { cosz*1+0*0*sinz, 1*sinz, -0*cosz+0*1*sinz,
+                    -1*sinz+0*0*cosz, 1*cosz,  0*sinz+0*1*cosz,
+                     1*0,               -0,       1*1,               };
+
+   return rMat;
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT
+{
+	float4 Pos		: POSITION;
+	float3 Normal	: TEXCOORD0;
+	float4 Tex		: TEXCOORD1;
+	float3 WPos		: TEXCOORD2;
+	float2 SpTex	: TEXCOORD3;
+	float4 Color	: COLOR0;		// 粒子の乗算色
+};
+
+struct PS_OUT_MRT
+{
+	float4 Color		: COLOR0;
+	float4 Normal		: COLOR1;
+	float4 Material		: COLOR2;
+};
+
+
+
+VS_OUTPUT Particle_VS(float4 Pos : POSITION, float2 Tex : TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+   int i = RepeatIndex;
+   int j = round( Pos.z * 100.0f );
+   int Index0 = i * TEX_HEIGHT + j;
+   float2 texCoord = float2((i+0.5f)/TEX_WIDTH, (j+0.5f)/TEX_HEIGHT);
+   Pos.z = 0.0f;
+	Out.Tex.w = float(j);
+
+	float3 Normal = normalize(float3(0.0f, 0.0f, -0.2f) - Pos.xyz);
+
+   // 粒子の座標
+   float4 Pos0 = tex2Dlod(CoordSmp, float4(texCoord, 0, 0));
+
+   // 経過時間
+   float etime = Pos0.w - 1.0f;
+	#if USE_BILLBOARD == 0
+//	float3x3 matWTmp = RoundMatrix(Index0, etime);
+	float3x3 matWTmp = FacingRoundMatrix(Index0, etime, Pos0);
+	#else
+	float3x3 matWTmp = RoundMatrixZ(Index0, etime);
+	#endif
+
+   // 粒子の大きさ
+   Pos.xy *= ParticleSize * 10.0f;
+
+   // 粒子の回転
+	Pos.xyz = mul( Pos.xyz, matWTmp );
+	Out.Normal = mul( Normal, matWTmp );
+	#if USE_BILLBOARD != 0
+	Pos.xyz = mul(Pos.xyz, BillboardMatrix);
+	#endif
+
+   // 粒子のワールド座標
+   Pos.xyz += Pos0.xyz;
+   Pos.xyz *= step(0.001f, etime);
+   Pos.w = 1.0f;
+	Out.WPos = Pos.xyz;
+
+	// カメラ視点のビュー射影変換
+	Out.Pos = mul( Pos, matVP );
+	Out.Tex.z = mul(Pos, matV).z;
+
+   // 粒子の乗算色
+   float alpha = step(0.001f, etime) * smoothstep(-ParticleLife, -ParticleLife*ParticleDecrement, -etime) * AcsTr;
+	#if !defined(ENABLE_BOUNCE) || ENABLE_BOUNCE == 0
+	alpha *= smoothstep(FloorFadeMin, FloorFadeMax, Pos0.y);
+	#endif
+   Out.Color = float4(1,1,1, alpha );
+
+   // テクスチャ座標
+   int texIndex = Index0 % (TEX_PARTICLE_XNUM * TEX_PARTICLE_YNUM);
+   int tex_i = texIndex % TEX_PARTICLE_XNUM;
+   int tex_j = texIndex / TEX_PARTICLE_XNUM;
+   Out.Tex.xy = float2((Tex.x + tex_i)/TEX_PARTICLE_XNUM, (Tex.y + tex_j)/TEX_PARTICLE_YNUM);
+
+   return Out;
+}
+
+
+// ピクセルシェーダ
+PS_OUT_MRT Particle_PS( VS_OUTPUT IN ) : COLOR0
+{
+    // 粒子の色
+	float4 Color = IN.Color * tex2D( ParticleTexSamp, IN.Tex.xy );
+    float alpha = Color.a;
+	clip(alpha - AlphaThroughThreshold);
+
+	float distance = IN.Tex.z;
+	float texIndex = IN.Tex.w;
+
+#if defined(PALLET_FileName) && USE_PALLET > 0
+	float4 randColor = tex2D(ColorPalletSmp, float2((texIndex+0.5f) / PALLET_TEX_SIZE, 0.5));
+	Color.rgb *= randColor.rgb;
+#endif
+
+	const float3 V = normalize(CameraPosition - IN.WPos);
+
+	float4 params = 1;
+	params = float4(CustomMetalness, CustomSmoothness, CustomIntensity, SSSValue);
+
+	PS_OUT_MRT Out;
+	Out.Material = params;
+	Out.Normal = float4(IN.Normal, distance);
+
+	// スペキュラの色＝反射色とみなす
+	float metalness = params.x;
+	Color.rgb = lerp(NonmetalF0, Color.rgb, metalness);
+
+	Out.Color = Color;
+
+	return Out;
+}
+
+
+technique MainTec1 < string MMDPass = "object";
+   string Script = 
+		"RenderColorTarget0=;"
+		"RenderColorTarget1=PPPNormalMapRT;"
+		"RenderColorTarget2=PPPMaterialMapRT;"
+		"RenderDepthStencilTarget=;"
+            "LoopByCount=RepeatCount;"
+            "LoopGetIndex=RepeatIndex;"
+                "Pass=DrawObject;"
+            "LoopEnd=;"
+		"RenderColorTarget1=;"
+		"RenderColorTarget2=;";
+>{
+    pass DrawObject {
+        ZENABLE = TRUE;
+        ZWRITEENABLE = FALSE;
+		AlphaTestEnable = FALSE;
+		AlphaBlendEnable = FALSE;
+        CullMode = NONE;
+        VertexShader = compile vs_3_0 Particle_VS();
+        PixelShader  = compile ps_3_0 Particle_PS();
+    }
+}
+
+technique MainTec2 < string MMDPass = "object_ss";
+   string Script = 
+		"RenderColorTarget0=;"
+		"RenderColorTarget1=PPPNormalMapRT;"
+		"RenderColorTarget2=PPPMaterialMapRT;"
+		"RenderDepthStencilTarget=;"
+            "LoopByCount=RepeatCount;"
+            "LoopGetIndex=RepeatIndex;"
+                "Pass=DrawObject;"
+            "LoopEnd=;"
+		"RenderColorTarget1=;"
+		"RenderColorTarget2=;";
+>{
+    pass DrawObject {
+        ZENABLE = TRUE;
+        ZWRITEENABLE = FALSE;
+		AlphaTestEnable = FALSE;
+		AlphaBlendEnable = FALSE;
+        CullMode = NONE;
+        VertexShader = compile vs_3_0 Particle_VS();
+        PixelShader  = compile ps_3_0 Particle_PS();
+    }
+}
+
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTech < string MMDPass = "shadow";  > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////

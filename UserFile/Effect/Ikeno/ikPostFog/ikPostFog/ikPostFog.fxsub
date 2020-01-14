@@ -1,0 +1,410 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ikPostFog本体
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// テストモードでのカラーバー表示位置
+#define BAR_LEFT	(16)
+#define BAR_WIDTH	(100)
+#define BAR_RIGHT	(BAR_LEFT+BAR_WIDTH)
+#define BAR_TOP		(16)
+#define BAR_HEIGHT	(16)
+#define BAR_BOTTOM	(BAR_TOP+BAR_HEIGHT*3)
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+float Script : STANDARDSGLOBAL <
+	string ScriptOutput = "color";
+	string ScriptClass = "scene";
+	string ScriptOrder = "postprocess";
+> = 0.8;
+
+// スクリーンサイズ
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+static float2 ViewportOffset = (float2(0.5,0.5)/ViewportSize);
+static float2 ViewportOffset2 = (float2(0.5,0.5)/(ViewportSize * MAP_SCALE));
+
+float4x4 matV		: VIEW;
+float4x4 matVP		: VIEWPROJECTION;
+float4x4 matP		: PROJECTION;
+float4x4 matInvV	: VIEWINVERSE;
+
+float3 CameraPosition	: POSITION  < string Object = "Camera"; >;
+float3 CameraDirection	: DIRECTION  < string Object = "Camera"; >;
+
+float3 LightDirection	: DIRECTION < string Object = "Light"; >;
+float4x4 matVPLight		: VIEWPROJECTION < string Object = "Light"; >;
+
+bool Exists : CONTROLOBJECT < string name = CONTROLLER_NAME; >;
+float mScaleUp : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "全体+"; >;
+float mHeightP : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "深さ+"; >;
+float mHeightM : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "深さ-"; >;
+float mWidthP : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "幅+"; >;
+float mWidthM : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "幅-"; >;
+float mDepthP : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "厚さ+"; >;
+float mDepthM : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "厚さ-"; >;
+float mDensityP : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "濃度+"; >;
+float mDensityM : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "濃度-"; >;
+float mAreaLimit : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "エリア限定"; >;
+
+float mInsColR : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "加算R"; >;
+float mInsColG : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "加算G"; >;
+float mInsColB : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "加算B"; >;
+float mAtteColR : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "減衰R"; >;
+float mAtteColG : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "減衰G"; >;
+float mAtteColB : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "減衰B"; >;
+
+float mLightColR : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "ライトR"; >;
+float mLightColG : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "ライトG"; >;
+float mLightColB : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "ライトB"; >;
+float mLightIntensity : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "ライト強度"; >;
+float mLightPower : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "ライト範囲"; >;
+
+float mTestMode : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "テストモード"; >;
+float mFade : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "フェード"; >;
+
+float CalcScale(float p, float m) {
+ return (1 + p * p * 99.0) * (1 + mScaleUp * mScaleUp * 99.0) / (1 + m * m * 99.0);
+}
+static float FogHeight = CalcScale(mHeightP, mHeightM);			// 高さ
+static float FogWidth = CalcScale(mWidthP, mWidthM);	// 幅
+static float FogDepth = CalcScale(mDepthP, mDepthM);
+static float FogDensity = (1 + mDensityP * 99) / (1 + mDensityM * 9);	// 濃度
+
+static float3 AttenuationColor = float3(mAtteColR,mAtteColG,mAtteColB);
+static float3 InscatterColor = Exists ? float3(mInsColR,mInsColG,mInsColB) : 1;
+static float3 LightColor = float3(mLightColR,mLightColG,mLightColB);
+static float LightPower = 63.0 * (1.0 - mLightPower) * (1.0 - mLightPower) + 1.0;
+static float LightIntensity = mLightIntensity * 2;
+
+float ftime0 : TIME <bool SyncInEditMode=true;>;
+float ftime1 : TIME;
+static float ftime = ftime1;
+
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+#if !defined(POS_OBJ_NAME)
+#define POS_OBJ_NAME	CONTROLLER_NAME
+#endif
+#if !defined(POS_BONE_NAME)
+float3 CtrlPosition : CONTROLOBJECT < string name = POS_OBJ_NAME; >;
+float4x4 CtrlMat : CONTROLOBJECT < string name = POS_OBJ_NAME; >;
+#else
+float3 CtrlPosition : CONTROLOBJECT < string name = POS_OBJ_NAME; string item = POS_BONE_NAME; >;
+float4x4 CtrlMat : CONTROLOBJECT < string name = POS_OBJ_NAME; string item = POS_BONE_NAME; >;
+#endif
+
+static float4x4 matWVP = mul(CtrlMat, matVP);
+static float4x4 matWVPLight = mul(CtrlMat, matVPLight);
+
+float4x4 CalcInvCtrlMat(float4x4 mat) {
+/*	// スケールも反転する
+    float scaling = length(mat[0].xyz);
+    float scaling_inv2 = 10.0 / (scaling * scaling);
+*/
+	// スケールを相殺する
+    float scaling = length(mat[0].xyz);
+    float scaling_inv2 = 1.0 / scaling;
+
+    float3x3 mat3x3_inv = transpose((float3x3)mat) * scaling_inv2;
+    return float4x4(
+        mat3x3_inv[0], 0, 
+        mat3x3_inv[1], 0, 
+        mat3x3_inv[2], 0, 
+        -mul(mat._41_42_43,mat3x3_inv), 1
+    );
+}
+
+static float4x4 InvCtrlMat = CalcInvCtrlMat(CtrlMat);
+
+// フォグ始点でのカメラ位置
+static float3 FogCameraPos = mul(float4(CameraPosition,1), InvCtrlMat).xyz;
+
+bool	 parthf;   // パースペクティブフラグ
+bool	 transp;   // 半透明フラグ
+bool	 spadd;	// スフィアマップ加算合成フラグ
+#define SKII1	1500
+#define SKII2	8000
+
+sampler DefSampler : register(s0);
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// スクリーン
+
+texture2D ScnMap : RENDERCOLORTARGET <
+	float2 ViewPortRatio = {1.0,1.0};
+	int MipLevels = 1;
+#if defined(USE_HDR) && USE_HDR > 0
+	string Format = "A16B16G16R16F";
+#else 
+	string Format = "A8R8G8B8" ;
+#endif
+>;
+sampler2D ScnSamp = sampler_state {
+	texture = <ScnMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = Linear;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+
+texture2D DepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+>;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+#define AntiAliasMode		false
+#define MipMapLevel			1
+
+// 法線マップ
+#if !defined(USE_SHARED_TEXTURE) || USE_SHARED_TEXTURE == 0
+shared texture PostFogNormalMapRT: OFFSCREENRENDERTARGET <
+	string Description = "render Normal and depth for ikPostFog";
+	float2 ViewPortRatio = {MAP_SCALE, MAP_SCALE};
+	string Format = "D3DFMT_A32B32G32R32F";		// RGBに法線。Aには深度情報
+	int Miplevels = MipMapLevel;
+	bool AntiAlias = AntiAliasMode;
+	float4 ClearColor = { 0.0, 0.0, 0.0, 0.0};
+	float ClearDepth = 1.0;
+	string DefaultEffect = 
+		"self = hide;"
+		"ikPostFog*.* = hide;"
+		"*.pmd = ikNormalMap.fx;"
+		"*.pmx = ikNormalMap.fx;"
+		"*.x = ikNormalMap.fx;"
+		"* = hide;";
+>;
+#else
+shared texture PostFogNormalMapRT: OFFSCREENRENDERTARGET;
+#endif
+
+sampler NormalMap = sampler_state {
+	texture = <PostFogNormalMapRT>;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+	MinFilter = POINT;
+	MagFilter = POINT;
+	MipFilter = NONE;
+};
+
+
+static float2 scaleProj = float2(1.0 / matP._11_22);
+
+// Get World position, Normal and Depth
+inline void GetWND(float2 Tex, out float3 WPos, out float3 N, out float Depth)
+{
+	float4 ND = tex2D( NormalMap, Tex );
+	N = normalize(ND.xyz);
+	Depth = ND.w;
+
+	float2 PPos = (Tex - 0.5) * float2(2.0, -2.0);
+	float3 VPos = float3(PPos.xy * scaleProj, 1) * Depth;
+	WPos = mul(float4(VPos,1), matInvV).xyz;
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+// ガンマ補正
+const float gamma = 2.2;
+inline float3 Degamma(float3 col) { return pow(col, gamma); }
+inline float3 Gamma(float3 col) { return pow(col, 1.0/gamma); }
+inline float4 Degamma4(float4 col) { return float4(Degamma(col.rgb), col.a); }
+inline float4 Gamma4(float4 col) { return float4(Gamma(col.rgb), col.a); }
+
+inline float rgb2gray(float3 rgb)
+{
+	return dot(float3(0.299, 0.587, 0.114), rgb);
+}
+
+
+inline float CalcShadow(float2 TexCoord, float depth)
+{
+	// NOTE: 開発環境では条件分岐するより、常にテクスチャを読み込んだほうが若干速かった。
+	float k = (parthf) ? SKII2 * TexCoord.y : SKII1;
+	float z = tex2D(DefSampler, TexCoord).r;
+	float comp = 1 - saturate(max(depth - z, 0) * k - 0.3);
+
+	// シャドウバッファ外?
+	comp *= any( saturate(TexCoord) == TexCoord );
+
+	return comp;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+struct VS_OUTPUT {
+	float4 Pos			: POSITION;
+	float2 Tex			: TEXCOORD0;
+	float2 Tex2			: TEXCOORD1;
+};
+
+VS_OUTPUT VS_Draw( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex = Tex + ViewportOffset;
+	Out.Tex2 = Tex + ViewportOffset2;
+	return Out;
+}
+
+float2 CalcFogDensity( float3 WPos)
+{
+	float3 pos = mul(float4(WPos,1), InvCtrlMat).xyz;
+
+	float3 fogScale = (0.5*0.5/10.0) / float3(FogWidth, FogHeight, FogDepth);
+	float3 s = FogCameraPos * fogScale + 0.5;
+	float3 e = pos * fogScale + 0.5;
+	float3 d = e - s;
+
+	float3 t03 = saturate((saturate(s) - s) / d);
+	float3 t13 = saturate((saturate(e) - s) / d);
+	float t0 = max(t03.x, max(t03.z, 0));
+	float t1 = min(t13.x, min(t13.z, 1));
+	if (s.y > 1.0) t0 = max(t03.y, t0);
+	if (e.y > 1.0) t1 = min(t13.y, t1);
+
+	// クリッピング後、フォグ濃度をY軸基準に合わせる。
+	float3 scaledD = d * float3(FogWidth / FogHeight, 1.0, FogDepth / FogHeight);
+	float dist = length(scaledD) * max(t1 - t0, 0);
+
+	float tMid = (t0 + t1) * 0.5;
+	float fog = saturate(dist * (1.0 - saturate(tMid * d.y + s.y))) * FogDensity;
+	float fog2 = 1.0 - saturate(e.y);
+
+	fog = lerp(fog, fog * fog2, mAreaLimit);
+
+	// シャドウマップのチェック
+	#if defined(SUNSHAFT_DIV_NUM) && SUNSHAFT_DIV_NUM > 0
+	float td = t1 - t0;
+	float sum0 = 0;
+	for(int i = 0 ; i < SUNSHAFT_DIV_NUM; i++)
+	{
+		float3 lpos = (d * (td * i / SUNSHAFT_DIV_NUM + t0) + s - 0.5) / fogScale;
+		float4 spos = mul(float4(lpos, 1), matWVPLight);
+
+		spos.xyz /= spos.w;
+		float2 TexCoord = float2(1.0f + spos.x, 1.0f - spos.y) * 0.5;
+		sum0 += CalcShadow(TexCoord, spos.z);
+	}
+	tMid = 1.0 - (1.0 - tMid) * (sum0 / SUNSHAFT_DIV_NUM);
+	#endif
+
+	return float2(fog, tMid);
+}
+
+inline float3 CalcAttenuation(float3 color, float scale)
+{
+	return 1.0 - float3(exp(-scale * color.r), exp(-scale * color.g), exp(-scale * color.b));
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+float4 PS_Draw( float2 Tex: TEXCOORD0, float2 Tex2: TEXCOORD1 ) : COLOR
+{
+	float3 Color = tex2D( ScnSamp, Tex ).rgb;
+
+	float3 WPos;
+	float3 N;
+	float Depth;
+	GetWND(Tex2, WPos, N, Depth);
+
+	if (Depth >= 0.0)
+	{
+		Color = Degamma(Color);
+
+		float2 fogDensity = CalcFogDensity( WPos );
+		float fog = fogDensity.x;
+		float t0 = fogDensity.y;
+		float t = saturate(t0 * 2.0 - 1.0);
+
+		float3 V = normalize(WPos - CameraPosition);
+		float dotNL = saturate(dot(N, -LightDirection) * 0.5 + 0.5);
+		float dotVL = saturate(dot(V, -LightDirection));
+		float reduction = lerp(1, dotNL, t) * (1.0 - t0);
+		float light = saturate(pow(dotVL, LightPower) * reduction * LightIntensity);
+
+		#if defined(ENABLE_TESTMODE) && ENABLE_TESTMODE > 0
+		if (mTestMode < 0.1)
+		#endif
+		{
+			float3 fogColor = lerp(InscatterColor, LightColor, light);
+			float3 extColor = 1.0 - CalcAttenuation(AttenuationColor, fog);
+			float3 insColor = CalcAttenuation(fogColor, fog);
+			Color = lerp(Color * extColor + insColor, Color, mFade);
+		}
+		#if defined(ENABLE_TESTMODE) && ENABLE_TESTMODE > 0
+		else
+		{
+			// テストモード
+			float3 fogColor = lerp(1, float3(1,1,0), light);
+			Color = lerp(0, fogColor, saturate(fog) * (1.0 - mFade));
+
+			float3 lightCol = lerp(InscatterColor, LightColor, mLightIntensity);
+
+			float2 spos = Tex * ViewportSize;
+			// spos.x -= mTestMode * (BAR_WIDTH * 4.0);
+			if (BAR_LEFT <= spos.x && spos.x <= BAR_RIGHT &&
+				BAR_TOP <= spos.y && spos.y <= BAR_BOTTOM)
+			{
+				float x = (spos.x - BAR_LEFT) / BAR_WIDTH * FogDensity;
+				int y = floor((spos.y - BAR_TOP) / BAR_HEIGHT);
+				if (y==0) Color = CalcAttenuation(InscatterColor, x);
+				else if (y==1) Color = 1.0 - CalcAttenuation(AttenuationColor, x);
+				else Color = CalcAttenuation(lightCol, x);
+			}
+		}
+		#endif
+
+		#if !defined(USE_HDR) || USE_HDR == 0
+		Color.rgb = saturate(Color.rgb);
+		#endif
+
+		Color = Gamma(Color.rgb);
+	}
+
+	return float4(Color.rgb, 1);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+const float4 BackColor = float4(0,0,0,0);
+const float ClearDepth  = 1.0;
+
+technique PostFog <
+	string Script = 
+		"RenderColorTarget0=ScnMap;"
+		"RenderDepthStencilTarget=DepthBuffer;"
+		"ClearSetColor=BackColor;"
+		"ClearSetDepth=ClearDepth;"
+		"Clear=Color;"
+		"Clear=Depth;"
+		"ScriptExternal=Color;"
+
+		"RenderColorTarget0=;"
+		"RenderDepthStencilTarget=;"
+		"Clear=Color;"
+		"Clear=Depth;"
+		"Pass=DrawPass;"
+	;
+> {
+	pass DrawPass < string Script= "Draw=Buffer;"; > {
+		VertexShader = compile vs_3_0 VS_Draw();
+		PixelShader  = compile ps_3_0 PS_Draw();
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////

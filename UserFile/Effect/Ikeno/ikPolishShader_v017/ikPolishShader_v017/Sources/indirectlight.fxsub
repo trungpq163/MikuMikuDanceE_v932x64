@@ -1,0 +1,205 @@
+
+
+// 多光源
+#define	DECL_LIGHT(_ctrlName, _name)	\
+	bool _name##_exist		: CONTROLOBJECT < string name = _ctrlName;>; \
+	float4x4 _name##_matW	: CONTROLOBJECT < string name = _ctrlName;>; \
+	float _name##_r : CONTROLOBJECT < string name = _ctrlName; string item = "Rx"; >; \
+	float _name##_g : CONTROLOBJECT < string name = _ctrlName; string item = "Ry"; >; \
+	float _name##_b : CONTROLOBJECT < string name = _ctrlName; string item = "Rz"; >; \
+	float _name##_si : CONTROLOBJECT < string name = _ctrlName; string item = "Si"; >; \
+	float _name##_tr : CONTROLOBJECT < string name = _ctrlName; string item = "Tr"; >; \
+	static float _name##_range = 10.0 / _name##_si; \
+	static float3 _name##_color = float3(_name##_r, _name##_g, _name##_b) * _name##_exist * _name##_tr * 16.0;
+
+DECL_LIGHT("PPointLight1.x", PointLight1)
+DECL_LIGHT("PPointLight2.x", PointLight2)
+DECL_LIGHT("PPointLight3.x", PointLight3)
+
+
+float3 Schlick(float3 f0, float f90, float u)
+{
+	return  f0 + (f90 - f0) * pow(1.0 - u, 5.0);
+}
+
+float CalcDiffuse(float3 L, float3 N, float3 V)
+{
+	return saturate(dot(N,L));
+}
+
+// D
+float GGX(float  NH , float m2)
+{
+	float denom = (NH * m2 - NH) * NH + 1;
+	return m2 / (denom * denom);
+}
+
+// V: G項に1/(NL*NV)を掛けたもの
+float  SmithGGXCorrelated(float NL, float NV, float alphaG2)
+{
+	NL = 1.0 / NL;
+	NV = 1.0 / NV;
+	float Lambda_GGXV = NL * sqrt((-NV * alphaG2 + NV) * NV + alphaG2);
+	float Lambda_GGXL = NV * sqrt((-NL * alphaG2 + NL) * NL + alphaG2);
+	return 0.5f / (Lambda_GGXV + Lambda_GGXL);
+}
+
+float3 CalcSpecular(float3 L, float3 N, float3 V, float a, float3 f0)
+{
+	float3 H = normalize(L + V);
+	a *= a;
+
+	float NH = saturate(dot(N, H));
+	float NL = saturate(dot(N, L));
+	float LH = saturate(dot(L, H));
+	float NV = abs(dot(N, V)) - 1e-5;
+
+	float f90 = 1;
+	float D = GGX(NH, a);
+	float3 F = Schlick(f0, f90 , NL);
+	float Vis = SmithGGXCorrelated(NV, NL, a);
+	return max(D * F * Vis, 0);		// / PI
+}
+
+
+float CalcDiffuse(float3 L, float3 N, float3 V, float roughness)
+{
+	float3 H = normalize(L + V);
+	float linearRoughness = roughness * roughness;
+
+	float LH = saturate(dot(L, H));
+	float NL = saturate(dot(N, L));
+	float NV = abs(dot(N, V)) - 1e-5;
+
+	float energyBias     = lerp(0, 0.5,  linearRoughness);
+	float energyFactor   = lerp (1.0, 1.0 / 1.51, linearRoughness);
+	float fd90           = energyBias + 2.0 * LH * LH * linearRoughness;
+	float3 fd0           = float3(1.0, 1.0, 1.0);
+	float lightScatter   = Schlick(fd0, fd90, NL).r;
+	float viewScatter    = Schlick(fd0, fd90, NV).r;
+	float fd = lightScatter * viewScatter * energyFactor;
+	return NL * fd; // / PI;
+}
+
+float CalcLightFalloff(float distance, float invRadius)
+{
+	// 適当なフォールオフ
+	float d = distance * invRadius;
+	float n = max(1.0 - pow(d, 4), 0);
+	return n / (d * d + 1.0);
+}
+
+float CalcPointLight(float3 pos, float3 N, float4x4 mat, float range)
+{
+	float3 l = mat._41_42_43 - pos;
+	float falloff = CalcLightFalloff(length(l), range);
+	float3 L = normalize(l);
+
+	return max(dot(N, L), 0) * falloff;
+}
+
+float3 CalcMultiLight(float3 pos, float3 N)
+{
+	float d1 = CalcPointLight(pos, N, PointLight1_matW, PointLight1_range);
+	float d2 = CalcPointLight(pos, N, PointLight2_matW, PointLight2_range);
+	float d3 = CalcPointLight(pos, N, PointLight3_matW, PointLight3_range);
+	return PointLight1_color * d1 + PointLight2_color * d2 + PointLight3_color * d3;
+}
+
+float3 CalcPointLightSpecular(float3 pos, float4x4 mat, float range, float3 N, float3 V, float a, float3 f0)
+{
+	float3 l = mat._41_42_43 - pos;
+	float falloff = CalcLightFalloff(length(l), range);
+
+	float3 L = normalize(l);
+	return CalcSpecular(L, N, V, a, f0) * falloff;
+}
+
+float3 CalcMultiLightSpecular(float3 pos, float3 N, float3 V, float roughness, float3 f0)
+{
+	float a = roughness * roughness;
+	float3 d1 = CalcPointLightSpecular(pos, PointLight1_matW, PointLight1_range, N, V, a, f0);
+	float3 d2 = CalcPointLightSpecular(pos, PointLight2_matW, PointLight2_range, N, V, a, f0);
+	float3 d3 = CalcPointLightSpecular(pos, PointLight3_matW, PointLight3_range, N, V, a, f0);
+	return PointLight1_color * d1 + PointLight2_color * d2 + PointLight3_color * d3;
+}
+
+// 逆光による光の透過
+float CalcBackLight(float3 L, float3 N, float3 V)
+{
+	const float Distortion = 0.2;
+	float3 bentL = N * Distortion + -L; // 法線方向に向ける
+	float backlight = dot(V, bentL) * 0.5 + 0.5;
+	return saturate(backlight);
+}
+
+float3 GetDiffuseDominantDir(float3 N, float3 V, float NV, float roughness)
+{
+	float a = 1.02341 * roughness  - 1.51174;
+	float b =-0.511705 * roughness + 0.755868;
+	float lerpFactor = saturate (( NV * a + b) * roughness);
+	return normalize(lerp(N, V, lerpFactor));
+}
+
+float3 GetSpecularDominantDir(float3 N, float3 R, float roughness)
+{
+	float smoothness = saturate (1 - roughness);
+	float lerpFactor = smoothness * (sqrt(smoothness) + roughness);
+	return normalize(lerp(N, R, lerpFactor));
+}
+
+inline float ComputeSpecOcclusion(float NV, float AO, float roughness)
+{
+	return saturate(pow(NV + AO, exp2(-16.0 * roughness - 1.0)) - 1.0 + AO);
+}
+
+
+// 環境マップから環境光を取得
+float3 CalcIndirectlight(float3 L, float3 N, float3 V, float2 texCoord, MaterialParam mat, float shadow)
+{
+	float NV = abs(dot(N, V)) - 1e-5;
+//	float3 ambient = GetEnvColor(N, 1.0).rgb;
+	float3 dominantN = GetDiffuseDominantDir(N, V, NV, mat.roughness);
+	float3 ambient = GetEnvColor(dominantN, 1.0).rgb;
+
+	float brdf = tex2D(EnvironmentBRDF, float2(mat.roughness, NV)).z;
+	ambient *= brdf;
+
+	float4 ambientOccu = GetSSAOFull(texCoord);
+	ambient = ambient * ambientOccu.w + ambientOccu.rgb;
+
+	return ambient * lerp(AmbientScale, 0.0, mat.metalness);
+}
+
+// 拡散反射項の計算
+float4 PS_CalcDiffuse( float4 Tex: TEXCOORD0 ) : COLOR
+{
+	float2 texCoord = Tex.xy;
+
+	MaterialParam mat = GetMaterial(texCoord);
+	GeometryInfo geom = GetWND(texCoord);
+	float2 shadowInfo = tex2D(ShadowmapSamp, texCoord).xy;
+	float3 sssColor = tex2D(ColorMap, texCoord).rgb;
+
+	float3 V = normalize(CameraPosition - geom.wpos);
+	float3 L = -LightDirection;
+	float3 N = geom.nd.normal;
+
+	float shadow = shadowInfo.x;
+	float translucence = shadowInfo.y * mat.sssValue;
+
+	float diffuse = CalcDiffuse(L, N, V, mat.roughness);
+	float backlightintensity = CalcBackLight(L, N, V);
+	backlightintensity *= (translucence * (1 - diffuse));
+	float3 backlight = backlightintensity * sssColor;
+	float3 directlight = (diffuse * shadow + backlight) * LightColor;
+	directlight += CalcMultiLight(geom.wpos, N);
+
+	float3 indirectlight = CalcIndirectlight(L, N, V, texCoord, mat, shadow);
+
+	float3 light = directlight * (1.0 - mat.metalness) + indirectlight;
+
+	return float4(light, shadow);
+}
+
+

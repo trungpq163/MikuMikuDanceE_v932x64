@@ -1,0 +1,156 @@
+
+//-----------------------------------------------------------------------------
+// SSS
+
+#define SssKernelSize	0.2 // ブラー径 0.2MMD ≒ 2cm
+
+#if SSSBlurCount > 0
+
+struct VS_SSS_OUTPUT {
+	float4 Pos		: POSITION;
+	float4 Tex		: TEXCOORD0;
+	float4 Tex2		: TEXCOORD1;
+	float Coef1		: TEXCOORD2;
+};
+
+
+// sss用の吸収度を取得する(ad hoc)
+float3 CalcAbsorptionColor(float3 albedo)
+{
+	float g = Luminance(albedo);
+	albedo = albedo * albedo; // pow(albedo, 2.0);
+	albedo = albedo * g / max(Luminance(albedo), 1e-4);
+
+	return saturate(1.0 - albedo) * 100 + 0.1;
+}
+
+
+VS_SSS_OUTPUT VS_SSS( float4 Pos : POSITION, float2 Tex : TEXCOORD0)
+{
+	VS_SSS_OUTPUT Out = (VS_SSS_OUTPUT)0; 
+	Out.Pos = Pos;
+
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+	Out.Tex.zw = SampStep;
+
+	float w = 1.0 / ((SSSBlurCount + 1.0) * (SSSBlurCount + 1.0));
+	Out.Tex2.xy = CalcKernelSize( SssKernelSize ) * w;
+
+	Out.Tex2.zw = Out.Tex.xy * ViewportSize / NOISE_TEXTURE_SIZE;
+	Out.Coef1.x = SSSScale;
+
+	return Out;
+}
+
+// ワールド空間での距離を考慮したブラー
+float4 PS_SSS( VS_SSS_OUTPUT IN, uniform sampler smp) : COLOR
+{
+	float2 texCoord = IN.Tex.xy;
+	float2 offset = IN.Tex.zw;
+	float2 kernelSize = IN.Tex2.xy;
+	float2 jitterIndex = IN.Tex2.zw;
+	float sssScale = IN.Coef1.x;
+
+	float4 BaseColor = tex2D( smp, texCoord);
+
+	NormalDepth nd0 = GetNormalDepthRaw(texCoord);
+	float depth = nd0.depth;
+	float depthRate = CalcWeightDepth(nd0);
+
+	float4 albedo = tex2D(ColorMap, texCoord);
+	float3 absorption = CalcAbsorptionColor(albedo.rgb);
+
+	MaterialParam mat = GetMaterial(texCoord, albedo);
+	float sss = saturate(mat.sssValue * sssScale);
+
+	float angleMul = GOLDEN_ANGLE;
+	float angleAdd = GetJitterOffset(jitterIndex) * (PI * 2.0);
+	float2 radiusMul = min(0.2, kernelSize * sss / max(depth, 1.0));
+	float2 radiusAdd = offset;
+
+	float3 Color = BaseColor.rgb;
+	float3 sumRgb = 1; // 重みも色毎に計算する。
+
+	for(int i = 0; i < SSSBlurCount; i++)
+	{
+		float t = (i + 0.5) * (i + 0.5);
+		float t2 = t * (-0.5 * LOG2_E / ((SSSBlurCount + 1) * (SSSBlurCount + 1)));
+
+		float2 sc;
+		sincos(i * angleMul + angleAdd, sc.x, sc.y);
+		float2 uv = sc * (t * radiusMul + SampStep.x) + texCoord;
+		NormalDepth nd1 = GetNormalDepthRawLod(uv.xy);
+		float4 col1 = tex2Dlod(smp, float4(uv,0,0));
+
+		float3 w = CalcBlurWeight3(nd0, nd1, t2 * absorption, depthRate);
+		w *= (col1.w > 0.0);
+
+		Color += col1.rgb * w;
+		sumRgb += w;
+	}
+
+	BaseColor.rgb = lerp(BaseColor.rgb, Color / sumRgb, sss);
+	BaseColor.w = sss;
+
+	return BaseColor;
+}
+
+
+//-----------------------------------------------------------------------------
+// SSSのノイズを取るためのブラー
+VS_SSS_OUTPUT VS_BlurSSS( float4 Pos : POSITION, float2 Tex : TEXCOORD0)
+{
+	VS_SSS_OUTPUT Out = (VS_SSS_OUTPUT)0; 
+	Out.Pos = Pos;
+
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+	Out.Tex.zw = SampStep;
+
+	return Out;
+}
+
+float4 GetSSSNeighborColor(float2 texCoord, NormalDepth nd0, float depthRate, uniform sampler smp)
+{
+	float4 c = tex2D(smp, texCoord);
+	NormalDepth nd1 = GetNormalDepthRaw(texCoord);
+	float weight = CalcBlurWeight(nd0, nd1, 0, depthRate) * (c.w > 0.0);
+	return float4(c.rgb, 1) * weight;
+}
+
+float4 PS_BlurSSS( VS_SSS_OUTPUT IN, uniform sampler smp) : COLOR
+{
+	float2 texCoord = IN.Tex.xy;
+	float2 offset = IN.Tex.zw;
+
+	float4 BaseColor = tex2D(smp, texCoord );
+	float sss = BaseColor.w;
+
+	NormalDepth nd0 = GetNormalDepthRaw(texCoord);
+	float depthRate = CalcWeightDepth(nd0);
+
+	float4 Color = BaseColor;
+	Color.w = 1;
+
+	#define SSS_BLUR_SUB(ofsx, ofsy)	\
+		GetSSSNeighborColor(offset * float2(ofsx, ofsy) + texCoord, nd0, depthRate, smp)
+
+	Color += SSS_BLUR_SUB(-1,-1) * 0.25;
+	Color += SSS_BLUR_SUB( 0,-1) * 0.5;
+	Color += SSS_BLUR_SUB( 1,-1) * 0.25;
+	Color += SSS_BLUR_SUB(-1, 0) * 0.5;
+	Color += SSS_BLUR_SUB( 1, 0) * 0.5;
+	Color += SSS_BLUR_SUB(-1, 1) * 0.25;
+	Color += SSS_BLUR_SUB( 0, 1) * 0.5;
+	Color += SSS_BLUR_SUB( 1, 1) * 0.25;
+
+	BaseColor.rgb = lerp(BaseColor.rgb, Color.rgb / Color.w, sss);
+	BaseColor.rgb = saturate(BaseColor.rgb);
+
+	float2 shadowInfo = tex2D(ShadowmapSamp, texCoord).xy;
+	float shadow = shadowInfo.x;
+	BaseColor.w = shadow;
+
+	return BaseColor;
+}
+
+#endif

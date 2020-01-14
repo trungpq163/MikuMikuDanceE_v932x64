@@ -1,0 +1,104 @@
+
+//-----------------------------------------------------------------------------
+// SSS
+
+#if SSSBlurCount > 0
+// SSS用のボカし
+
+#define SssKernelSize	0.2 // ブラー径 0.2MMD ≒ 2cm
+static float2 SssKernelSizeScale = abs(SssKernelSize * matP._11 * 0.5) / matP._34
+	 / ((SSSBlurCount + 1.0) * (SSSBlurCount + 1.0)) * ViewportAspect;
+
+static float2 SSSJitter[] = {
+	float2(1,0), float2(1,1)/1.41421356,
+	float2(1,-1)/1.41421356, float2(0,1)
+};
+
+// ワールド空間での距離を考慮したブラー
+float4 PS_BlurSSS1( float4 Tex: TEXCOORD0, uniform sampler smp) : COLOR
+{
+	float2 texCoord = Tex.xy;
+	float4 BaseColor = tex2D( smp, texCoord);
+	float sss = BaseColor.w;
+	// if (sss <= 0.0) return BaseColor; // early out
+
+	float3 absorption = CalcAbsorptionColor(texCoord);
+	NormalDepth nd0 = GetNormalDepthRaw(texCoord);
+	float depth = nd0.depth;
+	float depthRate = 100.0 / max(depth, 1.0);
+
+	int2 iuv = floor(texCoord * ViewportSize);
+	float angleMul = 7.0 / SSSBlurCount * (PI * 2.0);
+	float angleAdd = GetJitterOffset(iuv) * (PI * 2.0);
+	float2 radiusMul = SssKernelSizeScale / max(depth, 1.0) * sss;
+	float2 radiusAdd = SampStep;
+
+	float3 Color = BaseColor.rgb;
+	float3 sum = 1;
+
+	for(int i = 0; i < SSSBlurCount; i++)
+	{
+		float t = (i + 0.5) * (i + 0.5);
+
+		float2 sc;
+		sincos(i * angleMul + angleAdd, sc.x, sc.y);
+		float2 uv = sc * (t * radiusMul + SampStep.x) + texCoord;
+		NormalDepth nd1 = GetNormalDepthRawLod(uv.xy);
+		float4 col1 = tex2Dlod(smp, float4(uv,0,0));
+
+		float t2 = t * (-0.5 / ((SSSBlurCount + 1) * (SSSBlurCount + 1)));
+		float3 w = CalcBlurWeight3(nd0, nd1, t2 * absorption, depthRate);
+		Color += col1.rgb * w;
+		sum += w;
+	}
+
+	Color = lerp(BaseColor.rgb, Color / sum, sss);
+
+	return float4(Color.rgb, sss);
+}
+
+
+// 最初のブラーで出たノイズを取るためのブラー
+float4 PS_BlurSSS2( float4 Tex: TEXCOORD0, uniform sampler smp) : COLOR
+{
+	float2 texCoord = Tex.xy;
+	float4 Color = tex2D(smp, texCoord );
+
+#if !defined(TEST_DISABLE_BLUR)
+	float4 Color0 = Color;
+	float sss = Color.w;
+
+	NormalDepth nd0 = GetNormalDepthRaw(texCoord);
+	float depth = nd0.depth;
+	float depthRate = 1.0 / max(depth, 1.0);
+
+	Color.w = 1;
+
+	float4 c;
+	NormalDepth nd1;
+	#define SSS_BLUR_SUB(ofsx, ofsy, weight)	\
+		c = tex2D(smp, SampStep * float2(ofsx, ofsy) + texCoord);	\
+		nd1 = GetNormalDepthRaw(SampStep * float2(ofsx, ofsy) + texCoord);	\
+		Color += float4(c.rgb, 1) * CalcBlurWeight(nd0, nd1, 0, depthRate) * weight;
+
+	SSS_BLUR_SUB(-1,-1, 0.25);
+	SSS_BLUR_SUB( 0,-1, 0.5);
+	SSS_BLUR_SUB( 1,-1, 0.25);
+	SSS_BLUR_SUB(-1, 0, 0.5);
+	SSS_BLUR_SUB( 1, 0, 0.5);
+	SSS_BLUR_SUB(-1, 1, 0.25);
+	SSS_BLUR_SUB( 0, 1, 0.5);
+	SSS_BLUR_SUB( 1, 1, 0.25);
+
+	Color.rgb = lerp(Color0.rgb, Color.rgb / Color.w, sss);
+#endif
+
+	float2 shadowInfo = tex2D(ShadowmapSamp, texCoord).xy;
+	Color.w = shadowInfo.x;
+
+	return Color;
+}
+
+#endif
+
+

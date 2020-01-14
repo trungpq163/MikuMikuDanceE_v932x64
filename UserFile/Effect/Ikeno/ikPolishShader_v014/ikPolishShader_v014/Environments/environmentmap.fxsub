@@ -1,0 +1,250 @@
+
+
+
+///////////////////////////////////////////////////////////////////
+// 動的双放物面環境マップの宣言＆使用関数
+
+#define ENV_HEIGHT		ENV_WIDTH
+static float MAX_MIP_LEVEL = (int)(log2(ENV_WIDTH) - 1.0);
+
+#if defined(USE_OCTAHEDRON) && USE_OCTAHEDRON>0
+#define ENV_ADDRESSING_MODE		AddressU  = CLAMP;	AddressV = CLAMP;
+#else
+#define ENV_ADDRESSING_MODE		AddressU  = WRAP;	AddressV = CLAMP;
+#endif
+
+
+#if defined(USE_STATIC_ENV)
+texture2D EnvMapRT <
+	string ResourceName = USE_STATIC_ENV;
+	int Width = ENV_WIDTH * 2;
+	int Height = ENV_HEIGHT;
+	int Miplevels = 0;
+>;
+#else
+texture EnvMapRT: OFFSCREENRENDERTARGET <
+	int Width = ENV_WIDTH * 2;
+	int Height = ENV_HEIGHT * 2;
+	float4 ClearColor = { 0, 0, 0, 0 };
+	float ClearDepth = 1.0;
+	int Miplevels = 1;
+	string Format = EnvTexFormat;
+	string Description = "EnvironmentMap for ikPolishShader";
+		string DefaultEffect = 
+		"self = hide;"
+		CONTROLLER_NAME " = hide;"
+		"*.pmx = hide;"		// キャラを対象外にする
+		"*.pmd = hide;"		// キャラを対象外にする
+		"*=./Environments/TEnvMap.fx;";
+>;
+
+sampler EnvMapWorkSamp = sampler_state {
+	texture = <EnvMapRT>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+
+texture EnvMap2: RENDERCOLORTARGET <
+	#if defined(USE_OCTAHEDRON) && USE_OCTAHEDRON>0
+	int Width = ENV_WIDTH * 2;
+	int Height = ENV_HEIGHT * 2;
+	#else
+	int Width = ENV_WIDTH * 2;
+	int Height = ENV_HEIGHT;
+	#endif
+	int Miplevels = 0;
+	string Format = EnvTexFormat;
+>;
+
+texture2D EnvDepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+	#if defined(USE_OCTAHEDRON) && USE_OCTAHEDRON>0
+	int Width = ENV_WIDTH * 2;
+	int Height = ENV_HEIGHT * 2;
+	#else
+	int Width = ENV_WIDTH * 2;
+	int Height = ENV_HEIGHT;
+	#endif
+>;
+#endif
+
+sampler EnvMapSamp = sampler_state {
+#if defined(USE_STATIC_ENV)
+	texture = <EnvMapRT>;
+#else
+	texture = <EnvMap2>;
+#endif
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	ENV_ADDRESSING_MODE
+};
+
+#if defined(USE_OCTAHEDRON) && USE_OCTAHEDRON>0
+
+// Octahedron normal vector encoding from Krzysztof Narkowicz
+// https://knarkowicz.wordpress.com/2014/04/16/octahedron-normal-vector-encoding/
+
+inline float2 OctWrap( float2 v )
+{
+#if 0
+	return ( 1.0 - abs( v.yx ) ) * ( v.xy >= 0.0 ? 1.0 : -1.0 );
+#else
+	// MMD 32bit版はこちらでないと正常に動作しない
+	float sx = v.x >= 0.0 ? 1.0 : -1.0;
+	float sy = v.y >= 0.0 ? 1.0 : -1.0;
+	return ( 1.0 - abs( v.yx ) ) * float2(sx,sy);
+#endif
+}
+
+inline float2 WrapXForSafetyBorder(float2 uv) {	return float2((2 - abs(uv.x)) * sign(uv.x), -uv.y); }
+inline float2 WrapYForSafetyBorder(float2 uv) {	return float2(-uv.x, (2 - abs(uv.y)) * sign(uv.y)); }
+
+inline float2 Encode( float3 n )
+{
+	n.xy /= ( abs( n.x ) + abs( n.y ) + abs( n.z ) );
+	n.xy = n.z > 0.0 ? n.xy : OctWrap( n.xy );
+	return n.xy * 0.25 + 0.5;
+}
+
+float3 Decode( float2 encN )
+{
+	// Mip-map用の重複部分を反転させる
+	encN = encN * 4.0 - 2.0;
+	encN = (abs(encN.x) > 1) ? WrapXForSafetyBorder(encN) : encN;
+	encN = (abs(encN.y) > 1) ? WrapYForSafetyBorder(encN) : encN;
+
+	float3 n;
+	n.z = 1.0 - abs( encN.x ) - abs( encN.y );
+	n.xy = n.z >= 0.0 ? encN.xy : OctWrap( encN.xy );
+	n = normalize( n );
+	return n;
+}
+#else
+// for Dual Paraboloid
+float3 Decode( float2 Tex )
+{
+	float x0 = Tex.x * 2.0;
+	float x = (frac(x0) * 2.0 - 1.0) / EnvFrameScale;
+	float y = -(Tex.y * 2.0 - 1.0) / EnvFrameScale;
+	float z = (1.0 - (x*x+y*y)) * 0.5;
+	float3 N = float3(x,y,z);
+	N.xz *= ((x0 < 1.0) ? 1 : -1);
+	return N;
+}
+
+inline float4 Encode( float3 vec )
+{
+	// vec = normalize(vec);
+	bool front = (vec.z >= 0);
+	vec.xz *= (front ? 1 : -1);
+	float2 uv;
+	uv = vec.xy * EnvFrameScale / (1+vec.z);
+	uv.y = -uv.y;
+	uv.x = uv.x * 0.25 + (( front ) ? 0.25 : 0.75);
+	uv.y = uv.y * 0.5 + 0.5;
+
+	// 前後の境界でギャップが見えるので、ボカしをかける
+	float u2;
+	u2 = -vec.x * EnvFrameScale / (1 - vec.z);
+	u2 = u2 * 0.25 + (( front ) ? 0.75 : 0.25);
+
+	return float4(uv, u2, uv.y);
+}
+#endif
+
+float3 GetEnvColor(float3 vec, float smoothness)
+{
+	float roughness = 1.0 - smoothness * smoothness;
+	// float roughness = 1.0 - smoothness;
+	float lod = roughness * MAX_MIP_LEVEL;
+
+#if defined(USE_OCTAHEDRON) && USE_OCTAHEDRON>0
+	float2 uv = Encode(vec);
+	return tex2Dlod(EnvMapSamp, float4(uv, 0, lod)).rgb;
+#else
+	float4 uv = Encode(vec);
+	float3 Col0 = tex2Dlod(EnvMapSamp, float4(uv.xy, 0, lod)).rgb;
+	float3 Col1 = tex2Dlod(EnvMapSamp, float4(uv.zw, 0, lod)).rgb;
+	float t = saturate(1.0 - abs(vec.z)) * roughness;
+	return lerp(Col0, Col1, t * 0.5);
+#endif
+
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 環境マップの作成
+#if !defined(USE_STATIC_ENV)
+
+float3 TEnvVec0 = normalize(float3( 1, 1, 1));
+float3 TEnvVec1 = normalize(float3(-1, 1,-1));
+float3 TEnvVec2 = normalize(float3( 1,-1,-1));
+float3 TEnvVec3 = normalize(float3(-1,-1, 1));
+
+float3x3 CalcViewMat(float3 v0, float3 v1)
+{
+	float3 v2 = normalize(cross(v1, v0));
+	v1 = normalize(cross(v0, v2));
+	return (float3x3(
+		float3(v2.x, v1.x, v0.x),
+		float3(v2.y, v1.y, v0.y),
+		float3(v2.z, v1.z, v0.z)));
+}
+
+static float3x3 matEnvV[] = {
+	CalcViewMat(TEnvVec0, TEnvVec1), CalcViewMat(TEnvVec1, TEnvVec2),
+	CalcViewMat(TEnvVec2, TEnvVec3), CalcViewMat(TEnvVec3, TEnvVec0)
+};
+
+static float2 EnvOffsets[] = {
+	float2(1, 1) / 4.0, float2(3, 1) / 4.0, float2(1, 3) / 4.0, float2(3, 3) / 4.0
+};
+
+float4 GetTetrahedronUV(float3 N)
+{
+	N = normalize(N);
+
+	float d0 = dot(TEnvVec0, N);
+	float d1 = dot(TEnvVec1, N);
+	float d2 = dot(TEnvVec2, N);
+	float d3 = dot(TEnvVec3, N);
+
+	float3 texCoord = 0;
+	int face = 0;
+
+	if (d0 > d1 && d0 > d2 && d0 > d3)
+	{
+		;
+	}
+	else if (d1 > d2 && d1 > d3)
+	{
+		face = 1;
+	}
+	else if (d2 > d3)
+	{
+		face = 2;
+	}
+	else
+	{
+		face = 3;
+	}
+
+	texCoord = mul(N, matEnvV[face]);
+	texCoord.xy *= (1 / 2.6) * float2(0.25, -0.25) / texCoord.z;
+	float2 offset = EnvOffsets[face];
+
+	return float4(texCoord.xy + offset, 0,0);
+}
+
+float4 PS_SynthEnv( float2 Tex: TEXCOORD0 ) : COLOR
+{
+	float3 N = Decode( Tex );
+	float4 uv = GetTetrahedronUV(N);
+
+	float4 Color = tex2Dlod(EnvMapWorkSamp, uv);
+
+	Color.rgb = lerp(0, Color.rgb, Color.a);
+	return Color;
+}
+#endif
+

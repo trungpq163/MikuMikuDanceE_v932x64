@@ -1,0 +1,15 @@
+
+// ikWetFloor用に写り込み位置や写り込む量を計算する。
+
+// 映り込み強度(0.0～1.0)。 0:映り込まない～1:映り込む。
+float ReflectionRatio = 0.0;
+
+// 視線と無関係に反射する割合(0～1.0)
+// 0だと、視線と床が水平に近いほど映り込む。
+float Fresnel0 = 0.0;
+
+// 一定値以下の不透明度なら無視する。
+float AlphaThroughThreshold = 0.01;
+
+#include "ikFloorHeight_body.fxsub"
+

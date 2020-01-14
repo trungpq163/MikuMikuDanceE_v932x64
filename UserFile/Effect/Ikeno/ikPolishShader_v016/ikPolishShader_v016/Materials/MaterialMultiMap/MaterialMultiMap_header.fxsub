@@ -1,0 +1,48 @@
+
+//#include "../ikPolishShader.fxsub"
+#if !defined(AlphaThreshold)
+#define AlphaThreshold		0.5
+#endif
+
+#define ANISO_NUM 16
+
+#define SET_NORMALMAP(NUM, FILENAME, LOOP_NUM, HEIGHT_VAL) \
+	texture2D NormalMap##NUM < \
+		string ResourceName = FILENAME; \
+	>; \
+	sampler NormalMapSamp##NUM = sampler_state { \
+		texture = <NormalMap##NUM>; \
+		MINFILTER = ANISOTROPIC; \
+		MAGFILTER = ANISOTROPIC; \
+		MIPFILTER = ANISOTROPIC; \
+		MAXANISOTROPY = ANISO_NUM;  \
+	}; \
+	const float NormalMapLoopNum##NUM = LOOP_NUM; \
+	const float NormalMapHeightScale##NUM = HEIGHT_VAL;
+
+#define SET_NORMALMAP_COPY(NUM, NUM2, LOOP_NUM, HEIGHT_VAL) \
+	sampler NormalMapSamp##NUM = NormalMapSamp##NUM2; \
+	const float NormalMapLoopNum##NUM = LOOP_NUM; \
+	const float NormalMapHeightScale##NUM = HEIGHT_VAL;
+
+
+#define SET_MATERIALMAP(NUM, FILENAME, LOOP_NUM) \
+	texture2D MaterialMap##NUM < \
+		string ResourceName = FILENAME; \
+	>; \
+	sampler MaterialMapSamp##NUM = sampler_state { \
+		texture = <MaterialMap##NUM>; \
+		MinFilter = LINEAR; \
+		MagFilter = LINEAR; \
+		MipFilter = NONE; \
+		AddressU  = WRAP; \
+		AddressV = WRAP; \
+	}; \
+	const float MaterialMapLoopNum##NUM = LOOP_NUM;
+
+#define SET_MATERIALMAP_COPY(NUM, NUM2, LOOP_NUM) \
+	sampler MaterialMapSamp##NUM = MaterialMapSamp##NUM2; \
+	const float MaterialMapLoopNum##NUM = LOOP_NUM;
+
+
+

@@ -1,0 +1,194 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ikVoxelの処理で共有可能な部分をまとめたもの。
+// 単体では意味が無く、他のエフェクトに読み込んで利用する。
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// カラーの出力を行うか?
+//#define VOXEL_ENABLE_OUPUT_COLOR
+
+// ブロック単位で色を統一するために、色情報と深度情報を出力する
+texture2D VoxelInfoTex : RenderColorTarget
+<
+	float2 ViewPortRatio = {0.5,0.5};
+	bool AntiAlias = false;
+	int Miplevels = 1;
+#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+	string Format = "A16B16G16R16F" ;
+#else
+	string Format = "R16F" ;
+#endif
+
+>;
+sampler VoxelInfoSampler = sampler_state {
+	texture = <VoxelInfoTex>;
+	FILTER = NONE;
+	AddressU  = CLAMP; AddressV = CLAMP;
+};
+
+texture2D VoxelDepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+>;
+
+
+#if defined(VOXEL_TEXTURE) && defined(VOXEL_ENABLE_OUPUT_COLOR)
+texture2D VoxelPatternTex <
+	string ResourceName = VOXEL_TEXTURE;
+>;
+sampler VoxelPatternSmp = sampler_state{
+	texture = <VoxelPatternTex>;
+	MinFilter = LINEAR;
+	MagFilter = LINEAR;
+	MipFilter = NONE;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+
+float4 VoxelClearColor = {0,0,0,0};
+float VoxelClearDepth  = 1.0;
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+bool isExistVoxelController : CONTROLOBJECT < string name = VOXEL_CONTROLLER_NAME; >;
+float VoxelAcsSi : CONTROLOBJECT < string name = VOXEL_CONTROLLER_NAME; string item = "Si"; >;
+static float VoxelScaledGridSize = max(VoxelGridSize * (isExistVoxelController ? VoxelAcsSi * 0.1 : 1.0), 0.01);
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+// ベクタの補正。
+// vに0が入って、1/vで無限大になるのを防ぐ
+inline float3 AdjustVector(float3 i)
+{
+	return (step(0.0, i) * 2.0 - 1.0) * max(abs(i), 1e-4);
+}
+
+// 座標の正規化
+inline float3 AlignPosition(float3 pos)
+{
+	// floorで0付近がおかしくならないように原点をズラしてからfloorする。
+	return (floor(pos * (1.0/VoxelScaledGridSize) + 1000 + 0.5) - 1000) * VoxelScaledGridSize;
+}
+
+// テクスチャの解像度を落とす
+inline float2 AlignTexture(float2 uv)
+{
+	return (floor(uv * VoxelTextureGridSize + 1000 + 0.5) - 1000) * (1.0/VoxelTextureGridSize);
+}
+
+
+// ヒット判定
+float4 Raytrace(float4 pos, float3 v, out float3 hitblock)
+{
+	float4 albedo = 0;
+
+	pos.xyz += v * (VoxelScaledGridSize * -2.0);
+
+	// 交差判定用の係数
+	float3 invV = 1.0 / v;
+	float3 offset1 = (sign(v) * VoxelScaledGridSize * 0.5) * invV;
+	// float3 offset2 = (sign(v) * VoxelScaledGridSize * 1.5) * invV;
+	// 次の次のブロックまでの距離を計算するための概算値
+	float3 tnext0 = abs(VoxelScaledGridSize * invV);
+	float t2 = min(tnext0.x, min(tnext0.y, tnext0.z));
+
+	for(int i = 0; i < VOXEL_ITERATION_NUMBER; i++)
+	{
+		hitblock = AlignPosition(pos.xyz);
+		float4 ppos = mul(float4(hitblock, 1), matVP);
+		float4 vpos = mul(float4(hitblock, 1), matV);
+		float2 uv = (ppos.xy / ppos.w * float2(0.5, -0.5) + 0.5);
+
+		#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+			float4 albedo0 = tex2Dlod(VoxelInfoSampler, float4(uv,0,0));
+			float depth = albedo0.w;
+		#else
+			float depth = tex2Dlod(VoxelInfoSampler, float4(uv,0,0)).x;
+		#endif
+
+		if (0.0 < depth && depth < vpos.z * 1.01 + VoxelScaledGridSize)
+		{
+			#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+				albedo = albedo0;
+			#else
+				albedo = 1;
+			#endif
+			break;
+		}
+
+		float3 dif = (hitblock - pos.xyz) * invV;
+		float3 tnear = offset1 + dif;		// 次のブロックまでの距離
+
+		// float3 tnext = offset2 + dif;	// 次の次のブロックまでの距離
+		float3 t0 = (tnear.x < tnear.y) ? tnear.xyz : tnear.yxz;
+		t0 = (t0.y < t0.z) ? t0.xyz : ((t0.x < t0.z) ? t0.xzy : t0.zxy);
+		pos.xyz += v * ((t0.x + min(t0.y, t0.x + t2)) * 0.5);
+	}
+
+	#if defined(VOXEL_ENABLE_FALLOFF) && VOXEL_ENABLE_FALLOFF > 0
+	if (albedo.w <= 0.0)
+	{
+		hitblock = AlignPosition(pos.xyz);
+		float4 ppos = mul(float4(hitblock, 1), matVP);
+		float2 uv = (ppos.xy / ppos.w * float2(0.5, -0.5) + 0.5);
+		#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+		albedo = tex2Dlod(VoxelInfoSampler, float4(uv,0,0));
+		#else
+		albedo = tex2Dlod(VoxelInfoSampler, float4(uv,0,0)).xxxx;
+		#endif
+	}
+	#endif
+
+	return albedo;
+}
+
+
+
+// 交点と法線の計算
+float3 CalcPositionAndNormal(float3 hitblock, inout float3 N, float3 V, float depthRate)
+{
+	float3 tNear = (CameraPosition - (hitblock.xyz + (VoxelScaledGridSize * 0.5))) * (1.0/V);
+	float3 tFar  = (CameraPosition - (hitblock.xyz - (VoxelScaledGridSize * 0.5))) * (1.0/V);
+	tNear = min(tNear, tFar);
+	float3 hitpos = CameraPosition - V * max(tNear.x, max(tNear.y, tNear.z));
+	float3 N0 = normalize(abs(hitpos - hitblock));
+	N0 = normalize(step(max(N0.x, max(N0.y, N0.z)).xxx - VoxelBevelOffset, N0) * sign(V));
+	// 距離に応じて法線を弱める
+	// ベベルがモアレになるのを軽減する。
+	N = normalize(lerp(N, N0, 1.0 - saturate(depthRate)));
+
+	return hitpos;
+}
+
+// 交点の計算
+float3 CalcPosition(float3 hitblock, float3 V)
+{
+	float3 tNear = (CameraPosition - (hitblock.xyz + sign(V) * (VoxelScaledGridSize * 0.5))) * (1.0/V);
+	float3 hitpos = CameraPosition - V * max(tNear.x, max(tNear.y, tNear.z));
+	return hitpos;
+}
+
+
+#if defined(VOXEL_TEXTURE) && defined(VOXEL_ENABLE_OUPUT_COLOR)
+// 法線から参照するuv値を求める。
+float2 CalcUV(float3 N, float3 Pos)
+{
+	float2 Tex;
+	if (abs(N.x) > max(abs(N.y), abs(N.z)))
+	{
+		Tex = (N.x >= 0) ? float2( Pos.z, -Pos.y) : float2(1.0-Pos.z, -Pos.y);
+	}
+	else if (abs(N.y) > abs(N.z))
+	{
+		Tex = (N.y >= 0) ? float2( Pos.x, -Pos.z) : float2(-Pos.x, -Pos.z);
+	}
+	else
+	{
+		Tex = (N.z >= 0) ? float2(1.0 - Pos.x, -Pos.y) : float2( Pos.x, -Pos.y);
+	}
+
+	return (Tex.xy + 0.5);
+}
+#endif
+

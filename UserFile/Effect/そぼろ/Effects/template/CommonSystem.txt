@@ -1,0 +1,101 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// 各エフェクトの共通部分を集めたファイル
+// このファイルを更新してもMMEの自動更新の対象とはなりません
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ユーザーパラメータ
+
+
+float DefaultLightAngle = 20;
+
+#define PROJ_FAR  800
+#define PROJ_NEAR 3
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 計算用定数
+
+// アクセサリの倍率補正(アクセサリ/コントローラは、WorldMatrixが10倍になっている)
+static const float4x4 div10 = { 0.1, 0, 0, 0,
+                                0, 0.1, 0, 0,
+                                0, 0, 0.1, 0,
+                                0, 0, 0,   1};
+
+
+#define PI 3.14159
+#define DEG_TO_RAD (PI / 180)
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 逆行列演算 アクセサリのワールド変換行列に限る
+// 移動の逆行列 * 回転の逆行列 * アクセサリの拡大率10倍の逆行列
+float4x4 inverseDir(float4x4 mat){
+    return float4x4(
+        mat._11, mat._21, mat._31, 0,
+        mat._12, mat._22, mat._32, 0,
+        mat._13, mat._23, mat._33, 0,
+        0,0,0,1
+    );
+}
+
+float4x4 inverse(float4x4 mat){
+    float4x4 mv={
+        1,0,0,0,
+        0,1,0,0,
+        0,0,1,0,
+        -mat._41, -mat._42, -mat._43, 1
+    };
+
+    return mul(mv,inverseDir(mat));
+}
+
+float4x4 inverseCtrl(float4x4 mat){
+    return mul(inverse(mat),div10);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////
+//
+// 座法変換行列
+float4x4 WorldViewProjMatrix      : WORLDVIEWPROJECTION;
+float4x4 WorldMatrix              : WORLD;
+float4x4 ViewMatrix               : VIEW;
+
+float3   CameraPosition     : POSITION  < string Object = "Camera"; >;
+
+////////////////////////////////////////////////////////////////////////////////////////////
+//照明系ベクトル・行列の作成
+
+float LightScale : CONTROLOBJECT < string name = "(OffscreenOwner)"; >;
+float3 LightPosition : CONTROLOBJECT < string name = "(OffscreenOwner)"; >;
+float4x4 LightObjectMatrix : CONTROLOBJECT < string name = "(OffscreenOwner)"; >;
+
+static const float LightAngle = DefaultLightAngle * LightScale * 0.1 * DEG_TO_RAD;
+
+//セルフシャドウ用に独自の射影変換行列を作成
+float4x4 GetLightProjMatrix(){
+    const float ProjFar = PROJ_FAR;
+    const float ProjNear = PROJ_NEAR;
+    const float Sz = ProjFar / (ProjFar - ProjNear);
+    const float Sx = 1 / tan(LightAngle);
+    
+    float4x4 out1 = {
+        Sx,0 ,0 ,0,
+        0 ,Sx,0 ,0,
+        0 ,0 ,Sz,1,
+        0 ,0 ,-Sz * ProjNear, 0
+    };
+    
+    return out1;
+}
+
+static const float4x4 LightViewMatrix = inverseCtrl(LightObjectMatrix);
+static const float4x4 LightWorldViewMatrix = mul(WorldMatrix,LightViewMatrix);
+static const float4x4 LightWorldViewProjMatrix = mul(LightWorldViewMatrix, GetLightProjMatrix());
+
+//光軸ベクトル
+static const float3 LightAxisDirection = normalize(mul(float3(0,0,1), LightObjectMatrix).xyz);
+
+////////////////////////////////////////////////////////////////////////////////////////////
+

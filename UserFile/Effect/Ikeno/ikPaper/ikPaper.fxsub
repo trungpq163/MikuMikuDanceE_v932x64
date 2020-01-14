@@ -1,0 +1,591 @@
+///////////////////////////////////////////////////////////////////////////////////////////////
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// NOTE: 位置と回転を独立させたい場合は、ここを改造する。
+#if defined(PanelBoneName)
+float3 CenterPosition : CONTROLOBJECT < string name = PanelObjectName; string item = PanelBoneName;>;
+float4x4 PanelMat : CONTROLOBJECT < string name = PanelObjectName; string item = PanelBoneName; >;
+#else
+float3 CenterPosition : CONTROLOBJECT < string name = PanelObjectName; >;
+float4x4 PanelMat : CONTROLOBJECT < string name = PanelObjectName; >;
+#endif
+
+#if defined(ParentObjectName)
+#if defined(ParentBoneName)
+float4x4 ParentMat : CONTROLOBJECT < string name = ParentObjectName; string item = ParentBoneName; >;
+#else
+float4x4 ParentMat : CONTROLOBJECT < string name = ParentObjectName; >;
+#endif
+inline float3 shiftParent(float3 pos)
+{
+	return mul(float4(pos,1), ParentMat).xyz;
+}
+inline float3 rotParent(float3 v)
+{
+	return mul(v, (float3x3)ParentMat);
+}
+#else
+inline float3 shiftParent(float3 pos) { return pos; }
+inline float3 rotParent(float3 v) { return v;}
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座法変換行列
+float4x4 WorldViewProjMatrix	: WORLDVIEWPROJECTION;
+float4x4 WorldMatrix			: WORLD;
+float4x4 InvWorldMatrix			: WORLDINVERSE;
+float4x4 ViewMatrix				: VIEW;
+float4x4 WorldViewMatrix		: WORLDVIEW;
+float4x4 ProjMatrix				: PROJECTION;
+float4x4 LightWorldViewProjMatrix : WORLDVIEWPROJECTION < string Object = "Light"; >;
+
+float3	LightDirection		: DIRECTION < string Object = "Light"; >;
+float3	CameraPosition		: POSITION  < string Object = "Camera"; >;
+float3	CameraDirection		: DIRECTION  < string Object = "Camera"; >;
+
+// マテリアル色
+float4	MaterialDiffuse		: DIFFUSE  < string Object = "Geometry"; >;
+float3	MaterialAmbient		: AMBIENT  < string Object = "Geometry"; >;
+float3	MaterialEmmisive	: EMISSIVE < string Object = "Geometry"; >;
+float3	MaterialSpecular	: SPECULAR < string Object = "Geometry"; >;
+float	SpecularPower		: SPECULARPOWER < string Object = "Geometry"; >;
+float3	MaterialToon		: TOONCOLOR;
+float4	EdgeColor			: EDGECOLOR;
+float4	GroundShadowColor	: GROUNDSHADOWCOLOR;
+// ライト色
+float3	LightDiffuse		: DIFFUSE   < string Object = "Light"; >;
+float3	LightAmbient		: AMBIENT   < string Object = "Light"; >;
+float3	LightSpecular		: SPECULAR  < string Object = "Light"; >;
+static float4 DiffuseColor	= MaterialDiffuse  * float4(max(LightDiffuse, 0), 1.0f);
+static float3 AmbientColor	= saturate(MaterialAmbient * LightAmbient + MaterialEmmisive);
+static float3 SpecularColor	= PanelSpecularColor * LightSpecular;
+static float3 PanelLightColor = saturate(PanelAmbient + LightSpecular);
+static float3 SpecularColor2 = MaterialSpecular * LightSpecular;
+
+
+// テクスチャ材質モーフ値
+float4	TextureAddValue	: ADDINGTEXTURE;
+float4	TextureMulValue	: MULTIPLYINGTEXTURE;
+float4	SphereAddValue	: ADDINGSPHERETEXTURE;
+float4	SphereMulValue	: MULTIPLYINGSPHERETEXTURE;
+
+bool	use_texture;		//	テクスチャフラグ
+bool	use_spheremap;		//	スフィアフラグ
+bool	use_toon;			//	トゥーンフラグ
+bool	use_subtexture;		// サブテクスチャフラグ
+
+bool	parthf;		// パースペクティブフラグ
+bool	transp;		// 半透明フラグ
+bool	spadd;		// スフィアマップ加算合成フラグ
+#define SKII1	1500
+#define SKII2	8000
+#define Toon		3
+
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+	texture = <ObjectTexture>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	MIPFILTER = LINEAR;
+	ADDRESSU  = WRAP;
+	ADDRESSV  = WRAP;
+};
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	MIPFILTER = LINEAR;
+	ADDRESSU  = WRAP;
+	ADDRESSV  = WRAP;
+};
+
+// トゥーンマップのテクスチャ
+texture ObjectToonTexture: MATERIALTOONTEXTURE;
+sampler ObjToonSampler = sampler_state {
+	texture = <ObjectToonTexture>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	MIPFILTER = NONE;
+	ADDRESSU  = CLAMP;
+	ADDRESSV  = CLAMP;
+};
+
+
+// シャドウバッファのサンプラ。"register(s0)"なのはMMDがs0を使っているから
+sampler DefSampler : register(s0);
+
+float3 ChoiseNormal()
+{
+	float3 z = normalize(PanelMat[2].xyz * float3(1,0,1));
+
+	#if ENABLE_TWICE_ROTATION > 0
+	// 2倍の角度にする
+	float3 newz = 0;
+	newz.z = z.z * z.z - z.x * z.x;
+	newz.x = 2.0 * z.x * z.z;
+	z = newz;
+	#endif
+
+	return z;
+}
+
+// モデルの向きから求めた法線
+static float3 BasePanelNormal = ChoiseNormal();
+// 親による回転を考慮した最終法線
+static float3 PanelNormal = rotParent(BasePanelNormal);
+
+// パネル裏面が見えている場合は法線を反転させる
+inline float3 AdjustPanelNormal(float3 v)
+{
+	return PanelNormal * ((dot(v, PanelNormal) >= 0.0) ? 1 : -1);
+}
+
+float3x3 CalcRotMat()
+{
+	float3 forward = BasePanelNormal;
+	float3 up = float3(0,1,0);
+	float3 right = cross(up, forward);
+	float3x3 mat = { right, up, forward };
+	return mat;
+}
+
+static float3x3 RotMat = CalcRotMat();
+float3x3 SqueezeMat = { float3(1,0,0), float3(0,1,0), float3(0,0,0)};
+static float3x3 FlattenMat = mul(transpose(RotMat), mul(SqueezeMat, RotMat));
+
+inline float3 shift(float3 pos)
+{
+	pos += float3(0, CenterPosition.y + PanelMargin * 0.5, 0);
+	pos = shiftParent(pos);
+	pos += float3(CenterPosition.x, 0, CenterPosition.z);
+	return pos;
+}
+
+inline float3 flatten(float3 pos)
+{
+	pos = mul(pos, (float3x3)WorldMatrix);			// アクセサリ対策
+	float3 newPos = mul(pos - CenterPosition, FlattenMat);
+	newPos = shift(newPos);
+	newPos = mul(newPos, (float3x3)InvWorldMatrix);	// アクセサリ対策
+	return newPos;
+}
+
+// 枠用の処理:法線方向に広げる
+inline float3 wideflatten(float3 pos, float3 normal, float margin)
+{
+	pos = mul(pos, (float3x3)WorldMatrix);			// アクセサリ対策
+	// 法線方向に膨らませる
+	pos += normal * margin;
+	float3 newPos = mul(pos - CenterPosition, FlattenMat);
+	newPos = shift(newPos);
+	newPos = mul(newPos, (float3x3)InvWorldMatrix);	// アクセサリ対策
+	return newPos;
+}
+
+// 射影変換: z軸を調整する。
+float4 CalcModelProjPosition(float4 pos, float3 wpos, float3 v)
+{
+	float4 pposFlat = mul( pos, WorldViewProjMatrix );
+
+	float z = mul(wpos - CenterPosition, transpose(RotMat)).z;
+	// 裏が見えている場合はzを反転させる
+	z *= ((dot(v, PanelNormal) < 0.0) ? 1 : -1);
+	float offset = z * SqueezeScale - PanelDepthOffset;
+
+	// zを手前にする
+	float4 vpos = mul( pos, WorldViewMatrix );
+	vpos.z += offset;
+	float4 ppos = mul( vpos, ProjMatrix );
+	pposFlat.z = ppos.z / ppos.w * pposFlat.w;
+
+	return pposFlat;
+}
+
+// 射影変換: z軸を調整する。
+float4 CalcPanelProjPosition(float4 pos, float offset)
+{
+	float4 pposFlat = mul( pos, WorldViewProjMatrix );
+
+	// zを奥にやる
+	float4 vpos = mul( pos, WorldViewMatrix );
+	vpos.z += offset;
+	float4 ppos = mul( vpos, ProjMatrix );
+	pposFlat.z = ppos.z / ppos.w * pposFlat.w;
+
+	return pposFlat;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 輪郭描画
+
+// 頂点シェーダ
+float4 ColorRender_VS(float4 Pos : POSITION) : POSITION 
+{
+	// カメラとの視線が一定角度になったら表示をやめる?
+
+	float4 posOrig = Pos;
+	float3 wpos = mul( Pos, WorldMatrix ).xyz;
+	float3 Eye = CameraPosition - wpos;
+
+	Pos.xyz = flatten(Pos.xyz);
+	return CalcModelProjPosition(Pos, wpos, Eye);
+}
+
+// ピクセルシェーダ
+float4 ColorRender_PS() : COLOR
+{
+	// 輪郭色で塗りつぶし
+	return EdgeColor;
+}
+
+// 輪郭描画用テクニック
+technique EdgeTec < string MMDPass = "edge"; > {
+	pass DrawEdge {
+		VertexShader = compile vs_2_0 ColorRender_VS();
+		PixelShader  = compile ps_2_0 ColorRender_PS();
+	}
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 影（非セルフシャドウ）描画
+
+float4 Shadow_VS(float4 Pos : POSITION, float3 Normal : NORMAL) : POSITION
+{
+	Pos.xyz = wideflatten(Pos.xyz, Normal, PanelMargin);
+	return mul( Pos, WorldViewProjMatrix );
+}
+
+float4 Shadow_PS() : COLOR
+{
+	return GroundShadowColor;
+}
+
+technique ShadowTec < string MMDPass = "shadow"; > {
+	pass DrawShadow {
+		CullMode = None;
+		VertexShader = compile vs_2_0 Shadow_VS();
+		PixelShader  = compile ps_2_0 Shadow_PS();
+	}
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// セルフシャドウ用Z値プロット
+
+struct VS_ZValuePlot_OUTPUT {
+	float4 Pos : POSITION;				// 射影変換座標
+	float4 ShadowMapTex : TEXCOORD0;	// Zバッファテクスチャ
+};
+
+VS_ZValuePlot_OUTPUT ZValuePlot_VS( float4 Pos : POSITION, float3 Normal : NORMAL )
+{
+	VS_ZValuePlot_OUTPUT Out = (VS_ZValuePlot_OUTPUT)0;
+	Pos.xyz = wideflatten(Pos.xyz, Normal, PanelMargin);
+		// MEMO: ライト方向に少し押し出す?
+	Out.Pos = mul( Pos, LightWorldViewProjMatrix );
+	Out.ShadowMapTex = Out.Pos;
+	return Out;
+}
+
+float4 ZValuePlot_PS( float4 ShadowMapTex : TEXCOORD0 ) : COLOR
+{
+	// R色成分にZ値を記録する
+	return float4(ShadowMapTex.z/ShadowMapTex.w,0,0,1);
+}
+
+technique ZplotTec < string MMDPass = "zplot"; > {
+	pass ZValuePlot {
+		CullMode = None;
+		AlphaBlendEnable = FALSE;
+		VertexShader = compile vs_2_0 ZValuePlot_VS();
+		PixelShader  = compile ps_2_0 ZValuePlot_PS();
+	}
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT {
+	float4 Pos		: POSITION;		// 射影変換座標
+	float4 ZCalcTex	: TEXCOORD0;	// Z値
+	float4 Tex		: TEXCOORD1;	// テクスチャ・スフィアマップテクスチャ座標
+	float3 Normal	: TEXCOORD2;	// 法線
+	float3 Eye		: TEXCOORD3;	// カメラとの相対位置
+//	float2 SpTex	: TEXCOORD4;	// スフィアマップテクスチャ座標
+
+	#if ENABLE_INNER_LIGHTING > 0
+	float4 ZCalcTex2	: TEXCOORD5;	// Z値
+	float3 Eye2		: TEXCOORD6;	// カメラとの相対位置
+	float3 Normal2	: TEXCOORD7;	// 法線
+	#endif
+
+	float4 Color	: COLOR0;		// ディフューズ色
+};
+
+// シャドウマップの計算
+float CalcShadow(float4 zcalc)
+{
+	float comp = 1;
+	// テクスチャ座標に変換
+	zcalc /= zcalc.w;
+	float2 TransTexCoord = zcalc.xy * float2(0.5, - 0.5) + 0.5;
+	if( all( saturate(TransTexCoord) == TransTexCoord ) )
+	{
+		float shadow = max(zcalc.z-tex2D(DefSampler,TransTexCoord).r , 0.0f);
+		float k = (parthf) ? SKII2 * TransTexCoord.y : SKII1;
+		comp = 1 - saturate(shadow * k - 0.3f);
+	}
+	return comp;
+}
+
+// パネル内のモデル
+VS_OUTPUT Object_VS(float4 Pos : POSITION, float3 Normal : NORMAL, 
+	float2 Tex : TEXCOORD0, float2 Tex2 : TEXCOORD1, 
+	uniform bool useTexture, uniform bool useSphereMap, 
+	uniform bool useToon, uniform bool useSelfshadow)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	float4 posOrig = Pos;
+	float3 normalOrig = Normal;
+	float3 wpos = mul( Pos, WorldMatrix ).xyz;
+	float3 Eye = CameraPosition - wpos;
+
+	Pos.xyz = flatten(Pos.xyz);
+	Normal = AdjustPanelNormal(Eye);
+
+	// カメラ視点のワールドビュー射影変換
+	Out.Pos = CalcModelProjPosition(Pos, wpos, Eye);
+
+	// カメラとの相対位置
+	Out.Eye = normalize(CameraPosition - mul( Pos, WorldMatrix ).xyz);
+	// 頂点法線
+	Out.Normal = Normal; // normalize( mul( Normal, (float3x3)WorldMatrix ) );
+
+	if (useSelfshadow)
+	{
+		// ライト視点によるワールドビュー射影変換
+		Out.ZCalcTex = mul( Pos, LightWorldViewProjMatrix );
+	}
+
+	Out.Color.rgb = max(MaterialAmbient * LightAmbient, 0) + MaterialEmmisive;
+	Out.Color.a = MaterialDiffuse.a;
+	if (!useToon)
+	{
+		Out.Color.rgb += MaterialDiffuse.rgb;
+	}
+	Out.Color = saturate(Out.Color);
+
+	// テクスチャ座標
+	Out.Tex.xy = Tex.xy;
+
+
+	#if ENABLE_INNER_LIGHTING > 0
+	Out.Eye2 = Eye;
+	Out.Normal2 = normalize( mul( normalOrig, (float3x3)WorldMatrix ) );
+
+	if (useSelfshadow)
+	{
+		// ライト視点によるワールドビュー射影変換
+		Out.ZCalcTex2 = mul( posOrig, LightWorldViewProjMatrix );
+	}
+
+	Out.Tex.zw = float2(0.5,0.5);
+	#if ENABLE_SPHERE_MAP > 0
+	if ( useSphereMap ) {
+		if ( use_subtexture ) {
+			// PMXサブテクスチャ座標
+			Out.Tex.zw = Tex2;
+		} else {
+			// スフィアマップテクスチャ座標
+			float2 NormalWV = mul( Out.Normal2, (float3x3)ViewMatrix );
+			Out.Tex.z = NormalWV.x * 0.5f + 0.5f;
+			Out.Tex.w = NormalWV.y * -0.5f + 0.5f;
+		}
+	}
+	#endif
+	#endif
+
+	return Out;
+}
+
+
+float4 Object_PS(VS_OUTPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon, uniform bool useSelfshadow) : COLOR
+{
+	float4 Color = IN.Color;
+	float4 ShadowColor = float4(AmbientColor, Color.a);
+	#if ENABLE_INNER_LIGHTING > 0
+	// パネル内モデルの陰影計算
+	float3 N2 = normalize(IN.Normal2);
+	float diffuse2 = dot(N2,-LightDirection);
+	#else
+	float diffuse2 = 1;
+	#endif
+	if ( !useToon )
+	{
+		Color.rgb += max(0,diffuse2) * DiffuseColor.rgb;
+	}
+
+	if ( useTexture ) {
+		float4 TexColor = tex2D( ObjTexSampler, IN.Tex.xy );
+		TexColor.rgb = lerp(1, TexColor * TextureMulValue + TextureAddValue, TextureMulValue.a + TextureAddValue.a).rgb;
+		Color *= TexColor;
+		ShadowColor *= TexColor;
+	}
+
+	if ( useSphereMap ) {
+		float4 TexColor = tex2D(ObjSphareSampler, IN.Tex.zw);
+		TexColor.rgb = lerp(spadd?0:1, TexColor * SphereMulValue + SphereAddValue, SphereMulValue.a + SphereAddValue.a).rgb;
+		if(spadd) {
+			Color.rgb += TexColor.rgb;
+			ShadowColor.rgb += TexColor.rgb;
+		} else {
+			Color.rgb *= TexColor.rgb;
+			ShadowColor.rgb *= TexColor.rgb;
+		}
+		Color.a *= TexColor.a;
+		ShadowColor.a *= TexColor.a;
+	}
+
+	#if ENABLE_INNER_LIGHTING > 0
+	// パネル内モデルの陰影計算
+	float3 H2 = normalize( normalize(IN.Eye2) + -LightDirection );
+	Color.rgb += pow( max(0,dot( H2, N2 )), SpecularPower ) * SpecularColor2;
+	float comp2 = 1;
+	#if ENABLE_SHADOW_MAP > 0
+	if (useSelfshadow) comp2 = CalcShadow(IN.ZCalcTex2);
+	#endif
+	if ( useToon )
+	{
+		comp2 = min(saturate(diffuse2 * Toon), comp2);
+		ShadowColor.rgb *= MaterialToon;
+	}
+	Color = lerp(ShadowColor, Color, comp2);
+	#endif
+
+	// パネルの陰影計算
+	float3 N = IN.Normal;
+	float diffuse = dot(N,-LightDirection);
+	float3 HalfVector = normalize( normalize(IN.Eye) + -LightDirection );
+	float3 Specular = pow( max(0,dot( HalfVector, N )), PanelSpecularPower ) * SpecularColor;
+
+	Color.rgb *= PanelLightColor;
+	ShadowColor = float4(Color.rgb * PanelShadowColor, Color.a);
+	Color.rgb += Specular;
+
+	float comp = 1;
+	if (useSelfshadow) comp = CalcShadow(IN.ZCalcTex);
+	comp = min(diffuse, comp);
+
+	float4 ans = lerp(ShadowColor, Color, comp);
+
+	return ans;
+}
+
+
+// パネルの描画
+VS_OUTPUT Panel_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, float2 Tex2 : TEXCOORD1, uniform bool useSelfshadow, uniform bool isEdge)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	float4 posOrig = Pos;
+	float3 normalOrig = Normal;
+
+	if (!isEdge)
+	{
+		Pos.xyz = wideflatten(Pos.xyz, Normal, PanelMargin);
+		Out.Pos = CalcPanelProjPosition(Pos, PanelDepthOffset);
+		Out.Eye = normalize(CameraPosition - mul( Pos, WorldMatrix ).xyz);
+		Out.Normal = AdjustPanelNormal(Out.Eye);
+	}
+	else
+	{
+		Pos.xyz = wideflatten(Pos.xyz, Normal, PanelMargin + PanelThickness);
+		Out.Pos = CalcPanelProjPosition(Pos, PanelDepthOffset * 1.1);
+		Out.Eye = normalize(CameraPosition - mul( posOrig, WorldMatrix ).xyz);
+		Out.Normal = normalize(mul(normalOrig, WorldMatrix ));
+	}
+
+	if (useSelfshadow)
+	{
+		Out.ZCalcTex = mul( Pos, LightWorldViewProjMatrix );
+	}
+
+	return Out;
+}
+
+float4 Panel_PS(VS_OUTPUT IN, uniform bool useToon, uniform bool useSelfshadow) : COLOR
+{
+	float3 N = IN.Normal;
+	float diffuse = max(dot(N,-LightDirection), 0);
+
+	float3 HalfVector = normalize( normalize(IN.Eye) + -LightDirection );
+	float3 Specular = pow( max(0,dot( HalfVector, N )), PanelSpecularPower ) * SpecularColor;
+
+	float4 Color = float4(PanelColor * PanelLightColor + Specular, 1);
+	float4 ShadowColor = float4(PanelColor * PanelLightColor * PanelShadowColor, Color.a);
+
+	float comp = 1;
+	if (useSelfshadow) comp = CalcShadow(IN.ZCalcTex);
+
+	comp = min(diffuse, comp);
+
+	float4 ans = lerp(ShadowColor, Color, comp);
+	ans.a = 1; // 抜きは無し
+
+	return ans;
+}
+
+#if ENABLE_DRAW_EDGE > 0
+#define STR_EDGE_SCRIPT		"Pass=DrawPanelEdge;"
+#define STR_EDGE_PASS(toon, selfshadow)	\
+		pass DrawPanelEdge { \
+			CullMode = None; \
+			VertexShader = compile vs_3_0 Panel_VS(selfshadow, true); \
+			PixelShader  = compile ps_3_0 Panel_PS(toon, selfshadow); \
+		} \
+
+#else
+#define STR_EDGE_SCRIPT		
+#define STR_EDGE_PASS(toon, selfshadow)		
+#endif
+
+#define OBJECT_TEC(name, mmdpass, tex, sphere, toon, selfshadow) \
+	technique name < string MMDPass = mmdpass; \
+		string Script = \
+			STR_EDGE_SCRIPT \
+			"Pass=DrawMask;" \
+			"Pass=DrawObject;"; \
+		> { \
+		STR_EDGE_PASS(toon, selfshadow) \
+		pass DrawMask { \
+			CullMode = None; \
+			VertexShader = compile vs_3_0 Panel_VS(selfshadow, false); \
+			PixelShader  = compile ps_3_0 Panel_PS(toon, selfshadow); \
+		} \
+		pass DrawObject { \
+			VertexShader = compile vs_3_0 Object_VS(tex, sphere, toon, selfshadow); \
+			PixelShader  = compile ps_3_0 Object_PS(tex, sphere, toon, selfshadow); \
+		} \
+	}
+
+OBJECT_TEC(MainTec0, "object", use_texture, use_spheremap, use_toon, false)
+OBJECT_TEC(MainTecBS0, "object_ss", use_texture, use_spheremap, use_toon, true)
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////

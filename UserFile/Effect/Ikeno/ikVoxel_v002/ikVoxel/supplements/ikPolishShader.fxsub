@@ -1,0 +1,97 @@
+// ikPolish用の設定ファイル
+
+// ※ MMD起動中にこのファイルを変更しても即座に反映されません。
+
+//******************設定はここから
+
+// コントローラ名
+#define CONTROLLER_NAME		"ikPolishController.pmx"
+
+// コントローラがない場合のデフォルト値
+float DefaultLightScale = 1.0;		// 直接光(=ライトの強さ)のデフォルト値
+float DefaultAmbientScale = 1.0;	// 間接光(=周囲の明るさ)のデフォルト値
+float DefaultAmbientPower = 1.0;	// SSAOの強さのデフォルト値
+float DefaultReflectionScale = 1.0;	// 映り込み(の強さ)のデフォルト値
+float DefaultSSSScale = 1.0;		// 皮下散乱のボカし強度
+float DefaultGIScale = 1.0;			// デフューズ反射のデフォルト強度
+
+// マテリアル用の半透明の閾値。
+// この値以下の半透明度ならマテリアル的には透明扱いにする。
+const float AlphaThreshold = 0.05;
+
+
+// シャドウマップのクオリティ
+#define SHADOW_QUALITY	3
+// 1: 低品質：MMD標準相当
+// 2: 標準：MMD美影モード相当
+// 3: 高品質
+
+// 標準のシャドウマップを加算するか?
+// #define ADD_DEFAULT_SHADOW
+
+// シャドウの細かい設定は shadows/shadowCommons.fxsub 内にあります。
+
+
+
+// 映り込みの計算用
+#define	RLRRayCount		32	// 飛ばすレイの本数 (0:無効, 8～128程度。多いほど重くなる。)
+#define RLRRayCount2	4	// 飛ばすレイの本数 (0:無効, 2～8程度。補助用)
+
+// 遮蔽計算用
+#define	SSAORayCount	32	// 飛ばすレイの本数 (0:無効, 8～64程度。多いほど重くなる。)
+
+#define	ENABLE_SSGI		1	// GIモドキを有効にする。(0:無効、1:有効)
+#define	ENABLE_AA		1	// アンチエイリアスを掛ける。(0:無効、1:有効)
+
+const float DepthLength = 8.0;		// SSAOの影響を与える距離。(1MMD単位は約8cm?)
+
+const float GIFalloffDepth = 50.0;	// SSGIが影響する深度。カメラから遠いほど影響を受けない。
+
+// ボカしのサンプル数(0～最大8)。0でボカしオフ
+#define NUM_BLUR_SAMPLES_RLR	4	// 4
+#define NUM_BLUR_SAMPLES_SSAO	8	// 8
+#define	NUM_BLUR_SSS			1	// 1	// 0:SSS無効。1～4:SSS有効。
+
+// 1.0以上の明るさを扱うか?
+#define ENABLE_HDR	1
+
+
+// 単純な動的環境マップを使う。やや軽いが見た目が不正確。
+// ※このモードを後から切り替えた場合、MMEのEnvMapタブでエフェクトも変える必要がある。
+//#define USE_SIMPLE_ENVMAP
+
+// あらかじめ作成した環境マップファイルを使う。
+//#define USE_STATIC_ENV	"envmap.png"
+
+// 環境マップの解像度(256～1024程度。2のべき乗がよい。)
+#define ENV_WIDTH		256
+
+
+
+// 環境マップの描画スケール。やや小さく描画する
+const float EnvFrameScale = 0.95;
+
+// ディフュージョンの描画スケール。やや小さく描画することで画面外の色を取り込む。
+const float GIFrameScale = 0.8;
+
+
+
+//****************** 設定はここまで
+
+inline float CalcLightValue(float plusValue, float minusValue, float defaultValue)
+{
+	float v = plusValue - minusValue + 1.0;
+	return ((v <= 1.0) ? v : ((v - 1.0) * 4.0 + 1.0)) * defaultValue;
+}
+
+// シャドウバッファのサイズ
+#if SHADOW_QUALITY < 2
+#define SHADOW_TEX_SIZE 2048
+#elif SHADOW_QUALITY == 2
+#define SHADOW_TEX_SIZE 4096
+#else
+#define SHADOW_TEX_SIZE 8192
+#endif
+
+
+

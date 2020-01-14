@@ -1,0 +1,83 @@
+//=============================================================================
+// ポイントライト
+//=============================================================================
+
+#if defined(ENABLE_POINTLIGHTS)
+#define	DECL_LIGHT(_ctrlName, _name)	\
+	bool _name##_exist		: CONTROLOBJECT < string name = _ctrlName;>; \
+	float3 _name##_pos	: CONTROLOBJECT < string name = _ctrlName;>; \
+	float _name##_r : CONTROLOBJECT < string name = _ctrlName; string item = "Rx"; >; \
+	float _name##_g : CONTROLOBJECT < string name = _ctrlName; string item = "Ry"; >; \
+	float _name##_b : CONTROLOBJECT < string name = _ctrlName; string item = "Rz"; >; \
+	float _name##_si : CONTROLOBJECT < string name = _ctrlName; string item = "Si"; >; \
+	float _name##_tr : CONTROLOBJECT < string name = _ctrlName; string item = "Tr"; >; \
+
+float4 NormalizeLightColor(float3 rgb, float a)
+{
+	float g = rgb2gray(rgb);
+	return float4(rgb / max(g, 1e-4), a * g);
+}
+
+#define POINTLIGHT_DATA(_name)	\
+	float4(_name##_pos, _name##_si * 0.1), \
+	NormalizeLightColor(float3(_name##_r, _name##_g, _name##_b), _name##_tr * _name##_exist * 5.73)
+	// 360 / (2PI) ≒ 57.3度 で Rxyzは1になる。Rxyzが10の時に(1,1,1)になるように調整。
+
+DECL_LIGHT("PPointLight1.x", PointLight1)
+DECL_LIGHT("PPointLight2.x", PointLight2)
+DECL_LIGHT("PPointLight3.x", PointLight3)
+DECL_LIGHT("PPointLight4.x", PointLight4)
+
+static float4 PointLights[] = {
+	POINTLIGHT_DATA(PointLight1),
+	POINTLIGHT_DATA(PointLight2),
+	POINTLIGHT_DATA(PointLight3),
+	POINTLIGHT_DATA(PointLight4),
+};
+
+
+inline float4 InjectPointLightIntoVoxel(float3 wpos, int index)
+{
+	float3 pos = PointLights[index * 2 + 0].xyz;
+	float range = PointLights[index * 2 + 0].w;
+	float4 col = PointLights[index * 2 + 1];
+
+	float3 v = pos - wpos;
+	float dist = max(length(v), 1e-4);
+	float l = saturate(1.0 - dist * (1.0 / GRID_SIZE_));
+	return float4(col.rgb, col.a) * l;
+}
+
+inline float4 CalcDirectPointLightDiffuse(float3 wpos, float3 n, int index)
+{
+	float3 pos = PointLights[index * 2 + 0].xyz;
+	float range = PointLights[index * 2 + 0].w;
+	float4 col = PointLights[index * 2 + 1];
+
+	float3 v = pos - wpos;
+	float dist = max(length(v), 1e-4);
+	float l = max(1.0 - dist / range, 0);
+	float diff = max(dot(v, n) / dist, 0);
+
+	return float4(col.rgb, diff * l * col.a);
+}
+
+inline float4 CalcDirectPointLightSpecular(float3 wpos, float3 eye, float3 n, float smoothness, int index)
+{
+	const float f0 = 1.0;	// f0は最後にまとめて処理するので、1.0にしておく
+
+	float3 pos = PointLights[index * 2 + 0].xyz;
+	float range = PointLights[index * 2 + 0].w;
+	float4 col = PointLights[index * 2 + 1];
+
+	float3 v = pos - wpos;
+	float dist = max(length(v), 1e-4);
+	float l = max(1.0 - dist / range, 0);
+	float spec = CalcSpecular(v / dist, n, eye, smoothness, f0);
+
+	return float4(col.rgb, spec * l * col.a);
+}
+
+#endif
+
+

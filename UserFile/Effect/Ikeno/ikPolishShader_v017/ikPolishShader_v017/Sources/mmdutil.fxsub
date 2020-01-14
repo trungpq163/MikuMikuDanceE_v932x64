@@ -1,0 +1,78 @@
+//-----------------------------------------------------------------------------
+// MMD特有のコード
+
+
+// 材質モーフ対応
+float4	TextureAddValue   : ADDINGTEXTURE;
+float4	TextureMulValue   : MULTIPLYINGTEXTURE;
+float4	SphereAddValue	: ADDINGSPHERETEXTURE;
+float4	SphereMulValue	: MULTIPLYINGSPHERETEXTURE;
+
+bool	parthf;   // パースペクティブフラグ
+#define SKII1	1500
+#define SKII2	8000
+
+bool	spadd;	// スフィアマップ加算合成フラグ
+
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+	texture = <ObjectTexture>;
+	MINFILTER = ANISOTROPIC; MAGFILTER = ANISOTROPIC; MIPFILTER = LINEAR;
+	MAXANISOTROPY = 16;
+	ADDRESSU  = WRAP;	ADDRESSV  = WRAP;
+};
+
+#if !defined(IGNORE_SPHERE) || defined(ENABLE_AL)
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphereSampler = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = LINEAR;	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;	ADDRESSV  = WRAP;
+};
+#endif
+
+
+// シャドウバッファのサンプラ。"register(s0)"なのはMMDがs0を使っているから
+sampler DefSampler : register(s0);
+
+inline float CalcMMDShadow(float4 zcalc)
+{
+	float shadow = 1;
+
+	// テクスチャ座標に変換
+	zcalc /= zcalc.w;
+	float2 TransTexCoord = zcalc.xy * float2(0.5,-0.5) + 0.5;
+	if( any( saturate(TransTexCoord) != TransTexCoord ) ) {
+		; // シャドウバッファ外
+	} else {
+		float a = (parthf) ? SKII2 * TransTexCoord.y : SKII1;
+		float d = zcalc.z;
+		float z = tex2Dlod(DefSampler, float4(TransTexCoord,0,0)).r;
+		shadow = 1 - saturate(max(d - z , 0.0f)*a-0.3f);
+	}
+
+	return shadow;
+}
+
+
+inline float4 GetTextureColor(float2 uv)
+{
+	float4 TexColor = tex2D( ObjTexSampler, uv);
+	TexColor.rgb = lerp(1, TexColor * TextureMulValue + TextureAddValue, TextureMulValue.a + TextureAddValue.a).rgb;
+	return TexColor;
+}
+
+
+#if !defined(IGNORE_SPHERE)
+inline float4 GetSphereColor(float2 uv)
+{
+	float4 TexColor = tex2D(ObjSphereSampler, uv);
+	TexColor.rgb = lerp(spadd?0:1, TexColor * SphereMulValue + SphereAddValue, SphereMulValue.a + SphereAddValue.a).rgb;
+	return TexColor;
+}
+#else
+inline float4 GetSphereColor(float2 uv) {return spadd?0:1; }
+#endif

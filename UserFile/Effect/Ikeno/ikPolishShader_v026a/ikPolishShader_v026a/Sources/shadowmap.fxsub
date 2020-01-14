@@ -1,0 +1,416 @@
+// シャドウマップ用の処理
+
+
+#define NEAR_DISTANCE	5.0		// 近くにある物の影を無視する距離
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#include "Shadows/shadow_common.fxsub"
+
+#define BORDER_RANGE	8		// 1/4画面の境界
+
+//#define SCREENSPACE_FX_OBJECT  "Shadows/Shadow.fxsub"
+#define LIGHTSPACE_FX_OBJECT  "Shadows/LightDepth.fx"
+#define LIGHTSPACE_FX_OBJECT_RGBM  "Shadows/LightDepth_rgbm.fx"
+
+
+static float SoftShadowScale = mExistPolish ? mSoftShadow : DefaultShadowScale;
+
+// SoftShadow
+// NOTE: PCFの半径はシャドウキャスターとの距離に応じて変えるべき?
+float PCFRadius(float dist)
+{
+	return SoftShadowScale * (1.0/512.0 - 1.0/SHADOW_TEX_SIZE) + (1.0/SHADOW_TEX_SIZE);
+}
+//float PCFRadius(float dist) { return clamp(dist * (LightZMax / 50.0), 1.0/SHADOW_TEX_SIZE, 1.0/256.0); }
+float ShadowBlurOffsetScale() { return 0.5 + (1.75-0.5) * SoftShadowScale; }
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// ライト座標系での奥行きを出力
+texture LightDepthRT : OFFSCREENRENDERTARGET <
+	string Description = "Lightspace Depth for ikPolishShader";
+	int Width = SHADOW_TEX_SIZE;
+	int Height = SHADOW_TEX_SIZE;
+	string Format = "R32F";
+	float4 ClearColor = { 1, 0, 0, 0 };
+	float ClearDepth = 1.0;
+	int MipLevels = 1;
+	string DefaultEffect = 
+		HIDE_EFFECT
+		"rgbm_*.x = " LIGHTSPACE_FX_OBJECT_RGBM ";"	// スカイドーム
+		"*.pmd = " LIGHTSPACE_FX_OBJECT ";"
+		"*.pmx = " LIGHTSPACE_FX_OBJECT ";"
+		"*.x =   " LIGHTSPACE_FX_OBJECT ";"
+		"* = hide;" ;
+>;
+sampler LightSamp = sampler_state {
+	texture = <LightDepthRT>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+//	MinFilter = NONE;	MagFilter = NONE;	MipFilter = NONE;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+static float4x4 matLightVPs = mul(matLightVs, matLightPs);
+static float4x4 lightParam = CreateLightProjParameters();
+
+
+// テクスチャ座標がどれだけエッジに近いか?
+// テクスチャ座標の範囲は[-0.25,0.25]
+float CalcCSMEdgeFalloff(float2 texCoord)
+{
+	const float w = SHADOW_TEX_SIZE * 0.5;
+	float d = max(abs(texCoord.x), abs(texCoord.y)) * 4.0; // -> [-1,1]
+	return saturate(((w - BORDER_RANGE) - (w * d)) * (1.0 / WARP_RANGE));
+}
+
+float2 CalcCascadeUV(float2 uv, float2 offset)
+{
+	return uv + ((0.5 + offset) * 0.5 + (0.5 / SHADOW_TEX_SIZE));
+}
+
+
+float4 CalcCascadePPos(float2 uv, float2 offset, float index)
+{
+	// u, v, カスケードのインデックス, 重み を格納。
+	return float4(CalcCascadeUV(uv, offset), index, CalcCSMEdgeFalloff(uv));
+}
+
+float2 CalcLight(float casterDepth, float receiverDepth, float rate)
+{
+	float dist = max(receiverDepth - casterDepth, 0);
+	return float2(1 - saturate(dist * rate), dist);
+}
+
+#define SHADOW_SAMPLE(samp, uv)		tex2Dlod(samp, float4(uv, 0,0))
+//#define SHADOW_SAMPLE(samp, uv)		tex2D(samp, uv)
+
+//-----------------------------------------------------------------------------
+//
+struct SHADOWMAP_LIGHTPARAM {
+	float4 LightParam0	: TEXCOORD1;
+	float4 LightParam1	: TEXCOORD2;
+	float4 LightParam2	: TEXCOORD3;
+	float4 LightParam3	: TEXCOORD4;
+};
+
+struct SHADOWMAP_LIGHTMATRIX {
+	float4 MatLVP0	: TEXCOORD5;
+	float4 MatLVP1	: TEXCOORD6;
+	float4 MatLVP2	: TEXCOORD7;
+	float4 MatLVP3	: NORMAL;	 // TEXCOORD[0-7] までなので...
+};
+
+struct VS_SHADOWMAP_OUTPUT {
+	float4 Pos		: POSITION;		// 射影変換座標
+	float4 Tex		: TEXCOORD0;	// テクスチャ
+
+	SHADOWMAP_LIGHTPARAM	LightParam;
+	SHADOWMAP_LIGHTMATRIX	LightMatrix;
+};
+
+struct VS_SHADOWMAP_OUTPUT_Ex {
+	float4 Pos		: POSITION;		// 射影変換座標
+	float4 Tex		: TEXCOORD0;	// テクスチャ
+
+	SHADOWMAP_LIGHTPARAM	LightParam;
+	SHADOWMAP_LIGHTMATRIX	LightMatrix;
+
+	float4 Extend	: COLOR0;
+};
+
+void SetShadowmapVSOutput(
+	inout SHADOWMAP_LIGHTPARAM param,
+	inout SHADOWMAP_LIGHTMATRIX mat)
+{
+	const float2 scale = float2(0.25, -0.25);
+	param.LightParam0 = float4(lightParam[0].xy, lightParam[1].xy) * scale.xyxy;
+	param.LightParam1 = float4(lightParam[0].zw, lightParam[1].zw) * scale.xyxy;
+	param.LightParam2 = float4(lightParam[2].xy, lightParam[3].xy) * scale.xyxy;
+	param.LightParam3 = float4(lightParam[2].zw, lightParam[3].zw) * scale.xyxy;
+
+	mat.MatLVP0 = matLightVPs[0];
+	mat.MatLVP1 = matLightVPs[1];
+	mat.MatLVP2 = matLightVPs[2];
+	mat.MatLVP3 = matLightVPs[3];
+}
+
+float4 CalcShadowProjectionPosition(float3 wpos, SHADOWMAP_LIGHTMATRIX mat)
+{
+	float4x4 matLightVPs = {
+		mat.MatLVP0, mat.MatLVP1,
+		mat.MatLVP2, mat.MatLVP3
+	};
+
+	return mul(float4(wpos,1), matLightVPs);
+}
+
+
+VS_SHADOWMAP_OUTPUT VS_Shadowmap( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_SHADOWMAP_OUTPUT Out = (VS_SHADOWMAP_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+	Out.Tex.zw = (Tex.xy * ViewportSize + 0.5) / NOISE_TEXTURE_SIZE; // for jitter
+
+	// Out.BlurSize.x = PCFRadius(0);
+	SetShadowmapVSOutput(Out.LightParam, Out.LightMatrix);
+
+	return Out;
+}
+
+float4 PS_Shadowmap(VS_SHADOWMAP_OUTPUT IN) : COLOR
+{
+	float2 Tex = IN.Tex.xy;
+	float2 texCoord = Tex;
+
+	GeometryInfo geom = GetWND(texCoord);
+	float4 Pos = float4(geom.wpos, 1);
+	float jitter = GetJitterOffset(IN.Tex.zw);
+
+	float4 PPos = CalcShadowProjectionPosition(geom.wpos, IN.LightMatrix);
+	PPos /= PPos.w;
+
+	float distanceFromCamera = mul(Pos, matV).z;	// カメラからの距離
+	float receiverDepth = PPos.z;					// ライトからの距離
+
+	float dotNL = dot(geom.nd.normal, -LightDirection);
+
+	float4 LightPPos01 = (PPos.xyxy * IN.LightParam.LightParam0 + IN.LightParam.LightParam1);
+	float4 LightPPos23 = (PPos.xyxy * IN.LightParam.LightParam2 + IN.LightParam.LightParam3);
+
+	#define CALC_PPOS(ppos, u, v, scale) CalcCascadePPos(ppos, float2(u,v), scale);
+	float4 lightPPos0 = CALC_PPOS(LightPPos01.xy, 0, 0, 1.0 );
+	float4 lightPPos1 = CALC_PPOS(LightPPos01.zw, 1, 0, 0.5 );
+	float4 lightPPos2 = CALC_PPOS(LightPPos23.xy, 0, 1, 0.25);
+	float4 lightPPos3 = CALC_PPOS(LightPPos23.zw, 1, 1, 0.125);
+		// 最後はPCFのステップサイズ。本来は1/1,1/2,1/4,1/8になる?
+
+#if 0
+	float4 texCoord0 = lightPPos3;
+	float4 texCoord1 = 0;
+	if (lightPPos2.w > 0.0) { texCoord1 = texCoord0; texCoord0 = lightPPos2;}
+	if (lightPPos1.w > 0.0) { texCoord1 = texCoord0; texCoord0 = lightPPos1;}
+	if (lightPPos0.w > 0.0) { texCoord1 = texCoord0; texCoord0 = lightPPos0;}
+	// texCoord0 = (texCoord0.w > jitter * 0.9) ? texCoord0 : texCoord1;
+		// 境界部分でのつなぎ目をごまかす。逆効果?
+#else
+	float4 texCoord0 = -1;
+	texCoord0 = (lightPPos3.w > 0.0) ? lightPPos3 : texCoord0;
+	texCoord0 = (lightPPos2.w > 0.0) ? lightPPos2 : texCoord0;
+	texCoord0 = (lightPPos1.w > 0.0) ? lightPPos1 : texCoord0;
+	texCoord0 = (lightPPos0.w > 0.0) ? lightPPos0 : texCoord0;
+#endif
+
+	float casterDepth0 = SHADOW_SAMPLE(LightSamp, texCoord0.xy).x;
+	float casterDepth = casterDepth0; // lerp(1, casterDepth0, texCoord0.w);
+
+	// 深度バイアス：適当
+	float bias = distanceFromCamera * (1.0 / LightZMax);
+	float depthSlope = min(abs( ddx( receiverDepth ) ) + abs( ddy( receiverDepth ) ), 0.1);
+	float lightSlope = (saturate(abs(dotNL)) * -3.6 + 3.6 + 1.0e-4) * (1.0 / LightZMax);
+	bias = (bias + depthSlope + lightSlope) * BIAS_SCALE;
+	receiverDepth -= bias;
+
+	const float sdrate = 30000.0 / 4.0 - 0.05;
+	float2 light_center = CalcLight(casterDepth.x, receiverDepth, sdrate);
+
+	// PCF
+	#define CALC_LIGHT(u,v,w)	\
+		CalcLight(SHADOW_SAMPLE(LightSamp, texCoord0.xy + float2(u, v)).x, receiverDepth - w, sdrate);
+
+	float s = PCFRadius(light_center.y); // IN.BlurSize.x; // 
+	texCoord0.xy += (jitter - 0.5) * s;
+	float dpethbias = s * SHADOW_TEX_SIZE * bias;
+
+	float2 pcf0 = CALC_LIGHT( s, 0, dpethbias);
+	float2 pcf1 = CALC_LIGHT(-s, 0, dpethbias);
+	float2 pcf2 = CALC_LIGHT( 0, s, dpethbias);
+	float2 pcf3 = CALC_LIGHT( 0,-s, dpethbias);
+	float2 light_acc = (pcf0 + pcf1 + pcf2 + pcf3);
+	#if SHADOW_QUALITY >= 2
+	#define SQRT2	1.4142
+	float2 pcf4 = CALC_LIGHT( s, s, dpethbias * SQRT2);
+	float2 pcf5 = CALC_LIGHT(-s, s, dpethbias * SQRT2);
+	float2 pcf6 = CALC_LIGHT( s,-s, dpethbias * SQRT2);
+	float2 pcf7 = CALC_LIGHT(-s,-s, dpethbias * SQRT2);
+	light_acc += (pcf4 + pcf5 + pcf6 + pcf7) * 0.70;
+	const float PCFScale = 1.0 / (1+4+4*0.70);
+	#else
+	const float PCFScale = 1.0 / (1+4);
+	#endif
+
+	light_acc = (light_center + light_acc) * PCFScale;
+	float light = light_acc.x * light_acc.x;
+	float thickness = max(light_acc.y * LightZMax, 0);
+
+	#if ENABLE_LSM > 0
+	light = min(light, tex2D(SSAOWorkSamp, Tex ).x);
+	#endif
+
+	return float4(light, thickness, distanceFromCamera, 1);
+}
+
+
+#if ENABLE_LSM > 0
+//-----------------------------------------------------------------------------
+// LocalShadow
+// ScreenSpaceLocalShadowあるいは、ContactShadow
+
+struct VS_LSM_OUTPUT {
+	float4 Pos		: POSITION;		// 射影変換座標
+	float4 Tex		: TEXCOORD0;	// テクスチャ
+};
+
+VS_LSM_OUTPUT VS_LSM( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_LSM_OUTPUT Out = (VS_LSM_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+	Out.Tex.zw = (Tex.xy * ViewportSize + 0.5) / NOISE_TEXTURE_SIZE; 
+
+	return Out;
+}
+
+float4 PS_LSM( VS_LSM_OUTPUT IN ) : COLOR
+{
+	float2 texCoord = IN.Tex.xy;
+
+	GeometryInfo geom = GetWND(texCoord);
+	float jitter = GetJitterOffset(IN.Tex.zw);
+
+	float depthLimit = 2.0;
+
+	// 光の方向
+	float4 endPos = float4(geom.wpos - LightDirection * depthLimit * 0.5, 1);
+	float4 lpos = mul(endPos, matVP);
+	lpos.xy = lpos.xy / lpos.w * float2(0.5, -0.5) + 0.5;
+
+	#if 1 // 長さの調整。1ステップで1pix以上進むようにする。
+	// TODO: 走査範囲が画面外にでないように補正する
+	float2 v = abs((lpos.xy - texCoord) * ViewportSize);
+	float len = max(v.x, v.y);
+	#if SSAO_QUALITY >= 2
+	len *= GIFrameScale;
+	#endif
+	len = 1.0 / clamp(len / LSMCount, 0.1, 1.0);
+	endPos = float4(geom.wpos - LightDirection * (depthLimit * 0.5 * len), 1);
+	lpos = mul(endPos, matVP);
+	lpos.xy = lpos.xy / lpos.w * float2(0.5, -0.5) + 0.5;
+	#endif
+
+	float endz = mul(endPos, matV).z;
+
+	float3 uvz0 = float3(texCoord, geom.nd.depth);
+	float3 vuvz = float3(lpos.xy, endz) - uvz0;
+	vuvz *= (1.0 / (LSMCount + 1.0));
+
+	#if SSAO_QUALITY >= 2
+	uvz0.xy -= ViewportOffset;
+	uvz0.xy = uvz0.xy * GIFrameScale + (-0.5 * GIFrameScale + 0.5);
+	uvz0.xy += ViewportOffset;
+	vuvz.xy *= GIFrameScale;
+	// 誤差で深度が一致していないことがあるので補正
+	uvz0.z = min(uvz0.z, GetSSAODepth(uvz0.xy));
+	#endif
+
+	float threshold = abs(vuvz.z) * 1.0 + 0.1;
+	uvz0.z -= threshold * 2.0; // bias
+	uvz0 += vuvz;
+	vuvz *= (jitter + 1.0);
+
+	float s = 0;
+	for(int j = 0; j < LSMCount; j++)
+	{
+		float3 uvz1 = uvz0 + vuvz * j;
+		float depth1 = GetSSAODepth(uvz1.xy);
+		s += (abs(uvz1.z - depth1) < threshold);
+	}
+
+	return float4(saturate(1 - s), 0,0,1);
+}
+#endif
+
+
+//-----------------------------------------------------------------------------
+//
+VS_OUTPUT VS_BlurShadow( float4 Pos : POSITION, float2 Tex : TEXCOORD0, uniform bool bBlurX)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+
+	float2 offset = (bBlurX) ? float2(SampStep.x, 0) : float2(0, SampStep.y);
+	offset *= ShadowBlurOffsetScale();
+	Out.Tex.zw = offset;
+	return Out;
+}
+
+// シャドウマップをボカしてノイズを減少させる
+float4 PS_BlurShadow( float4 Tex : TEXCOORD0, uniform sampler smp) : COLOR
+{
+	float2 texCoord = Tex.xy;
+	float2 offset = Tex.zw;
+
+	float3 center = tex2D(smp, texCoord).xyz;
+	float centerDepth = center.z;
+	float depth1 = 100.0;
+	float depthRate = depth1 / max(centerDepth, 1.0);
+
+	float3 sum = float3(center.xy, 1) * BlurWeight[0];
+
+	[unroll] for(int i = 1; i < 8; i++)
+	{
+		float4 uv = offset.xyxy * float4(i,i, -i,-i) + texCoord.xyxy;
+
+		float3 shadowDepthP = tex2D(smp, uv.xy).xyz;
+		float3 shadowDepthN = tex2D(smp, uv.zw).xyz;
+		float2 dd = float2(shadowDepthP.z, shadowDepthN.z) * depthRate - depth1;
+		float2 weight2 = exp2(min(-dd*dd, -epsilon)) * BlurWeight[i];
+		sum += float3(shadowDepthP.xy, 1) * weight2.x;
+		sum += float3(shadowDepthN.xy, 1) * weight2.y;
+	}
+
+	// NOTE: 最終的にG16R16Fに格納されるので深度は捨てられる
+	return float4(sum.xy / sum.z, centerDepth, 1);
+}
+
+//-----------------------------------------------------------------------------
+
+float CalcShadowWithPPos(float4 PPos, SHADOWMAP_LIGHTPARAM param)
+{
+	PPos /= PPos.w;
+	float receiverDepth = PPos.z;					// ライトからの距離
+
+	float4 LightPPos01 = (PPos.xyxy * param.LightParam0 + param.LightParam1);
+	float4 LightPPos23 = (PPos.xyxy * param.LightParam2 + param.LightParam3);
+
+	float4 lightPPos0 = CALC_PPOS(LightPPos01.xy, 0, 0, 1.0 );
+	float4 lightPPos1 = CALC_PPOS(LightPPos01.zw, 1, 0, 0.5 );
+	float4 lightPPos2 = CALC_PPOS(LightPPos23.xy, 0, 1, 0.25);
+	float4 lightPPos3 = CALC_PPOS(LightPPos23.zw, 1, 1, 0.125);
+
+	float4 texCoord0 = -1;
+	texCoord0 = (lightPPos3.w > 0.0) ? lightPPos3 : texCoord0;
+	texCoord0 = (lightPPos2.w > 0.0) ? lightPPos2 : texCoord0;
+	texCoord0 = (lightPPos1.w > 0.0) ? lightPPos1 : texCoord0;
+	texCoord0 = (lightPPos0.w > 0.0) ? lightPPos0 : texCoord0;
+
+	float casterDepth = SHADOW_SAMPLE(LightSamp, texCoord0.xy).x;
+
+//	const float sdrate = 30000.0 / 4.0 - 0.05;
+	const float sdrate = 3000.0 / 4.0 - 0.05;
+	float2 light_center = CalcLight(casterDepth.x, receiverDepth, sdrate);
+	light_center *= (texCoord0.x > -0.1); // valid?
+
+	return light_center.x;
+}
+
+float CalcShadowWithWPos(float3 wpos, VS_SHADOWMAP_OUTPUT IN)
+{
+	float4 PPos = CalcShadowProjectionPosition(wpos, IN.LightMatrix);
+	return CalcShadowWithPPos(PPos, IN.LightParam);
+}

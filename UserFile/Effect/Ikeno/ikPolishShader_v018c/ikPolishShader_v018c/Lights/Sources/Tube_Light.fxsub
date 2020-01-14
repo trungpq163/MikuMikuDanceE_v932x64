@@ -1,0 +1,268 @@
+//-----------------------------------------------------------------------------
+//
+//
+//-----------------------------------------------------------------------------
+
+
+//-----------------------------------------------------------------------------
+
+#define CTRL_NAME	"(self)"
+
+#if !defined(EnableLighTexture)
+#define	EnableLighTexture	0
+#define	TextureSize			256
+#endif
+
+#include "../ikPolishShader.fxsub"
+#include "../Sources/constants.fxsub"
+#include "./Sources/light.fxsub"
+
+float mLightHeight : CONTROLOBJECT < string name = CTRL_NAME; string item = "ライト高+"; >;
+
+/*
+#define LightSizeMin	float2(LightWidthMin, LightHeightMin)
+#define LightSizeV		float2(LightWidthMax, LightHeightMax)
+#define LightSizeMax	(LightSizeMin + LightSizeV)
+static float2 LightSize = float2(0.0, mLightHeight) * LightSizeV + LightSizeMin;
+*/
+#define LightSizeMin	float2(0.1, LightHeightMin)
+#define LightSizeV		float2(0, LightHeightMax)
+#define LightSizeMax	(LightSizeMin + LightSizeV)
+static float2 LightSize = float2(0.0, mLightHeight) * LightSizeV + LightSizeMin;
+
+#define SHADOW_FX_FILE	"./Sources/omni_shadow.fx"
+#define	SHADOW_RT_DESCRIPTION	"shadowmap for tube light"
+
+//-----------------------------------------------------------------------------
+
+#include "../Sources/structs.fxsub"
+#include "../Sources/colorutil.fxsub"
+#include "../Sources/gbuffer.fxsub"
+#include "../Sources/lighting.fxsub"
+#include "../Sources/octahedron.fxsub"
+
+#include "./Sources/omni_common.fxsub"
+#include "./Sources/omni_light.fxsub"
+//#include "./Sources/directional_common.fxsub"
+
+static const float3 LightRight = normalize(-LightObjectMatrix._11_12_13);
+static const float3 LightUp = normalize(-LightObjectMatrix._21_22_23);
+static const float3 LightDirection = normalize(LightObjectMatrix._31_32_33);
+
+
+//-----------------------------------------------------------------------------
+//
+float CalcRectangularAreaLight(float3 wpos, float3 N)
+{
+	float3 v = LightPosition - wpos;
+	float3 p0 = v + LightRight * LightSize.x + LightUp * LightSize.y;
+	float3 p1 = v + LightRight * LightSize.x + LightUp *-LightSize.y;
+	float3 p2 = v + LightRight *-LightSize.x + LightUp *-LightSize.y;
+	float3 p3 = v + LightRight *-LightSize.x + LightUp * LightSize.y;
+
+	float3 v0 = normalize(p0);
+	float3 v1 = normalize(p1);
+	float3 v2 = normalize(p2);
+	float3 v3 = normalize(p3);
+	float fD1 = acos(dot(v0, v1));
+	float fD2 = acos(dot(v1, v2));
+	float fD3 = acos(dot(v2, v3));
+	float fD4 = acos(dot(v3, v0));
+	float3 vCross1 = normalize(cross(v0, v1)) * fD1;
+	float3 vCross2 = normalize(cross(v1, v2)) * fD2;
+	float3 vCross3 = normalize(cross(v2, v3)) * fD3;
+	float3 vCross4 = normalize(cross(v3, v0)) * fD4;
+	float3 unormLightVector = vCross1 + vCross2 + vCross3 + vCross4;
+	// 大きさを変えても強度を変えない
+	float lightDensity = (LightSizeMax.x * LightSizeMax.y) / (LightSize.x * LightSize.y);
+	lightDensity *= 0.25;
+	return saturate(dot(N, unormLightVector) * lightDensity);
+}
+
+float3 GetClosestPosition(float3 wpos)
+{
+	float3 p0 = LightPosition - LightUp * LightSize.y;
+	float3 ab = LightUp * LightSize.y * 2.0;
+	float t = dot(wpos - p0, ab) / dot(ab, ab);
+	return p0 + saturate(t) * ab;
+}
+
+float GetClosestSegment(float3 wpos, float3 r)
+{
+	float3 p0 = LightPosition - LightUp * LightSize.y;
+	float3 p1 = LightPosition + LightUp * LightSize.y;
+	float3 d = p0 - wpos;
+
+	float dru = dot(r, LightUp);
+	float drd = dot(r, d);
+	float dud = dot(LightUp, d);
+	float denom = max(1.0 - dru * dru, 1e-5);	// denom < 0.3 周辺になると精度が落ちる
+	float d2 = (dru * drd - dud) / denom;
+
+	// レイの後ろで交差する場合は、wposとの最近傍点を返す
+	// float d1 = (drd - dru * dud) / denom;
+	if (drd <= dru * dud)
+	{
+		d2 = -dot(d, LightUp);
+	}
+
+	return saturate(d2 / (LightSize.y * 2.0));
+}
+
+float3 GetClosestPosition(float3 wpos, float3 r)
+{
+	float t = GetClosestSegment( wpos, r);
+	float3 closestPoint = LightPosition + LightUp * (LightSize.y * (t * 2.0 - 1.0));
+/*
+	// ライトの半径を考慮して太くする
+	// from epic's siggraph 2013 notes
+	// * Tube Lightsではなく、Sphere Lightsのところに説明がある
+	float3 dir = closestPoint - wpos;
+	float3 centerToRay = dot(dir, r) * r - dir;
+	closestPoint = closestPoint + centerToRay * saturate(LightSize.x / length(centerToRay));
+*/
+	return closestPoint;
+}
+
+
+//-----------------------------------------------------------------------------
+//
+VS_OUTPUT VS_SetTexCoord( float4 Pos : POSITION, float4 Tex : TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.TexCoord = Tex.xy + ViewportOffset.xy;
+	return Out;
+}
+
+
+PS_OUT_MRT PS_DrawLight( float2 Tex: TEXCOORD0, uniform bool useShadow )
+{
+	float4 albedo = tex2D(ColorMap, Tex.xy);
+	MaterialParam material = GetMaterial(Tex.xy, albedo.rgb);
+	GeometryInfo geom = GetWND(Tex.xy);
+	float3 wpos = geom.wpos;
+	float depth = geom.nd.depth;
+
+	float3 V = normalize(CameraPosition - wpos);
+	float3 N = normalize(geom.nd.normal);
+	float3 lv = LightPosition - wpos;
+	float3 L0 = normalize(lv);
+
+	float shadow = 1;
+	if (useShadow) shadow = CalcShadow(float4(wpos,1), dot(N, L0), Tex);
+
+	// 最近傍点
+	float3 closestPos = GetClosestPosition(wpos);
+	lv = closestPos - wpos;
+	float3 L = normalize(lv);
+
+	float falloff = CalcLightFalloff(wpos, closestPos, LightRadius);
+	shadow *= falloff;
+
+	//-----------------------------------------------------
+	// デフューズ
+	float3 diffuse = saturate(dot(N, L));
+	diffuse *= LightColor * MaterialEmissive * shadow;
+
+	//-----------------------------------------------------
+	// スペキュラ
+	float3 R = normalize(reflect(-V, N));
+/*
+	// simple
+	float3 p0 = GetClosestPosition(wpos, R);
+	L = normalize(p0 - wpos);
+	float3 specular = CalcSpecular(L, N, V, material.roughness, material.f0);
+*/
+	// ad-hoc
+	float t = GetClosestSegment(wpos, R);
+	float3 p0 = LightPosition - LightUp * LightSize.y;
+	float3 p1 = LightPosition + LightUp * LightSize.y;
+	p0 = lerp(p0, closestPos, material.roughness);
+	p1 = lerp(p1, closestPos, material.roughness);
+	float3 p2 = lerp(p0, p1, t);
+	float3 L00 = normalize(p0 - wpos);
+	float3 L01 = normalize(p1 - wpos);
+	float3 L02 = normalize(p2 - wpos);
+	float3 specular0 = CalcSpecular(L00, N, V, material.roughness, material.f0);
+	float3 specular1 = CalcSpecular(L01, N, V, material.roughness, material.f0);
+	float3 specular2 = CalcSpecular(L02, N, V, material.roughness, material.f0);
+	float3 specular = (lerp(specular1, specular0, t) + specular2) * 0.5;
+
+/*
+	// ray-march
+	// 線分が長くなると複数の点に見える
+	#define MAX_ITER	8
+	float3 specular = 0;
+{
+	float3 p0 = LightPosition - LightUp * LightSize.y;
+	float3 p1 = LightPosition + LightUp * LightSize.y;
+	for(int i = 0; i < MAX_ITER; i++)
+	{
+		float3 p = p0 + ((p1 - p0) * 1.0 / (MAX_ITER - 1.0)) * i;
+		L = normalize(p - wpos);
+		specular += CalcSpecular(L, N, V, material.roughness, material.f0);
+	}
+	specular *= (1.0 / MAX_DIV);
+}
+*/
+	specular *= LightColor * MaterialEmissive * shadow;
+
+	PS_OUT_MRT Out;
+	Out.Diffuse = float4(diffuse, 1);
+	Out.Specular = float4(specular, 1);
+
+	return Out;
+}
+
+
+//-----------------------------------------------------------------------------
+// 
+
+#if EnableShadowMap > 0
+#define OBJECT_TEC(name, mmdpass) \
+	technique name < string MMDPass = mmdpass; \
+		string Script =  \
+			"RenderDepthStencilTarget=DepthBuffer;" \
+			"RenderColorTarget0=ShadowMap; Pass=ConstructShadow;" \
+			"RenderDepthStencilTarget=;" \
+			"RenderColorTarget1=PPPSpecularMapRT;" \
+			"RenderColorTarget0=; Pass=DrawLight;" \
+			"RenderColorTarget1=;"; \
+	> { \
+		pass ConstructShadow < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			VertexShader = compile vs_3_0 VS_ConstructShadow(); \
+			PixelShader  = compile ps_3_0 PS_ConstructShadow(); \
+		} \
+		pass DrawLight < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			SrcBlend = ONE; DestBlend = ONE; \
+			VertexShader = compile vs_3_0 VS_SetTexCoord(); \
+			PixelShader  = compile ps_3_0 PS_DrawLight(true); \
+		} \
+	}
+#else
+#define OBJECT_TEC(name, mmdpass) \
+	technique name < string MMDPass = mmdpass; \
+		string Script =  \
+			"RenderColorTarget1=PPPSpecularMapRT;" \
+			"Pass=DrawLight;" \
+			"RenderColorTarget1=;"; \
+	> { \
+		pass DrawLight < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			SrcBlend = ONE; DestBlend = ONE; \
+			VertexShader = compile vs_3_0 VS_SetTexCoord(); \
+			PixelShader  = compile ps_3_0 PS_DrawLight(false); \
+		} \
+	}
+#endif
+
+
+OBJECT_TEC(MainTec0, "object")
+OBJECT_TEC(MainTecBS0, "object_ss")
+
+//-----------------------------------------------------------------------------
+

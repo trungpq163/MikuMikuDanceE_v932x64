@@ -1,0 +1,709 @@
+//--------------------------------------------------------------//
+// ikLensGhost 共通処理
+//--------------------------------------------------------------//
+
+float FrameScale = 0.8;
+
+#define	MaskTexSize 256
+#define	MiniMaskTexSize 4
+#define	IntensityTexScale	(1.0/4.0)
+
+float4x4 matView		: VIEW;
+float4x4 matViewProj	: VIEWPROJECTION;
+float4x4 matProj		: PROJECTION;
+
+float2 ViewportSize		: VIEWPORTPIXELSIZE;
+float3 CameraPosition	: POSITION  < string Object = "Camera"; >;
+float3 CameraDirection	: DIRECTION  < string Object = "Camera"; >;
+float3 LightDirection	: DIRECTION < string Object = "Light"; >;
+float3 LightAmbient		: AMBIENT	< string Object = "Light"; >;
+float3 LightDiffuse		: DIFFUSE	< string Object = "Light"; >;
+float4	MaterialDiffuse	: DIFFUSE  < string Object = "Geometry"; >;
+static float4 DiffuseColor = MaterialDiffuse  * float4(LightDiffuse, 1.0f);
+static float3 LightColor = (UseCustomLightColor ? CustomLightColor : LightAmbient);
+
+float AcsScale : CONTROLOBJECT < string name = "(self)"; >;
+float3 AcsPosition : CONTROLOBJECT < string name = "(self)"; >;
+
+float AcsRx : CONTROLOBJECT < string name = "(self)"; string item = "Rx"; >;
+float AcsRy : CONTROLOBJECT < string name = "(self)"; string item = "Ry"; >;
+float AcsRz : CONTROLOBJECT < string name = "(self)"; string item = "Rz"; >;
+//float AcsTr : CONTROLOBJECT < string name = "(self)"; string item = "Tr"; >;
+
+
+#if !defined(USE_LIGHT_POSITION)
+#define USE_LIGHT_POSITION		0
+#endif
+
+#if USE_LIGHT_POSITION > 0
+#define	MASK_EFFECT_FILE	"BlackObject_Light.fx"
+// 光源の位置
+inline float4 GetTargetPosition() { return float4(-LightDirection * 32767,1); }
+#else
+#define	MASK_EFFECT_FILE	"BlackObject.fx"
+inline float4 GetTargetPosition() { return float4(AcsPosition,1); }
+#endif
+
+float4x4 CalcViewProj(float4x4 v, float4x4 p)
+{
+	p._11_22 *= FrameScale;
+	return mul(v, p);
+}
+static float4x4 matMaskViewProj = CalcViewProj(matView, matProj);
+
+float Script : STANDARDSGLOBAL <
+	string ScriptOutput = "color";
+//	string ScriptClass = "scene";
+	string ScriptClass = "sceneorobject";
+	string ScriptOrder = "postprocess";
+> = 0.8;
+
+//-----------------------------------------------------------------------------
+// テクスチャ
+
+texture ObjectMaskRT: OFFSCREENRENDERTARGET <
+	string Description = "Light Mask for ikLensGhost.fx";
+	int Width = MaskTexSize;
+	int Height = MaskTexSize;
+	float4 ClearColor = { 0, 0, 0, 1 };
+	float ClearDepth = 1.0;
+	bool AntiAlias = false;
+	string Format = "R16F" ;
+	string DefaultEffect = 
+		"self = hide;"
+		"ikLensGhost*.x = hide;"
+		"*=" MASK_EFFECT_FILE ";";
+>;
+
+sampler MaskView = sampler_state {
+	texture = <ObjectMaskRT>;
+	Filter = Linear;
+	AddressU = BORDER;
+	AddressV = BORDER;
+	BorderColor = float4(1,0,0,1);
+};
+
+sampler MaskViewClamp = sampler_state {
+	texture = <ObjectMaskRT>;
+	Filter = Linear;
+	AddressU = CLAMP;
+	AddressV = CLAMP;
+};
+
+texture ObjectMaskMini: RENDERCOLORTARGET <
+	int Width = MiniMaskTexSize;
+	int Height = MiniMaskTexSize;
+	bool AntiAlias = true;
+	int MipLevels = 0;
+	string Format = "R16F" ;
+>;
+
+sampler MaskViewMini = sampler_state {
+	texture = <ObjectMaskMini>;
+	Filter = Linear;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+texture IntensityMapTex: RENDERCOLORTARGET <
+	float2 ViewportRatio = {IntensityTexScale, IntensityTexScale};
+	bool AntiAlias = true;
+	string Format = "R16F" ;
+>;
+
+sampler IntensityMap = sampler_state {
+	texture = <IntensityMapTex>;
+	Filter = Linear;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+texture IntensityMapTexBlur: RENDERCOLORTARGET <
+	float2 ViewportRatio = {IntensityTexScale, IntensityTexScale};
+	bool AntiAlias = true;
+	string Format = "R16F" ;
+>;
+
+sampler IntensityMapBlur = sampler_state {
+	texture = <IntensityMapTexBlur>;
+	Filter = Linear;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+texture IntensityMapTexColor: RENDERCOLORTARGET <
+	float2 ViewportRatio = {IntensityTexScale, IntensityTexScale};
+	string Format = "A16B16G16R16F";
+>;
+sampler IntensityMapColor = sampler_state {
+	texture = <IntensityMapTexColor>;
+	Filter = Linear;	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+#if defined(DirtTexName)
+texture IntensityMapTexColor2: RENDERCOLORTARGET <
+	float2 ViewportRatio = {IntensityTexScale * 0.5, IntensityTexScale * 0.5};
+	string Format = "A16B16G16R16F";
+>;
+sampler IntensityMapColor2 = sampler_state {
+	texture = <IntensityMapTexColor2>;
+	Filter = Linear;	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+texture IntensityMapTexColor3: RENDERCOLORTARGET <
+	float2 ViewportRatio = {IntensityTexScale * 0.5, IntensityTexScale * 0.5};
+	string Format = "A16B16G16R16F";
+>;
+sampler IntensityMapColor3 = sampler_state {
+	texture = <IntensityMapTexColor3>;
+	Filter = Linear;	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+#endif
+
+
+texture2D DepthBuffer : RENDERDEPTHSTENCILTARGET <
+	float2 ViewportRatio = {1,1};
+	string Format = "D24S8";
+>;
+
+texture2D DepthBuffer2 : RENDERDEPTHSTENCILTARGET <
+	float2 ViewportRatio = {IntensityTexScale, IntensityTexScale};
+	string Format = "D24S8";
+>;
+
+texture FlareMain_Tex < string ResourceName = FlareMainTexName; >;
+sampler FlareMain = sampler_state
+{
+	Texture = (FlareMain_Tex);
+	ADDRESSU = CLAMP;	ADDRESSV = CLAMP;
+	MAGFILTER = LINEAR;	MINFILTER = LINEAR;	MIPFILTER = LINEAR;
+};
+
+texture FlareSub_Tex < string ResourceName = FlareSubTexName; >;
+sampler FlareSub = sampler_state
+{
+	Texture = (FlareSub_Tex);
+	ADDRESSU = CLAMP;	ADDRESSV = CLAMP;
+	MAGFILTER = LINEAR;	MINFILTER = LINEAR;	MIPFILTER = LINEAR;
+};
+
+#if defined(DirtTexName)
+texture DirtTex < string ResourceName = DirtTexName; >;
+sampler DirtTexSamp = sampler_state
+{
+	Texture = (DirtTex);
+	ADDRESSU = CLAMP;	ADDRESSV = CLAMP;
+	MAGFILTER = LINEAR;	MINFILTER = LINEAR;	MIPFILTER = LINEAR;
+};
+#endif
+
+texture2D ScnMap : RENDERCOLORTARGET <
+	int MipLevels = 1;
+	string Format = "A8R8G8B8" ;
+>;
+sampler2D ScnSamp = sampler_state {
+	texture = <ScnMap>;
+	ADDRESSU = CLAMP;	ADDRESSV = CLAMP;
+	MAGFILTER = LINEAR;	MINFILTER = LINEAR;	MIPFILTER = LINEAR;
+};
+
+
+//-----------------------------------------------------------------------------
+
+//πの値
+#define PI 3.141592635
+//角度をラジアン値に変換
+#define RAD(x) ((x) * PI / 180.0)
+#define DEG(x) ((x) * 180 / PI)
+
+static float LensColorH = saturate(DEG(AcsRx) * 0.01);
+static float LensColorS = saturate(DEG(AcsRy) * 0.01) * 10.0;
+static float LensColorTr = saturate(DEG(AcsRz) * 0.01);
+
+const float gamma = 2.2;
+const float epsilon = 1.0e-6;
+inline float3 Degamma(float3 col) { return pow(max(col,epsilon), gamma); }
+inline float3 Gamma(float3 col) { return pow(max(col,epsilon), 1.0/gamma); }
+inline float4 Degamma4(float4 col) { return float4(Degamma(col.rgb), col.a); }
+inline float4 Gamma4(float4 col) { return float4(Gamma(col.rgb), col.a); }
+
+inline float rgb2gray(float3 rgb)
+{
+	return max(dot(float3(0.299, 0.587, 0.114), rgb), 0);
+}
+
+#define BlurSize 1
+static float2 SampStep = (float2(BlurSize, BlurSize) / (ViewportSize.xy * IntensityTexScale));
+
+static const float BlurWeight[] = {
+	0.0920246,
+	0.0902024,
+	0.0849494,
+	0.0768654,
+	0.0668236,
+	0.0558158,
+	0.0447932,
+	0.0345379,
+};
+
+float4 toProj(float3 tgtpos)
+{
+	// VP変換
+	float4 tgt = mul(float4(tgtpos,1), matViewProj);
+	return float4(tgt.xyz / tgt.w, tgt.w);
+}
+
+//描画するフレアの数
+float FlareNum = 16;
+float WrapFlareNum = 11;	// 後半のレンズフレアを中間に配置する
+
+
+struct VS_OUTPUT {
+	float4 Pos: POSITION;
+	float2 texCoord:	TEXCOORD0;
+	float2 texCoordR:	TEXCOORD1;
+	float2 texCoordB:	TEXCOORD2;
+	float2 texCoordRaw:	TEXCOORD3;
+
+	float3 info:		TEXCOORD4;
+};
+
+float3 ColorEmphasize(float3 original, float rate)
+{
+	float3 col = original;
+	float minChannel = min(col.r, min(col.g, col.b));
+	float maxChannel = max(col.r, max(col.g, col.b));
+	const float e = 1.0e-4;
+
+	minChannel *= rate;
+#if 0
+	col.rgb -= minChannel;
+#else
+	col = col * saturate((col - minChannel + e) / (maxChannel - minChannel + e));
+#endif
+
+	float gray = saturate(rgb2gray(original));
+	float gray0 = rgb2gray(col);
+	float scale = gray / max(gray0, e);
+
+	col = col * scale;
+	return col;
+}
+
+
+float4 hsv2rgb(float3 hsv)
+{
+	float h = frac(hsv.x) * 6.0;
+	float s = hsv.y;
+	float v = hsv.z;
+
+	float i = floor(h);
+	float j = h - i;
+	float m = v * (1.0 - s);
+	float n = v * (1.0 - s * j);
+	float k = v * (1.0 - s * (1.0 - j));
+
+	float3 result = 0;
+	result += float3(v,k,m) * max(1.0 - abs(i - 0), 0);
+	result += float3(n,v,m) * max(1.0 - abs(i - 1), 0);
+	result += float3(m,v,k) * max(1.0 - abs(i - 2), 0);
+	result += float3(m,n,v) * max(1.0 - abs(i - 3), 0);
+	result += float3(k,m,v) * max(1.0 - abs(i - 4), 0);
+	result += float3(v,m,n) * max(1.0 - abs(i - 5), 0);
+
+	return float4(result, 1);
+}
+
+inline float3 AddLensColor(float3 col)
+{
+	float v = rgb2gray(col);
+	float s = LensColorS * v;
+	float3 rgb = hsv2rgb(float3(LensColorH, saturate(1.0 - s * s), v));
+	return lerp(col, rgb, LensColorTr);
+}
+
+
+//-----------------------------------------------------------------------------
+// マスクの縮小
+VS_OUTPUT VS_ReduceMask(float4 Pos: POSITION, float2 Tex: TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	Out.Pos = Pos;
+
+	// 画面中央をサンプリングする
+	float s = MiniMaskTexSize / MaskTexSize;
+	Out.texCoord = ((Tex * 2.0 - 1.0) * s + 1.0) * 0.5;
+	return Out;
+}
+
+float4 PS_ReduceMask(VS_OUTPUT In) : COLOR
+{
+	float mask = tex2D(MaskView, In.texCoord.xy).r;
+	return float4(mask, 0,0,1);
+}
+
+//-----------------------------------------------------------------------------
+// 光の強度マップを作成
+VS_OUTPUT VS_CopyMask(float4 Pos: POSITION, float2 Tex: TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	Out.Pos = Pos;
+	Out.texCoord = Tex;
+
+	// 太陽の位置
+	float4 TgtPos = GetTargetPosition();
+	TgtPos = mul(TgtPos, matMaskViewProj);
+	Out.info.xy = TgtPos.xy / TgtPos.w * float2(0.5, -0.5) + 0.5;
+
+	// ライト自体が隠されていないか?
+	float mask = saturate(1.0 - tex2Dlod(MaskViewMini, float4(0.5,0.5,0,2)).r);
+	if (TgtPos.z < 0) mask = 0; // 裏向き
+	Out.info.z = mask * MaterialDiffuse.a;
+
+	return Out;
+}
+
+// 丸くする
+// アスペクト比を考慮していない
+inline float2 Distortion(float2 uv)
+{
+	//return uv;
+	uv = uv * 2 - 1;
+	float l0 = max(abs(uv.x), abs(uv.y));
+	float l1 = length(uv);
+	uv = uv * lerp(l0, l1, GhostDistortion) / l0;
+	uv = uv * 0.5 + 0.5;
+	return uv;
+}
+
+float4 PS_CopyMask(VS_OUTPUT In) : COLOR
+{
+	float2 uv = Distortion(In.texCoord.xy - (In.info.xy - 0.5));
+
+	float mask = 1.0 - tex2D(MaskViewClamp, uv).r;
+	float d = saturate(1.0 - distance(In.texCoord.xy, In.info.xy) * 2.0);
+	mask *= d;
+
+//	float2 uv2 = 1 - uv;
+	float2 uv2 = Distortion((1-In.texCoord.xy) + saturate(In.info.xy - 0.5));
+	float mask2 = 1.0 - tex2D(MaskView, uv2).r;
+	float d2 = saturate(1.0 - distance(1.0 - In.texCoord.xy, In.info.xy));
+	mask2 *= d2;
+
+	float attenuation = In.info.z;
+	return float4((mask * 0.4 + mask2 * 0.6) * attenuation, 0,0,1);
+}
+
+
+//-----------------------------------------------------------------------------
+// 光の強度マップをボカす
+VS_OUTPUT VS_Blur(float4 Pos: POSITION, float2 Tex: TEXCOORD0, uniform float scale)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+	Out.Pos = Pos;
+	Out.texCoord.xy = Tex + 0.5 / ViewportSize / scale;
+	Out.info.xy = SampStep / scale;
+	return Out;
+}
+
+float4 PS_Blur( VS_OUTPUT In, uniform bool isXBlur, uniform sampler smp) : COLOR
+{
+	float2 TexCoord = In.texCoord;
+	float2 offset = (isXBlur) ? float2(In.info.x, 0) : float2(0, In.info.y);
+
+	float3 sum = tex2D( smp, TexCoord ).rgb * BlurWeight[0];
+	for(int i = 1; i < 8; i++)
+	{
+		float3 col = tex2D(smp, TexCoord + offset * i).rgb +
+					 tex2D(smp, TexCoord - offset * i).rgb;
+		sum += col * BlurWeight[i];
+	}
+
+	return float4(sum, 1);
+}
+
+
+
+//-----------------------------------------------------------------------------
+// レンズフレアの描画
+VS_OUTPUT VS_DrawFlare(float4 Pos: POSITION)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	//IDを計算
+	float id = 100.0 * Pos.z + 0.05;
+
+	float4 TgtPos = GetTargetPosition();
+	float3 LightPos = TgtPos.xyz;
+
+	//光源の位置を2Dに変換
+	float4 tgt2D = toProj(TgtPos);
+	if(tgt2D.w < 0)
+	{
+		return Out;
+	}
+
+	float3 vec = -normalize(tgt2D.xyz);
+
+	float posScale = (0.25 + 0.05 * id) * (AcsScale * 0.1) * 0.5;
+	float2 pos = 0;
+	if((int)id == 1)
+	{
+		Out.info.x = 1.0;
+		posScale *= 5;
+	}else{
+		Out.info.x = 0.0;
+		posScale *= ((id > WrapFlareNum) ? 3.0: 1.0);
+
+		#if defined(MiniSizeFlare) && MiniSizeFlare > 0
+		posScale = (posScale > 0.25) ? posScale * 0.5 : posScale;
+		#endif
+
+		float dist = length(vec.xy);
+		posScale *= (dist * dist + 0.5);
+	}
+	pos = Pos.xy * posScale;
+	pos.y *= (-ViewportSize.x / ViewportSize.y);
+	pos.xy += tgt2D.xy;
+
+	//光源の位置から画面中央に向けてのベクトル
+	float id0 = (id > WrapFlareNum) ? id - 12.2 : id;
+	float s = (id0+0.001) * 0.5 - 0.5;
+	pos.xy += vec.xy * s;
+	Out.Pos = float4(pos.xy, 0, 1);
+
+	float texScale = saturate(id * (1.0 / FlareNum / 0.2) * ColorShiftRate) * 0.05;
+	float texScale0 = 0.45 - texScale;
+	float texScale1 = 0.45 + texScale;
+	float2 skew = vec.xy * float2(ViewportSize.x / ViewportSize.y, -1) * ColorShiftRate * 0.25;
+	float2 offset = float2((int)id % 4, (int)id / 4) * 0.25;
+	Out.texCoordR = saturate(Pos.xy * texScale1 + skew + 0.5) * 0.25 + offset;
+	Out.texCoordB = saturate(Pos.xy * texScale0 - skew + 0.5) * 0.25 + offset;
+	Out.texCoord = Pos.xy * 0.5 + 0.5;
+
+	// 明るさの計算
+	float d = max(dot(normalize(LightPos - CameraPosition), CameraDirection), 0.0001);
+	float len = (id > WrapFlareNum) ? pow(d, 32.0) : pow(d, 4.0);
+	float mask = tex2Dlod(MaskViewMini, float4(0.5,0.5,0,2)).r;
+	Out.info.y = len * MaterialDiffuse.a * saturate(1.0 - mask) * FlareIntensity;
+
+	return Out;
+}
+
+
+float4 PS_DrawFlare(VS_OUTPUT In) : COLOR
+{
+	float4 col = float4(0,0,0,1);
+	bool isMain = (In.info.x != 0);
+	float intensity = In.info.y;
+
+#if 0
+	col = tex2D(FlareSub, In.texCoordB);
+	col.rgb *= (LightColor * 1.0 * intensity);
+#else
+	// 色収差
+	const int MaxStep = 16;
+	float2 vUV = (In.texCoordB - In.texCoordR) / MaxStep;
+	[unroll]
+	for(int i = 0; i <= MaxStep; i++) {
+		float3 tmpCol = Degamma(tex2D(FlareSub, In.texCoordR + vUV * i).rgb);
+		float w = i * (1.0 / MaxStep);
+		float wr = 1 - w;
+		float wg = 1 - abs(w * 2.0 - 1.0);
+		float wb = w;
+		col.rgb += tmpCol * float3(wr, wg, wb);
+	}
+
+	float falloff = 1 - saturate((length(In.texCoord * 2.0 - 1.0) - 0.8) / 0.2);
+	col.rgb *= (LightColor * ((2.0 / MaxStep) * intensity * falloff));
+#endif
+
+	if (isMain)
+	{
+		float3 tmpCol = Degamma(tex2D(FlareMain, In.texCoord).rgb) * intensity * 0.5;
+//		float mask = tex2D(IntensityMap, In.MaskTex.xy).r;
+//		tmpCol.rgb *= saturate(mask * 0.5 + 0.5);
+		col.rgb += tmpCol;
+	}
+
+	col.rgb = ColorEmphasize(col.rgb, ColorEmphasizeRate);
+	col.rgb = Gamma(AddLensColor(col.rgb));
+	return col;
+}
+
+//-----------------------------------------------------------------------------
+// 
+VS_OUTPUT VS_DrawGhost(float4 Pos: POSITION, float2 Tex: TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+	Out.Pos = Pos;
+	Out.texCoord = ((Tex * 2.0 - 1.0) * FrameScale) * 0.5 + 0.5;
+	Out.texCoordRaw = Tex + 0.5 / ViewportSize / IntensityTexScale;
+	return Out;
+}
+
+float4 PS_DrawGhost(VS_OUTPUT In) : COLOR
+{
+	float2 vUv = (In.texCoord.xy * 2.0 - 1.0) * ColorShiftRate;
+	float3 col = 0;
+
+	float2 texCoord = In.texCoord.xy;
+
+	const int MaxStep = 16;
+	[unroll]
+	for(int i = 0; i <= MaxStep; i++) {
+		float w = i * (1.0 / MaxStep);
+		float wr = 1 - w;
+		float wg = 1 - abs(w * 2.0 - 1.0);
+		float wb = w;
+		float3 wrgb = float3(wr, wg, wb);
+
+		float2 uv = texCoord + vUv * (1 - i * 2.0 /  MaxStep);
+		float c = tex2D(IntensityMap, uv).r;
+		col.rgb += c * wrgb;
+	}
+
+	col.rgb *= (2.0 / MaxStep) * float3(1 + ColorShiftRate, 1, 1 - ColorShiftRate);
+
+	return float4(col, 1);
+}
+
+
+//-----------------------------------------------------------------------------
+// レンズの汚れを描画
+VS_OUTPUT VS_DrawLast(float4 Pos: POSITION, float2 Tex: TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+	Out.Pos = Pos;
+	Out.texCoord = ((Tex * 2.0 - 1.0) * FrameScale) * 0.5 + 0.5;
+	Out.texCoordRaw = Tex + 0.5 / ViewportSize.xy;
+
+	return Out;
+}
+
+float4 PS_DrawLast(VS_OUTPUT In) : COLOR
+{
+	float3 col = 0;
+
+	col = tex2D(IntensityMapColor, In.texCoordRaw.xy).rgb;
+
+	#if defined(DirtTexName)
+	float2 dirtUv = In.texCoord.xy * float2(1, ViewportSize.y / ViewportSize.x);
+	float3 dirtBrighness = tex2D(IntensityMapColor3, In.texCoordRaw.xy).rgb;
+	float3 dirtCol = tex2D(DirtTexSamp, dirtUv).rgb;
+	col += dirtBrighness * dirtCol * DirtIntensity;
+	#endif
+
+	col *= (LightColor * (255.0 / 154.0)) * GhostIntensity;
+	col.rgb = ColorEmphasize(col.rgb, ColorEmphasizeRate);
+
+	float3 smpcol = max(tex2D(ScnSamp, In.texCoordRaw).rgb, 0);
+#if 0
+	col.rgb = Gamma(AddLensColor(col.rgb)) + smpcol;
+#else
+	// 明るさを制限する
+	float3 lightcol = Gamma(AddLensColor(col.rgb)) + smpcol;
+	float g0 = rgb2gray(smpcol);
+	float g1 = max(rgb2gray(lightcol), 1e-4);
+	col.rgb = lightcol * lerp(g0 / g1, 1, GhostBrightness);
+#endif
+
+	return float4(col, 1);
+}
+
+
+//-----------------------------------------------------------------------------
+float4 ClearColor = {0,0,0,1};
+float ClearDepth  = 1.0;
+
+technique LensFlare
+<
+	string Script = 
+		"RenderColorTarget0=ScnMap;"
+		"RenderDepthStencilTarget=DepthBuffer;"
+		"ClearSetColor=ClearColor;"
+		"ClearSetDepth=ClearDepth;"
+		"Clear=Color;"
+		"Clear=Depth;"
+		"ScriptExternal=Color;"
+
+		"RenderColorTarget0=ObjectMaskMini;"
+		"RenderDepthStencilTarget=DepthBuffer2;"
+		"Pass=ReduceMask;"
+
+		"RenderColorTarget0=IntensityMapTex;		Pass=CopyMask;"
+		"Clear=Depth;"
+		"Pass=LensFlare;"	// レンズゴーストにも色収差の影響を受けさせる
+
+		"RenderColorTarget0=IntensityMapTexBlur;	Pass=BlurXPass;"
+		"RenderColorTarget0=IntensityMapTex;		Pass=BlurYPass;"
+		"RenderColorTarget0=IntensityMapTexColor;	Pass=DrawGhost;"
+		#if defined(DirtTexName)
+		"RenderColorTarget0=IntensityMapTexColor2;	Pass=BlurX2Pass;"
+		"RenderColorTarget0=IntensityMapTexColor3;	Pass=BlurY2Pass;"
+		#endif
+
+		"RenderColorTarget0=ScnMap;"
+		"RenderDepthStencilTarget=DepthBuffer;"
+		"Clear=Depth;"
+		"Pass=LensFlare;"
+
+		"RenderColorTarget0=;"
+		"RenderDepthStencilTarget=;"
+		"Pass=DrawLast;"
+	;
+>
+{
+	pass ReduceMask < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE;	AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_ReduceMask();
+		PixelShader  = compile ps_3_0 PS_ReduceMask();
+	}
+	pass CopyMask < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE;	AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_CopyMask();
+		PixelShader  = compile ps_3_0 PS_CopyMask();
+	}
+	pass BlurXPass < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE;	AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_Blur(IntensityTexScale * 4.0 / GhostBulriness);
+		PixelShader  = compile ps_3_0 PS_Blur(true, IntensityMap);
+	}
+	pass BlurYPass < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE;	AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_Blur(IntensityTexScale * 4.0 / GhostBulriness);
+		PixelShader  = compile ps_3_0 PS_Blur(false, IntensityMapBlur);
+	}
+
+	pass LensFlare
+	{
+		ZENABLE = TRUE;
+		ZWRITEENABLE = FALSE;
+		CULLMODE = NONE;
+		ALPHABLENDENABLE = TRUE;
+		SRCBLEND = SRCALPHA;
+		DESTBLEND = ONE;
+		VertexShader = compile vs_3_0 VS_DrawFlare();
+		PixelShader = compile ps_3_0 PS_DrawFlare();
+	}
+
+	pass DrawGhost < string Script= "Draw=Buffer;"; >
+	{
+		VertexShader = compile vs_3_0 VS_DrawGhost();
+		PixelShader = compile ps_3_0 PS_DrawGhost();
+	}
+	#if defined(DirtTexName)
+	pass BlurX2Pass < string Script= "Draw=Buffer;"; > {
+		VertexShader = compile vs_3_0 VS_Blur(IntensityTexScale * 0.5);
+		PixelShader  = compile ps_3_0 PS_Blur(true, IntensityMapColor);
+	}
+	pass BlurY2Pass < string Script= "Draw=Buffer;"; > {
+		VertexShader = compile vs_3_0 VS_Blur(IntensityTexScale * 0.5);
+		PixelShader  = compile ps_3_0 PS_Blur(false, IntensityMapColor2);
+	}
+	#endif
+
+	pass DrawLast < string Script= "Draw=Buffer;"; >
+	{
+		VertexShader = compile vs_3_0 VS_DrawLast();
+		PixelShader = compile ps_3_0 PS_DrawLast();
+	}
+}

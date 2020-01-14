@@ -1,0 +1,655 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//	WF_Object.fxsub (針金P)と AL_Object.fxsub (そぼろP)とを合成。
+//	AL_ObjectがMMMに対応していたので部分的にMMM用のコードがあるが、
+//	MMMでの動作は未確認。
+//
+//  WF_Object.fxsub モデルを地面に対して鏡像描画
+//  ( WorkingFloorX.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P( 舞力介入P氏のfull.fx改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#include "ikWetFloorSettings.fxsub"
+
+//テクスチャ高輝度識別フラグ
+// #define TEXTURE_SELECTLIGHT
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+float3 MirrorPos = float3( 0.0, 0.0, 0.0 );    // ローカル座標系における鏡面上の任意の座標(アクセ頂点座標の一点)
+float3 MirrorNormal = float3( 0.0, 1.0, 0.0 ); // ローカル座標系における鏡面の法線ベクトル
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 鏡面座標変換パラメータ
+float4x4 MirrorWorldMatrix: CONTROLOBJECT < string Name = "(OffscreenOwner)"; >; // 鏡面アクセのワールド変換行列
+
+// ワールド座標系における鏡像位置への変換
+static float3 WldMirrorPos = mul( float4(MirrorPos, 1.0f), MirrorWorldMatrix ).xyz;
+static float3 WldMirrorNormal = normalize( mul( MirrorNormal, (float3x3)MirrorWorldMatrix ) );
+
+// 座標の鏡像変換
+float4 TransMirrorPos( float4 Pos )
+{
+    Pos.xyz -= WldMirrorNormal * 2.0f * dot(WldMirrorNormal, Pos.xyz - WldMirrorPos);
+    return Pos;
+}
+
+
+float3 CameraPosition : POSITION  < string Object = "Camera"; >;
+
+// 鏡面表裏判定(座標とカメラが両方鏡面の表側にある時だけ＋)
+float IsFace( float4 Pos )
+{
+    return min( dot(Pos.xyz-WldMirrorPos, WldMirrorNormal),
+                dot(CameraPosition-WldMirrorPos, WldMirrorNormal) );
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座標変換行列
+float4x4 WorldMatrix              : WORLD;
+float4x4 ViewMatrix               : VIEW;
+float4x4 ProjMatrix               : PROJECTION;
+// float4x4 ViewProjMatrix           : VIEWPROJECTION;
+float4x4 CalcViewProjMatrix(float4x4 v, float4x4 p)
+{
+	p._11_22 *= FrameScale;
+	return mul(v, p);
+}
+static float4x4 ViewProjMatrix = CalcViewProjMatrix(ViewMatrix, ProjMatrix);
+
+float4x4 LightWorldViewProjMatrix : WORLDVIEWPROJECTION < string Object = "Light"; >;
+
+float3 LightDirection : DIRECTION < string Object = "Light"; >;
+
+// マテリアル色
+float4 MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+float3 MaterialAmbient   : AMBIENT  < string Object = "Geometry"; >;
+float3 MaterialEmmisive  : EMISSIVE < string Object = "Geometry"; >;
+float3 MaterialSpecular  : SPECULAR < string Object = "Geometry"; >;
+float3 MaterialToon      : TOONCOLOR;
+float4 EdgeColor         : EDGECOLOR;
+float4 GroundShadowColor : GROUNDSHADOWCOLOR;
+// ライト色
+float3 LightDiffuse   : DIFFUSE   < string Object = "Light"; >;
+float3 LightAmbient   : AMBIENT   < string Object = "Light"; >;
+float3 LightSpecular  : SPECULAR  < string Object = "Light"; >;
+static float4 DiffuseColor  = MaterialDiffuse  * float4(LightDiffuse, 1.0f);
+static float3 AmbientColor  = MaterialAmbient  * LightAmbient + MaterialEmmisive;
+static float3 SpecularColor = MaterialSpecular * LightSpecular;
+
+// テクスチャ材質モーフ値
+float4 TextureAddValue  : ADDINGTEXTURE;
+float4 TextureMulValue  : MULTIPLYINGTEXTURE;
+float4 SphereAddValue   : ADDINGSPHERETEXTURE;
+float4 SphereMulValue   : MULTIPLYINGSPHERETEXTURE;
+
+bool use_subtexture;    // サブテクスチャフラグ
+
+bool parthf;   // パースペクティブフラグ
+bool transp;   // 半透明フラグ
+bool spadd;    // スフィアマップ加算合成フラグ
+#define SKII1  1500
+#define SKII2  8000
+#define Toon   3
+
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = LINEAR;
+    ADDRESSU  = WRAP;
+    ADDRESSV  = WRAP;
+};
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+    texture = <ObjectSphereMap>;
+    MINFILTER = POINT;
+    MAGFILTER = POINT;
+    MIPFILTER = NONE;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+};
+sampler ObjSphareSampler2 = sampler_state {
+    texture = <ObjectSphereMap>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = NONE;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+};
+
+// トゥーンマップのテクスチャ
+texture ObjectToonTexture: MATERIALTOONTEXTURE;
+sampler ObjToonSampler = sampler_state {
+    texture = <ObjectToonTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = NONE;
+    ADDRESSU  = CLAMP;
+    ADDRESSV  = CLAMP;
+};
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// AL対応ここから
+
+#define SPECULAR_BASE 100
+#define SYNC false
+
+#define PI 3.14159
+
+#ifdef MIKUMIKUMOVING
+    float SpecularPower    : SPECULARPOWER < string Object = "Geometry"; >;
+    static float materialAlpha = MaterialDiffuse.a;
+#else
+    float4 EgColor; 
+    float4 SpcColor;
+    static float SpecularPower = SpcColor.a;
+    static float materialAlpha = EgColor.a;
+#endif
+
+float LightUp : CONTROLOBJECT < string name = "(self)"; string item = "LightUp"; >;
+float LightUpE : CONTROLOBJECT < string name = "(self)"; string item = "LightUpE"; >;
+float LightOff : CONTROLOBJECT < string name = "(self)"; string item = "LightOff"; >;
+float Blink : CONTROLOBJECT < string name = "(self)"; string item = "LightBlink"; >;
+float BlinkSq : CONTROLOBJECT < string name = "(self)"; string item = "LightBS"; >;
+float BlinkDuty : CONTROLOBJECT < string name = "(self)"; string item = "LightDuty"; >;
+float BlinkMin : CONTROLOBJECT < string name = "(self)"; string item = "LightMin"; >;
+float LClockUp : CONTROLOBJECT < string name = "(self)"; string item = "LClockUp"; >;
+float LClockDown : CONTROLOBJECT < string name = "(self)"; string item = "LClockDown"; >;
+
+//時間
+float ftime : TIME <bool SyncInEditMode = SYNC;>;
+
+static float duty = (BlinkDuty <= 0) ? 0.5 : BlinkDuty;
+static float timerate = ((Blink > 0) ? ((1 - cos(saturate(frac(ftime / (Blink * 10)) / (duty * 2)) * 2 * PI)) * 0.5) : 1.0)
+                      * ((BlinkSq > 0) ? (frac(ftime / (BlinkSq * 10)) < duty) : 1.0);
+static float timerate1 = timerate * (1 - BlinkMin) + BlinkMin;
+
+static float ClockShift = (1 + LClockDown * 5) / (1 + LClockUp * 5);
+
+static bool IsEmittion = (SPECULAR_BASE < SpecularPower)/* && (SpecularPower <= (SPECULAR_BASE + 100))*/ && (length(MaterialSpecular) < 0.01);
+static float EmittionPower0 = IsEmittion ? ((SpecularPower - SPECULAR_BASE) / 7.0) : 1;
+static float EmittionPower1 = EmittionPower0 * (LightUp * 2 + 1.0) * pow(400, LightUpE) * (1.0 - LightOff);
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+float texlight(float3 rgb){
+    float val = saturate((length(rgb) - LightThreshold) * 3);
+    
+    val *= 0.2;
+    
+    return val;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+float3 HSV_to_RGB(float3 hsv){
+    float H = frac(hsv.x);
+    float S = hsv.y;
+    float V = hsv.z;
+    
+    float3 Color = 0;
+    
+    float Hp3 = H * 6.0;
+    float h = floor(Hp3);
+    float P = V * (1 - S);
+    float Q = V * (1 - S * (Hp3 - h));
+    float T = V * (1 - S * (1 - (Hp3 - h)));
+    
+    /*if(h <= 0.01)      { Color.rgb = float3(V, T, P); }
+    else if(h <= 1.01) { Color.rgb = float3(Q, V, P); }
+    else if(h <= 2.01) { Color.rgb = float3(P, V, T); }
+    else if(h <= 3.01) { Color.rgb = float3(P, Q, V); }
+    else if(h <= 4.01) { Color.rgb = float3(T, P, V); }
+    else               { Color.rgb = float3(V, P, Q); }*/
+    
+    Color.rgb += float3(V, T, P) * max(0, 1 - abs(h - 0));
+    Color.rgb += float3(Q, V, P) * max(0, 1 - abs(h - 1));
+    Color.rgb += float3(P, V, T) * max(0, 1 - abs(h - 2));
+    Color.rgb += float3(P, Q, V) * max(0, 1 - abs(h - 3));
+    Color.rgb += float3(T, P, V) * max(0, 1 - abs(h - 4));
+    Color.rgb += float3(V, P, Q) * max(0, 1 - abs(h - 5));
+    
+    return Color;
+}
+
+
+bool DecisionSystemCode(float4 SystemCode){
+    bool val = (0.199 < SystemCode.r) && (SystemCode.r < 0.201)
+            && (0.699 < SystemCode.g) && (SystemCode.g < 0.701);
+    return val;
+}
+
+
+float4 getFlags(float flagcode){
+    float4 val = frac(flagcode * float4(0.1, 0.01, 0.001, 0.0001));
+    val = floor(val * 10 + 0.001);
+    return val;
+}
+
+
+float2 DecisionSequenceCode(float4 color){
+    bool val = (color.r > 0.99) && (abs(color.g - 0.5) < 0.02)
+            && ((color.b < 0.01) || (color.g > 0.99));
+    
+    return float2(val, (color.b < 0.01));
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#ifdef MIKUMIKUMOVING
+
+	inline void GetPositionNormal(MMM_SKINNING_INPUT IN, out float4 p, out float3 n)
+	{
+		MMM_SKINNING_OUTPUT SkinOut = MMM_SkinnedPositionNormal(IN.Pos, IN.Normal, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+		p = SkinOut.Position;
+		n = SkinOut.Normal;
+	}
+
+#else
+    
+    struct MMM_SKINNING_INPUT{
+        float4 Pos : POSITION;
+        float2 Tex : TEXCOORD0;
+        float4 AddUV1 : TEXCOORD1;
+        float4 AddUV2 : TEXCOORD2;
+        float4 AddUV3 : TEXCOORD3;
+        float4 Normal : NORMAL;
+        
+    };
+
+	inline void GetPositionNormal(MMM_SKINNING_INPUT IN, out float4 p, out float3 n)
+	{
+		p = IN.Pos;
+		n = IN.Normal;
+	}
+
+#endif
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウOFF）
+
+struct VS_OUTPUT {
+    float4 Pos       : POSITION;    // 射影変換座標
+    float4 ZCalcTex  : TEXCOORD0;   // Z値
+    float4 Tex       : TEXCOORD1;   // テクスチャ
+    float3 Normal    : TEXCOORD2;   // 法線
+    float3 Eye       : TEXCOORD3;   // カメラとの相対位置
+    float2 SpTex     : TEXCOORD4;   // スフィアマップテクスチャ座標
+    float4 WPos      : TEXCOORD5;   // 鏡像元モデルのワールド座標
+    float4 Color     : COLOR0;      // ディフューズ色
+    float3 Specular  : COLOR1;      // スペキュラ色
+    float4 ColorAL   : COLOR2;      // AL用の色
+};
+
+// 頂点シェーダ(鏡像反転)
+VS_OUTPUT BasicMirror_VS(MMM_SKINNING_INPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	float4 pos;
+	float3 Normal;
+	GetPositionNormal(IN, pos, Normal);
+
+    float4 SystemCode = IN.AddUV1;
+    float4 ColorCode = IN.AddUV2;
+    float4 AppendCode = IN.AddUV3;
+    
+    bool IsALCode = DecisionSystemCode(SystemCode);
+    float4 flags = getFlags(SystemCode.w);
+    
+    // カメラ視点のワールドビュー射影変換
+    // pos.xyz += IsALCode * AppendCode.z * IN.Normal.xyz;
+
+	// NOTE: MMMに対応していない
+    // ライト視点によるワールドビュー射影変換(光源も鏡像化されていることを考慮)
+    Out.ZCalcTex = mul( pos, LightWorldViewProjMatrix );
+
+    // ワールド座標変換
+    pos = mul( pos, WorldMatrix );
+    Out.WPos = pos; // ワールド座標
+
+    // カメラとの相対位置(光源も鏡像化されていることを考慮)
+    Out.Eye = CameraPosition - pos.xyz;
+
+    // 鏡像位置への座標変換
+    pos = TransMirrorPos( pos ); // 鏡像変換
+
+	// NOTE: MMMのMMM_IsDinamicProjectionに対応していない
+    // カメラ視点のビュー射影変換
+    Out.Pos = mul( pos, ViewProjMatrix );
+    Out.Pos.x = -Out.Pos.x; // ポリゴンが裏返らないように左右反転にして描画
+
+    // 頂点法線(光源も鏡像化されていることを考慮)
+    Out.Normal = normalize( mul( Normal, (float3x3)WorldMatrix ) );
+
+    // AL対応
+    #ifndef TEXTURE_SELECTLIGHT
+    Out.ColorAL = MaterialDiffuse;
+    Out.ColorAL.a = materialAlpha;
+    Out.ColorAL.rgb += MaterialEmmisive / 2;
+    Out.ColorAL.rgb *= 0.5;
+    Out.ColorAL.rgb = IsEmittion ? Out.ColorAL.rgb : float3(0,0,0);
+    
+    // 頂点発光 ////////////////////////
+    
+    float3 UVColor = ColorCode.rgb;
+    UVColor = lerp(UVColor, HSV_to_RGB(UVColor), flags.y);
+    UVColor *= ColorCode.a;
+    
+    Out.ColorAL.rgb += IsALCode ? UVColor : float3(0,0,0);
+    
+    float Tv = SystemCode.z * ClockShift;
+    float Ph = AppendCode.y * ClockShift;
+    float timerate2 = (Tv > 0)
+		? ((1 - cos(saturate(frac((ftime + Ph) / Tv) / (duty * 2)) * 2 * PI)) * 0.5)
+		: ((Tv < 0) ? (frac((ftime + Ph) / (-Tv / PI * 180)) < duty) : 1.0);
+    Out.ColorAL.rgb *= max(timerate2 * (1 - BlinkMin) + BlinkMin, !IsALCode);
+    Out.ColorAL.rgb *= max(timerate1, SystemCode.z != 0);
+    #endif
+
+    ////////////////////////
+    
+    Out.Tex.xy = IN.Tex; //テクスチャUV
+    Out.Tex.z = IsALCode * AppendCode.x;
+    Out.Tex.w = IsALCode * flags.x;
+
+
+ 
+   // ディフューズ色＋アンビエント色 計算
+    Out.Color.rgb = AmbientColor;
+    if ( !useToon ) {
+        Out.Color.rgb += max(0, dot( Out.Normal, -LightDirection )) * DiffuseColor.rgb;
+    }
+    Out.Color.a = DiffuseColor.a;
+    Out.Color = saturate( Out.Color );
+
+    if ( useSphereMap ) {
+        if ( use_subtexture ) {
+            // PMXサブテクスチャ座標
+		float2 Tex2 = IN.AddUV1.xy; // TEXCOORD1
+            Out.SpTex = Tex2;
+        } else {
+            // スフィアマップテクスチャ座標(外縁が見えやすくなるので少し補正)
+            float2 NormalWV = mul( Out.Normal, (float3x3)ViewMatrix ).xy * 0.99f;
+            Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+            Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+        }
+    }
+
+
+    #if POPUP_LIGHT
+        Out.Pos.z -= 0.01 * saturate(length(Out.Color.rgb));
+    #endif
+
+    return Out;
+}
+
+
+// シャドウバッファのサンプラ。"register(s0)"なのはMMDがs0を使っているから
+sampler DefSampler : register(s0);
+
+// NOTE: MMMに対応していない
+float CalcShdow(float4 ZCalcTex)
+{
+	float comp = 1;
+
+    // テクスチャ座標に変換
+    ZCalcTex /= ZCalcTex.w;
+    float2 TransTexCoord;
+    TransTexCoord.x = (1.0f + ZCalcTex.x)*0.5f;
+    TransTexCoord.y = (1.0f - ZCalcTex.y)*0.5f;
+    if( any( saturate(TransTexCoord) - TransTexCoord ) ) {
+        // シャドウバッファ外
+        ;
+    } else {
+        if(parthf) {
+            // セルフシャドウ mode2
+            comp=1-saturate(max(ZCalcTex.z-tex2D(DefSampler,TransTexCoord).r , 0.0f)*SKII2*TransTexCoord.y-0.3f);
+        } else {
+            // セルフシャドウ mode1
+            comp=1-saturate(max(ZCalcTex.z-tex2D(DefSampler,TransTexCoord).r , 0.0f)*SKII1-0.3f);
+        }
+    }
+
+	return comp;
+}
+
+// ピクセルシェーダ
+float4 Basic_PS(VS_OUTPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon, uniform bool useSelfshadow) : COLOR0
+{
+    // 鏡面の裏側にある部位は鏡像表示しない
+    clip( IsFace( IN.WPos ) );
+
+    float4 ColorAL = IN.ColorAL;
+    float4 Color = IN.Color;
+    float4 ShadowColor = float4(saturate(AmbientColor), Color.a);  // 影の色
+
+    // 発光シーケンス ////////////////////////
+    
+    #ifndef TEXTURE_SELECTLIGHT
+    if(useSphereMap){
+        //float4 spcolor1 = tex2Dlod(ObjSphareSampler, float4(1,0,0,0));
+        float4 spcolor2 = tex2Dlod(ObjSphareSampler, float4(1,1,0,0));
+        
+        float4 spcolor3 = tex2Dlod(ObjSphareSampler, float4(0,1,0,0));
+        
+        float Ts = spcolor3.r * (255 * 60) + spcolor3.g * 255 + spcolor3.b * (255 / 100.0);
+        Ts *= ClockShift;
+        
+        float t1 = frac((ftime/* + Ph * IsALCode*/) / Ts);
+        float4 spcolor4 = tex2Dlod(ObjSphareSampler, float4(t1 * 0.25,0,0,0));
+        float4 spcolor5 = tex2Dlod(ObjSphareSampler2, float4(t1 * 0.25,0,0,0));
+        
+        float2 sel = DecisionSequenceCode(spcolor2);
+        
+        ColorAL.rgb *= lerp(float3(1,1,1), lerp(spcolor5.rgb, spcolor4.rgb, sel.y), sel.x);
+    }
+    #endif
+    
+    if(useTexture){
+        // テクスチャ適用
+        float4 TexColor = tex2D(ObjTexSampler,IN.Tex.xy);
+        // テクスチャ材質モーフ数
+        TexColor.rgb = lerp(1, TexColor * TextureMulValue + TextureAddValue, TextureMulValue.a + TextureAddValue.a).rgb;
+        Color *= TexColor;
+        ShadowColor *= TexColor;
+
+        float4 texcolor = TexColor;
+        texcolor.rgb = saturate(texcolor.rgb - IN.Tex.z);
+
+        #ifdef TEXTURE_SELECTLIGHT
+            ColorAL = texcolor;
+            ColorAL.rgb *= texlight(ColorAL.rgb);
+        #else
+            float4 Color2, Color3;
+            
+            Color2 = ColorAL * texcolor;
+            Color3 = ColorAL * texcolor;
+            Color3.rgb *= texlight(texcolor.rgb);
+            
+            ColorAL = (IN.Tex.w < 0.1) ? Color2 : ((IN.Tex.w < 1.1) ? ColorAL : Color3);
+        #endif
+    }
+
+	ColorAL.rgb *= (useToon ? EmittionPower1 : EmittionPower0);
+
+	// スペキュラ色計算
+	float3 HalfVector = normalize( normalize(IN.Eye) + -LightDirection );
+	float3 Specular = pow( max(0,dot( HalfVector, normalize(IN.Normal) )), SpecularPower ) * SpecularColor;
+
+    if ( useSphereMap ) {
+        // スフィアマップ適用
+        float4 TexColor = tex2D(ObjSphareSampler,IN.SpTex);
+        // スフィアテクスチャ材質モーフ数
+        TexColor.rgb = lerp(spadd?0:1, TexColor * SphereMulValue + SphereAddValue, SphereMulValue.a + SphereAddValue.a).rgb;
+        if(spadd) {
+            Color.rgb += TexColor.rgb;
+            ShadowColor.rgb += TexColor.rgb;
+        } else {
+            Color.rgb *= TexColor.rgb;
+            ShadowColor.rgb *= TexColor.rgb;
+        }
+        Color.a *= TexColor.a;
+        ShadowColor.a *= TexColor.a;
+    }
+
+	// スペキュラ適用
+	Color.rgb += Specular;
+
+	float comp = (useSelfshadow) ? CalcShdow(IN.ZCalcTex) : 1.0;
+
+	if ( useToon ) {
+		// トゥーン適用
+		comp = min(saturate(dot(IN.Normal,-LightDirection)*Toon),comp);
+		ShadowColor.rgb *= MaterialToon;
+	}
+
+	Color = lerp(ShadowColor, Color, comp);
+
+	return float4(Color.rgb + ColorAL.rgb * AL_Power, Color.a);
+}
+
+
+
+// オブジェクト描画用テクニック（アクセサリ用）
+// 不要なものは削除可
+technique MainTec0 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(false, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, false, false);
+    }
+}
+
+technique MainTec1 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(true, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, false, false);
+    }
+}
+
+technique MainTec2 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(false, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, false, false);
+    }
+}
+
+technique MainTec3 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(true, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, false, false);
+    }
+}
+
+// オブジェクト描画用テクニック（PMDモデル用）
+technique MainTec4 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(false, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, true, false);
+    }
+}
+
+technique MainTec5 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(true, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, true, false);
+    }
+}
+
+technique MainTec6 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(false, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, true, false);
+    }
+}
+
+technique MainTec7 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(true, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, true, false);
+    }
+}
+
+
+// オブジェクト描画用テクニック（アクセサリ用）
+technique MainTecBS0 < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(false, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, false, true);
+    }
+}
+
+technique MainTecBS1 < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(true, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, false, true);
+    }
+}
+
+technique MainTecBS2 < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(false, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, false, true);
+    }
+}
+
+technique MainTecBS3 < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(true, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, false, true);
+    }
+}
+
+// オブジェクト描画用テクニック（PMDモデル用）
+technique MainTecBS4 < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(false, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, true, true);
+    }
+}
+
+technique MainTecBS5 < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(true, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, true, true);
+    }
+}
+
+technique MainTecBS6 < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(false, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, true, true);
+    }
+}
+
+technique MainTecBS7 < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawMirrorObject {
+        VertexShader = compile vs_3_0 BasicMirror_VS(true, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, true, true);
+    }
+}
+
+
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTec < string MMDPass = "shadow"; > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////

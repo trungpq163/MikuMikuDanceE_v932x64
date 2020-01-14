@@ -1,0 +1,217 @@
+
+//-----------------------------------------------------------------------------
+
+// パラメータ宣言
+
+// 座法変換行列
+float4x4 matW	: WORLD;
+float4x4 matWV	: WORLDVIEW;
+float4x4 matWVP	: WORLDVIEWPROJECTION;
+
+// マテリアル色
+float4 MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+float3 MaterialAmbient   : AMBIENT  < string Object = "Geometry"; >;
+float3 MaterialEmissive  : EMISSIVE < string Object = "Geometry"; >;
+float3 MaterialSpecular  : SPECULAR < string Object = "Geometry"; >;
+float3 MaterialToon      : TOONCOLOR;
+
+// テクスチャ材質モーフ値
+float4 TextureAddValue  : ADDINGTEXTURE;
+float4 TextureMulValue  : MULTIPLYINGTEXTURE;
+float4 SphereAddValue   : ADDINGSPHERETEXTURE;
+float4 SphereMulValue   : MULTIPLYINGSPHERETEXTURE;
+
+float3	CameraPosition	: POSITION  < string Object = "Camera"; >;
+float3	LightDirection	: DIRECTION < string Object = "Light"; >;
+
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+shared texture WetClothMaskMap: RENDERCOLORTARGET;
+sampler WetClothMaskSamp = sampler_state {
+	texture = <WetClothMaskMap>;
+	Filter = LINEAR;
+	AddressU = WRAP; AddressV = WRAP;
+};
+
+#ifdef TRANSLUCENCE_MASK
+texture2D TranslucenceMaskMap <
+    string ResourceName = TRANSLUCENCE_MASK;
+>;
+sampler2D TranslucenceMaskSamp = sampler_state {
+	texture = <TranslucenceMaskMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+
+
+#if defined(USE_POLISH_NORMAL) && USE_POLISH_NORMAL > 0
+bool ExistPolish : CONTROLOBJECT < string name = "ikPolishShader.x"; >;
+// 法線マップ
+shared texture PPPNormalMapRT: RENDERCOLORTARGET;
+sampler NormalMap = sampler_state {
+	texture = <PPPNormalMapRT>;
+	Filter = NONE;	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+#endif
+
+
+inline float CalcFresnel(float NV, float F0)
+{
+	// Schlickの近似式
+	return F0 + (1.0 - F0) * pow(1 - NV, 5);
+
+	// ガウシアン球による近似
+	// return F0 + (1.0 - F0) * pow(2, (-5.55473 * NV - 6.98316) * NV);
+
+	// return F0 + (1.0 - F0) * exp(-6.0 * NV);
+}
+
+inline float CalcG1(float NV, float k)
+{
+	return 1.0 / (NV * (1.0 - k) + k);
+}
+
+float CalcSmoothness(float power)
+{
+	// 1に近過ぎると、ピーキーになりすぎてハイライトがでないので、0.2～0.98の間に抑える
+	return saturate((log(power) / log(2) - 1) / 8.0) * 0.96 + 0.02;
+}
+static float Smoothness = CalcSmoothness(SPECULAR_POWER);
+
+//スペキュラの計算
+float CalcSpecular(float3 L, float3 N, float3 V)
+{
+	float3 H = normalize(L + V);	// ハーフベクトル
+	float LH = saturate(dot(L, H));
+	float F = CalcFresnel(LH, 0.05);
+
+#if 1
+	float Specular = max(0,dot( H, N ));
+	float result = pow(Specular, SPECULAR_POWER);
+	return result * (F * 10.0) + F * 0.1; // 適当
+#else
+
+	float a = max(1 - Smoothness, 1e-3);
+	a *= a;
+
+	float NH = saturate(dot(N, H));
+	float NL = saturate(dot(N, L));
+
+	float CosSq = (NH * NH) * (a - 1) + 1;
+	float D = a / (CosSq * CosSq);
+
+	float k2 = a * a * 0.25;	// = (a * 0.5)^2
+	float vis = (1.0/4.0) / (LH * LH * (1 - k2) + k2);
+	return saturate(NL * D * F * vis);
+#endif
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウOFF）
+
+struct VS_OUTPUT
+{
+	float4 Pos		: POSITION;    // 射影変換座標
+	float2 Tex		: TEXCOORD1;
+	float3 Normal	: TEXCOORD2;
+	float3 Eye		: TEXCOORD3;
+	float4 PPos		: TEXCOORD4;
+};
+
+// 頂点シェーダ
+VS_OUTPUT DrawObject_VS(float4 Pos : POSITION, float3 Normal : NORMAL,float2 Tex: TEXCOORD0, uniform bool useTexture)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+	Out.Pos = mul( Pos, matWVP );
+	Out.PPos = Out.Pos;
+	Out.Eye = normalize(CameraPosition - mul( Pos, matW ).xyz);
+
+	Out.Normal = normalize(mul(Normal, (float3x3)matW));
+	Out.Tex = Tex;
+	return Out;
+}
+
+// ピクセルシェーダ
+float4 DrawObject_PS( VS_OUTPUT IN, uniform bool useTexture ) : COLOR
+{
+	float4 Color = saturate( float4(MaterialAmbient + MaterialEmissive, MaterialDiffuse.a));
+	if ( useTexture ) {
+		// テクスチャ適用
+		float4 TexColor = tex2D( ObjTexSampler, IN.Tex );
+/*
+		// 材質モーフ対応
+		float4 MorphColor = TexColor * TextureMulValue + TextureAddValue;
+		float MorphRate = TextureMulValue.a + TextureAddValue.a;
+		TexColor.rgb = lerp(1, MorphColor, MorphRate).rgb;
+*/
+		Color *= TexColor;
+	}
+
+	//
+	float2 wetinfo = tex2D(WetClothMaskSamp, IN.Tex * TEXTURE_LOOP);
+	float wet = (wetinfo.x + wetinfo.y * 0.5);
+
+	// スペキュラ
+	float3 N = normalize(IN.Normal);
+	#if defined(USE_POLISH_NORMAL) && USE_POLISH_NORMAL > 0
+	// 法線マップを流用
+	if (ExistPolish)
+	{
+		float2 uv = IN.PPos.xy / IN.PPos.w * float2(0.5,-0.5) + 0.5;
+		N = normalize(N + tex2D(NormalMap, uv).xyz);
+	}
+	#endif
+
+	float3 V = normalize(IN.Eye);
+	float specular = CalcSpecular(-LightDirection, N, V);
+	specular = (specular * wet + wetinfo.x * 0.05) * SPECULAR_INTENSITY;
+	// 法線が下ならスペキュラを抑える
+	specular *= saturate(1 + N.y);
+
+	// 黒くする
+	float prosity = (1.0 - saturate(wetinfo.y * PROSITY));
+
+	// 透ける
+	float NV = saturate(dot(N,V));
+	float NV5 = max(NV * 2.2 - 1, 0);
+	float translucency = wetinfo.y * TRANSLUCENCE;
+	#ifdef TRANSLUCENCE_MASK
+	translucency *= tex2D(TranslucenceMaskSamp, IN.Tex).r;
+	#endif
+	float translucence = saturate(translucency * NV5);
+
+	Color.rgb = float3(specular, prosity, translucence);
+
+	return Color;
+}
+
+
+#define OBJECT_TEC(name, mmdpass, tex) \
+	technique name < string MMDPass = mmdpass; bool UseTexture = tex; > { \
+		pass DrawObject { \
+			VertexShader = compile vs_3_0 DrawObject_VS(tex); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(tex); \
+		} \
+	}
+
+
+OBJECT_TEC(MainTec0, "object", false)
+OBJECT_TEC(MainTec1, "object", true)
+OBJECT_TEC(MainTecBS0, "object_ss", false)
+OBJECT_TEC(MainTecBS1, "object_ss", true)
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTech < string MMDPass = "shadow";  > {}
+
+///////////////////////////////////////////////////////////////////////////////////////////////

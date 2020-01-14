@@ -1,0 +1,118 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Flocking_Obj.fx  フロッキングアルゴリズムを使った群れ行動制御(複製モデルに適用)
+//  作成: 針金P( 舞力介入P氏のfull.fx改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ここのパラメータを変更してください
+
+int ObjCount = 200;  // モデル複製数(Flocking.fxと同じ値にする必要あり)
+
+
+// 解らない人はここから下はいじらないでね
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+int ObjIndex;  // 複製モデルカウンタ
+
+#define TEX_WIDTH_W   4            // ユニット配置変換行列テクスチャピクセル幅
+#define TEX_WIDTH     1            // ユニットデータ格納テクスチャピクセル幅
+#define TEX_HEIGHT 1024            // ユニットデータ格納テクスチャピクセル高さ
+
+#if ENABLE_COLOR > 0
+float4x4 LightViewProjMatrix : VIEWPROJECTION < string Object = "Light"; >;
+float3 LightDirection    : DIRECTION < string Object = "Light"; >;
+bool use_subtexture;    // サブテクスチャフラグ
+#endif
+
+// ユニット配置変換行列が記録されているテクスチャ
+shared texture Flocking_TransMatrixTex : RENDERCOLORTARGET
+<
+   int Width=TEX_WIDTH_W;
+   int Height=TEX_HEIGHT;
+   string Format="A32B32G32R32F";
+>;
+sampler TransMatrixSmp : register(s3) = sampler_state
+{
+   Texture = <Flocking_TransMatrixTex>;
+   AddressU  = CLAMP;
+   AddressV = CLAMP;
+   MinFilter = NONE;
+   MagFilter = NONE;
+   MipFilter = NONE;
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// モデルの配置変換行列
+float4x4 SetTransMatrix()
+{
+    int i = (ObjIndex / TEX_HEIGHT) * 4;
+    int j = ObjIndex % TEX_HEIGHT;
+    float y = (j+0.5f)/TEX_HEIGHT;
+
+    // モデルの配置変換行列
+    return float4x4( tex2Dlod(TransMatrixSmp, float4((i+0.5f)/TEX_WIDTH_W, y, 0, 0)), 
+                     tex2Dlod(TransMatrixSmp, float4((i+1.5f)/TEX_WIDTH_W, y, 0, 0)), 
+                     tex2Dlod(TransMatrixSmp, float4((i+2.5f)/TEX_WIDTH_W, y, 0, 0)), 
+                     tex2Dlod(TransMatrixSmp, float4((i+3.5f)/TEX_WIDTH_W, y, 0, 0)) );
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define LOOPSCRIPT_OBJECT       "LoopByCount=ObjCount; LoopGetIndex=ObjIndex; Pass=Basic; LoopEnd=;"
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウON）
+
+// 頂点シェーダ
+VS_OUTPUT Basic_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, float2 Tex2 : TEXCOORD1, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    // 複製モデルの配置座標変換
+    float4x4 TransMatrix = mul( WorldMatrix, SetTransMatrix());
+    Pos = mul( Pos, TransMatrix );
+
+	// 鏡面化など。
+	GetWorldPosition(Pos, Out);
+
+    // テクスチャ座標
+    Out.Tex.xy = Tex;
+
+    // 配置座標変換による頂点法線
+    Out.Normal = normalize( mul( Normal, (float3x3)TransMatrix ) );
+
+
+	// デプスの出力だけなら色関連を出力する必要は無い
+	#if ENABLE_COLOR > 0
+	    // カメラとの相対位置
+	    Out.Eye = CameraPosition - Pos.xyz;
+
+	    // ライト視点によるビュー射影変換
+	    Out.ZCalcTex = mul( Pos, LightViewProjMatrix );
+
+	    // ディフューズ色＋アンビエント色 計算
+	    Out.Color.rgb = AmbientColor;
+	    if ( !useToon ) {
+	        Out.Color.rgb += max(0, dot( Out.Normal, -LightDirection )) * DiffuseColor.rgb;
+	    }
+	    Out.Color.a = DiffuseColor.a;
+	    Out.Color = saturate( Out.Color );
+
+	    if ( useSphereMap ) {
+	        if ( use_subtexture ) {
+	            // PMXサブテクスチャ座標
+	            Out.SpTex = Tex2;
+	        } else {
+	            // スフィアマップテクスチャ座標
+	            float2 NormalWV = mul( Out.Normal, (float3x3)ViewMatrix ).xy;
+	            Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+	            Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+	        }
+	    }
+	#endif
+
+    return Out;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////

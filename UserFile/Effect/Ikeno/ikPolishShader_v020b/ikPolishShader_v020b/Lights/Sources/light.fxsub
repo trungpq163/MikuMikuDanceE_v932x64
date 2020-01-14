@@ -1,0 +1,121 @@
+// 追加ライトの共通処理
+
+//float4x4 matW			: WORLD;
+float4x4 matVP			: VIEWPROJECTION;
+float4x4 matP			: PROJECTION;
+float4x4 matInvVP		: VIEWPROJECTIONINVERSE;
+
+float3	MaterialEmissive	: EMISSIVE < string Object = "Geometry"; >;
+
+//float4x4 LightObjectMatrix : CONTROLOBJECT < string name = CTRL_NAME; string item = "全ての親"; >;
+
+float mLightIntensityP : CONTROLOBJECT < string name = CTRL_NAME; string item = "ライト強度+"; >;
+float mLightIntensityN : CONTROLOBJECT < string name = CTRL_NAME; string item = "ライト強度-"; >;
+float mLightDistance : CONTROLOBJECT < string name = CTRL_NAME; string item = "ライト距離"; >;
+
+//float3 CameraPosition	: POSITION  < string Object = "Camera"; >;
+
+static float LightRadius = lerp(LightDistanceMax, LightDistanceMin, sqrt(mLightDistance));
+static float3 LightColor = (mLightIntensityP * (MaxLightIntensity - 1) + 1.0) * saturate(1.0 - mLightIntensityN);
+
+// スクリーンサイズ
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+static float2 ViewportOffset = (float2(0.5,0.5)/ViewportSize);
+
+static float MaxLod = log2(TextureSize);
+
+
+//-----------------------------------------------------------------------------
+
+// 光源用テクスチャ
+#if EnableLighTexture > 0
+#if defined(USE_SCREEN_BMP) && USE_SCREEN_BMP > 0
+shared texture SavedScreen: RENDERCOLORTARGET;
+sampler LightSamp = sampler_state {
+	texture = <SavedScreen>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU  = CLAMP; AddressV  = CLAMP;
+};
+#else
+texture ObjectTexture: MATERIALTEXTURE;
+sampler LightSamp = sampler_state {
+	texture = <ObjectTexture>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU  = CLAMP; AddressV  = CLAMP;
+};
+#endif
+#endif
+
+shared texture ColorMapRT: OFFSCREENRENDERTARGET;
+shared texture PPPMaterialMapRT: RENDERCOLORTARGET;
+shared texture PPPNormalMapRT: RENDERCOLORTARGET;
+shared texture PPPSpecularMapRT: RENDERCOLORTARGET;
+
+sampler ColorMap = sampler_state {
+	texture = <ColorMapRT>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+sampler MaterialMap = sampler_state {
+	texture = <PPPMaterialMapRT>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+sampler NormalSamp = sampler_state {
+	texture = <PPPNormalMapRT>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+
+//-----------------------------------------------------------------------------
+
+struct VS_OUTPUT
+{
+	float4 Pos			: POSITION;
+	float2 TexCoord		: TEXCOORD0;
+};
+
+struct PS_OUT_MRT
+{
+	float4 Diffuse		: COLOR0;
+	float4 Specular		: COLOR1;
+};
+
+
+//-----------------------------------------------------------------------------
+
+float3 MorphColor(float3 Color)
+{
+	return MaterialEmissive * Color;
+		// lerp(1, Color * TextureMulValue.rgb + TextureAddValue.rgb, TextureMulValue.a + TextureAddValue.a);
+}
+
+
+float GetEdgeFallOff(float2 coord, float lod, float textureSize)
+{
+	float size = saturate(max(exp2(lod), 1) / textureSize);
+
+	float2 uv = coord * 2 - 1;
+	float2 minPos = max(-1, uv - size * 0.5); // left top
+	float2 maxPos = min( 1, uv + size * 0.5); // right bottom
+	float2 texelSize = max(maxPos - minPos, 0);
+
+	float totalArea = size * size;
+	float texelArea = texelSize.x * texelSize.y;
+	return texelArea / totalArea;
+}
+
+
+// ライト平面とベクトルの交点を求める
+float3 LightPlaneIntersect(float3 lightPos, float3 lightDirection, float3 pos, float3 v)
+{
+	float d = dot(v, lightDirection);
+	d = (abs(d) < 1e-6) ? 1e-6 : d;
+	return pos + v * (dot(lightPos - pos, lightDirection) / d);
+}
+
+float CalcShadowRate(float blocker, float receiver, float bias)
+{
+	return saturate(blocker - receiver - bias);
+}

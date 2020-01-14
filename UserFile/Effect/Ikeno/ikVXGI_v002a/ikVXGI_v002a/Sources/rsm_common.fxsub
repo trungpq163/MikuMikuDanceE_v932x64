@@ -1,0 +1,87 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+//-----------------------------------------------------------------------------
+//
+
+#define	RSM_ShadowSize	(FarDepth * 1.42)	// 計算範囲：小さいほど範囲が狭くなる
+#define	RSM_CameraDistance	(FarDepth * 1.5)	// 中心位置からカメラまでの距離
+//#define	RSM_CameraDistance	(500.0)	// 中心位置からカメラまでの距離
+
+#define	RSM_ZNear	1.0
+#define	RSM_ZFar	(RSM_CameraDistance * 2.0)
+
+
+// ViewMatrixの逆行列からViewMatrixを計算する
+float4x4 CalcViewMatrixFromInverseViewMatrix(float4x4 mat)
+{
+	float3x3 matRot = transpose((float3x3)mat);
+	return float4x4(
+		matRot[0], 0,
+		matRot[1], 0,
+		matRot[2], 0,
+		mul(-mat._41_42_43, matRot), 1);
+}
+
+// ライト用のViewMatrix
+float4x4 GetLightInverseViewMatrix(float3 dir, float3 up, float3 target)
+{
+	float3x3 mat;
+
+	mat[2].xyz = dir;
+	mat[0].xyz = normalize(cross(up, dir));
+	// up == dirの場合、upを適当な位置に置き換える必要がある。
+	mat[1].xyz = normalize(cross(dir, mat[0].xyz));
+
+	float3 pos = target - dir * RSM_CameraDistance; // カメラ位置を適当に離す
+
+	return float4x4(
+		mat[0], 0,
+		mat[1], 0,
+		mat[2], 0,
+		pos, 1);
+}
+
+// VPL用のViewMatrix。posの位置そのままにカメラを置く
+float4x4 GetVPLInverseViewMatrix(float3 dir, float3 up, float3 pos)
+{
+	float3x3 mat;
+	mat[2].xyz = dir;
+	mat[0].xyz = normalize(cross(up, dir));
+	// up == dirの場合、upを適当な位置に置き換える必要がある。
+	mat[1].xyz = normalize(cross(dir, mat[0].xyz));
+
+	return float4x4(
+		mat[0], 0,
+		mat[1], 0,
+		mat[2], 0,
+		pos, 1);
+}
+
+float4x4 GetLightProjMatrix()
+{
+	const float Sz = 1.0 / (RSM_ZFar - RSM_ZNear);
+	const float Sw = RSM_ZNear / (RSM_ZNear - RSM_ZFar);
+	const float Sx = 2 / RSM_ShadowSize;
+
+	float4x4 out1 = {
+		Sx,0 ,0 ,0,
+		0 ,Sx,0 ,0,
+		0 ,0 ,Sz,0,
+		0 ,0 ,Sw,1
+	};
+
+	return out1;
+}
+
+static float4x4 matLightInvV = GetLightInverseViewMatrix(LightDirection, float3(0,0,1), CenterPosition);
+static float4x4 matLightV = CalcViewMatrixFromInverseViewMatrix(matLightInvV);
+
+static float4x4 matLightP = GetLightProjMatrix();
+static float4x4 matLightVP = mul(matLightV, matLightP);
+
+//-----------------------------------------------------------------------------
+
