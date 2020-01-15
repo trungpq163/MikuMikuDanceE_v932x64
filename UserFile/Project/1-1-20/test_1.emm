@@ -6,6 +6,14 @@ Acs1 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\ray.x
 Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Skybox\Time of day\Time of day.pmx
 Pmd3 = UserFile\Stage\jMatt379\Stage003\Stage003\Stage003.pmx
 Pmd4 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\ray_controller.pmx
+Pmd5 = D:\Home\Design\MikuMikuDanceE_v931x64\UserFile\Model\samsink\TDAVer1.00\TDA ver1.00.pmx
+Pmd6 = UserFile\Effect\Ikeno\ikBokeh_v017\ikBokeh_v017\ikBokehController.pmx
+Pmd7 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Extension\LightBloom\LightBloom\LightBloomController.pmx
+Acs8 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Extension\FXAA\FXAA.x
+Acs9 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Extension\SMAA\SMAA.x
+Acs10 = UserFile\Effect\Ikeno\ikBokeh_v017\ikBokeh_v017\ikBokeh.x
+Acs11 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Extension\LightBloom\LightBloom\LightBloom with DirtMap.x
+Acs12 = UserFile\Effect\GABAmanP\CameraScreen\CameraScreen.x
 
 [Effect]
 Default = none
@@ -14,6 +22,10 @@ Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Main\main.fx
 Pmd3.show = true
 Pmd4 = none
 Pmd4.show = false
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Main\main.fx
+Pmd5.show = true
+Pmd6 = none
+Pmd7 = none
 
 [Effect@EnvLightMap]
 Owner = Acs1
@@ -24,6 +36,17 @@ Pmd3 = none
 Pmd3.show = false
 Pmd4 = none
 Pmd4.show = false
+Pmd5 = none
+Pmd5.show = false
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Acs8.show = false
+Acs9.show = false
+Acs10.show = false
+Acs11.show = false
+Acs12.show = false
 
 [Effect@FogMap]
 Owner = Acs1
@@ -34,6 +57,17 @@ Pmd3 = none
 Pmd3.show = false
 Pmd4 = none
 Pmd4.show = false
+Pmd5 = none
+Pmd5.show = false
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Acs8.show = false
+Acs9.show = false
+Acs10.show = false
+Acs11.show = false
+Acs12.show = false
 
 [Effect@LightMap]
 Owner = Acs1
@@ -44,6 +78,17 @@ Pmd3 = none
 Pmd3.show = false
 Pmd4 = none
 Pmd4.show = false
+Pmd5 = none
+Pmd5.show = false
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Acs8.show = false
+Acs9.show = false
+Acs10.show = false
+Acs11.show = false
+Acs12.show = false
 
 [Effect@MaterialMap]
 Owner = Acs1
@@ -51,10 +96,29 @@ Acs1.show = false
 Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\material_skybox.fx
 Pmd2.show = true
 Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\materials\material_2.0.fx
-Pmd3[0] = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\Materials by TheSodaWave N1\Lava_005_SD.fx
-Pmd3[20] = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\Materials by TheSodaWave N1\Lava_005_SD.fx
+Pmd3[0] = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\Rain\RainRadio - Copy.fx
+Pmd3[20] = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\Toon_RC\Toon_Stone.fx
+Pmd3[27] = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\Toon_RC\Toon_Stone.fx
+Pmd3[28] = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\Toon_RC\Toon_Stone.fx
+Pmd3[29] = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\Toon_RC\Toon_Stone.fx
+Pmd3[29].show = true
+Pmd3[30] = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\Toon_RC\Toon_Stone.fx
+Pmd3[30].show = true
+Pmd3[31] = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\Toon_RC\Toon_Stone.fx
+Pmd3[32] = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\Toon_RC\Toon_Stone.fx
+Pmd3[32].show = true
 Pmd4 = none
 Pmd4.show = false
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\materials\material_2.0.fx
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Acs8.show = false
+Acs9.show = false
+Acs10.show = false
+Acs11.show = false
+Acs12.show = false
 
 [Effect@PSSM1]
 Owner = Acs1
@@ -63,6 +127,16 @@ Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM1.fx
 Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM1.fx
 Pmd4 = none
 Pmd4.show = false
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM1.fx
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Acs8.show = false
+Acs9.show = false
+Acs10.show = false
+Acs11.show = false
+Acs12.show = false
 
 [Effect@PSSM2]
 Owner = Acs1
@@ -71,6 +145,16 @@ Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM2.fx
 Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM2.fx
 Pmd4 = none
 Pmd4.show = false
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM2.fx
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Acs8.show = false
+Acs9.show = false
+Acs10.show = false
+Acs11.show = false
+Acs12.show = false
 
 [Effect@PSSM3]
 Owner = Acs1
@@ -79,6 +163,16 @@ Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM3.fx
 Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM3.fx
 Pmd4 = none
 Pmd4.show = false
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM3.fx
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Acs8.show = false
+Acs9.show = false
+Acs10.show = false
+Acs11.show = false
+Acs12.show = false
 
 [Effect@PSSM4]
 Owner = Acs1
@@ -87,6 +181,16 @@ Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM4.fx
 Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM4.fx
 Pmd4 = none
 Pmd4.show = false
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM4.fx
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Acs8.show = false
+Acs9.show = false
+Acs10.show = false
+Acs11.show = false
+Acs12.show = false
 
 [Effect@SSAOMap]
 Owner = Acs1
@@ -95,4 +199,30 @@ Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\SSAO visibility 1.0.fx
 Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\SSAO visibility 1.0.fx
 Pmd4 = none
 Pmd4.show = false
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\SSAO visibility 1.0.fx
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Acs8.show = false
+Acs9.show = false
+Acs10.show = false
+Acs11.show = false
+Acs12.show = false
+
+[Effect@LinearDepthMapRT]
+Owner = Acs10
+Acs1.show = false
+Pmd2 = UserFile\Effect\Ikeno\ikBokeh_v017\ikBokeh_v017\ikDepth.fx
+Pmd3 = UserFile\Effect\Ikeno\ikBokeh_v017\ikBokeh_v017\ikDepth.fx
+Pmd4 = UserFile\Effect\Ikeno\ikBokeh_v017\ikBokeh_v017\ikDepth.fx
+Pmd5 = UserFile\Effect\Ikeno\ikBokeh_v017\ikBokeh_v017\ikDepth.fx
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = UserFile\Effect\Ikeno\ikBokeh_v017\ikBokeh_v017\ikDepth.fx
+Acs8.show = false
+Acs9.show = false
+Acs10.show = false
+Acs11.show = false
+Acs12.show = false
 
