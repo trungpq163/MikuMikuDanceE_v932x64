@@ -127,4 +127,4 @@ static const float customAMapLoopNum = mCustomALoops;
 static const float3 customB = mCustomBColor;
 static const float2 customBMapLoopNum = mCustomBLoops;
 
-#include "../material_common_2.0.fxsub"
+#include "../../../material_common_2.0.fxsub"
