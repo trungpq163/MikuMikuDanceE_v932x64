@@ -100,7 +100,7 @@ const float parallaxMapLoopNum = 1.0;
 
 const float3 emissive = float3(0.0, 0.5, 1.0);
 const float3 emissiveBlink = 1.0;
-const float  emissiveIntensity = 0.8;
+const float  emissiveIntensity = 0.675;
 const float2 emissiveMapLoopNum = 1.0;
 
 #define CUSTOM_ENABLE 0
