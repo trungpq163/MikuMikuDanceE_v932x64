@@ -1,0 +1,370 @@
+//=============================================================================
+// 雑用処理
+//=============================================================================
+
+
+static const float BlurWeight[] = {
+	0.0920246,
+	0.0902024,
+	0.0849494,
+	0.0768654,
+	0.0668236,
+	0.0558158,
+	0.0447932,
+	0.0345379,
+};
+
+
+static float2 Directions[16] = {
+	// theta, phi / phi scale
+	// 1:5:5:5
+	float2(2.5 / 4, 2.5 / (5 * (2.0 * PI))),		// 8
+	float2(3.5 / 4, 0.0 / (5 * (2.0 * PI))),		// 11
+	float2(3.5 / 4, 3.0 / (5 * (2.0 * PI))),		// 14
+	float2(1.0 / 4, 0.0 / (5 * (2.0 * PI))),		// 1
+
+	float2(3.5 / 4, 1.0 / (5 * (2.0 * PI))),		// 12
+	float2(1.0 / 4, 4.0 / (5 * (2.0 * PI))),		// 5
+	float2(1.0 / 4, 1.0 / (5 * (2.0 * PI))),		// 2
+	float2(2.5 / 4, 3.5 / (5 * (2.0 * PI))),		// 9
+
+	float2(2.5 / 4, 4.5 / (5 * (2.0 * PI))),		// 10
+	float2(0.0 / 4, 0.0 / (1 * (2.0 * PI))),		// 0
+	float2(2.5 / 4, 1.5 / (5 * (2.0 * PI))),		// 7
+	float2(3.5 / 4, 2.0 / (5 * (2.0 * PI))),		// 13
+
+	float2(2.5 / 4, 0.5 / (5 * (2.0 * PI))),		// 6
+	float2(1.0 / 4, 2.0 / (5 * (2.0 * PI))),		// 3
+	float2(3.5 / 4, 4.0 / (5 * (2.0 * PI))),		// 15
+	float2(1.0 / 4, 3.0 / (5 * (2.0 * PI))),		// 4
+};
+
+#if DIRECTION_NUM == 16
+static float3 Spherical3Design[16] = {
+	float3( 0,                      0,                      1),
+	float3( 9.813897369812211e-001,                      0,-1.920265193871140e-001),
+	float3(-1.404878717487915e-001, 9.683789566971358e-001,-2.061682665146648e-001),
+	float3(-8.048502147502901e-001, 5.615531565833036e-001,-1.920265193866193e-001),
+	float3( 6.438346861947042e-001,-7.327789072695818e-001,-2.202543300672303e-001),
+	float3(-6.536769348168402e-001, 4.405166561051311e-001, 6.153466832464559e-001),
+	float3(-6.551825742451257e-001,-5.282304876156394e-001, 5.401003113856483e-001),
+	float3(-2.982440074825031e-001,-9.486819819002295e-001,-1.051332926271663e-001),
+	float3( 2.350690344157516e-001,-8.081053165893177e-001, 5.401003113856950e-001),
+	float3(-4.347705086793823e-001,-2.006980108901172e-001,-8.778923129902788e-001),
+	float3( 7.881532799673002e-001,-1.276192362037490e-002, 6.153466832463584e-001),
+	float3( 2.417210276438635e-001,-4.133715418206754e-001,-8.778923129903760e-001),
+	float3( 1.485709752546423e-001, 4.725882288370747e-001,-8.686696905478637e-001),
+	float3(-9.473145671586647e-001,-2.325578227788996e-001,-2.202543300671519e-001),
+	float3( 6.693242540619601e-001, 7.137924690042015e-001,-2.061682665137557e-001),
+	float3( 2.264636843621526e-001, 7.203565252579931e-001, 6.555918518280636e-001)
+};
+#else
+static float2 Directions14[14] = {
+	// theta, phi / phi scale
+	// 1:4:4:5
+	float2(0.0 / 4, 0.0 / (1 * (2.0 * PI))),
+
+	float2(1.0 / 4, 0.5 / (4 * (2.0 * PI))),
+	float2(1.0 / 4, 1.5 / (4 * (2.0 * PI))),
+	float2(1.0 / 4, 2.5 / (4 * (2.0 * PI))),
+	float2(1.0 / 4, 3.5 / (4 * (2.0 * PI))),
+
+	float2(2.0 / 4, 0.0 / (4 * (2.0 * PI))),
+	float2(2.0 / 4, 1.0 / (4 * (2.0 * PI))),
+	float2(2.0 / 4, 2.0 / (4 * (2.0 * PI))),
+	float2(2.0 / 4, 3.0 / (4 * (2.0 * PI))),
+
+	float2(3.0 / 4, 0.15/ (5 * (2.0 * PI))),
+	float2(3.0 / 4, 1.15/ (5 * (2.0 * PI))),
+	float2(3.0 / 4, 2.15/ (5 * (2.0 * PI))),
+	float2(3.0 / 4, 3.15/ (5 * (2.0 * PI))),
+	float2(3.0 / 5, 4.15/ (5 * (2.0 * PI))),
+};
+
+static float3 Spherical3Design[14] = {
+	float3( 1,0,0),
+	float3(-1,0,0),
+	float3(0, 1,0),
+	float3(0,-1,0),
+	float3(0,0, 1),
+	float3(0,0,-1),
+
+	float3( INVSQRT3, INVSQRT3, INVSQRT3),
+	float3(-INVSQRT3, INVSQRT3, INVSQRT3),
+	float3( INVSQRT3,-INVSQRT3, INVSQRT3),
+	float3(-INVSQRT3,-INVSQRT3, INVSQRT3),
+
+	float3( INVSQRT3, INVSQRT3,-INVSQRT3),
+	float3(-INVSQRT3, INVSQRT3,-INVSQRT3),
+	float3( INVSQRT3,-INVSQRT3,-INVSQRT3),
+	float3(-INVSQRT3,-INVSQRT3,-INVSQRT3),
+};
+#endif
+
+static float2 JitterPositions[25] = {
+	float2(-0.16666666,0.0),
+	float2(0.16666669,-0.25),
+	float2(-0.3888889,0.25),
+	float2(-0.055555552,-0.375),
+	float2(0.2777778,0.125),
+	float2(-0.2777778,-0.125),
+	float2(0.055555582,0.375),
+	float2(0.3888889,-0.4375),
+	float2(-0.46296296,0.0625),
+	float2(-0.12962964,-0.1875),
+	float2(0.2037037,0.3125),
+	float2(-0.35185185,-0.3125),
+	float2(-0.018518507,0.1875),
+	float2(0.3148148,-0.0625),
+	float2(-0.24074075,0.4375),
+	float2(0.0925926,-0.46875),
+	float2(0.4259259,0.03125),
+	float2(-0.4259259,-0.21875),
+	float2(-0.0925926,0.28125),
+	float2(0.24074072,-0.34375),
+	float2(-0.3148148,0.15625),
+	float2(0.018518507,-0.09375),
+	float2(0.35185188,0.40625),
+	float2(-0.2037037,-0.40625),
+	float2(0.12962961,0.09375),
+};
+
+static float JitterOffsets[16] = {
+	 6/16.0, 1/16.0,12/16.0,11/16.0,
+	 9/16.0,14/16.0, 5/16.0, 2/16.0,
+	 0/16.0, 7/16.0,10/16.0,13/16.0,
+	15/16.0, 8/16.0, 3/16.0, 4/16.0,
+};
+
+static float4x4 matTex2Proj = {
+		 2, 0, 0, 0,
+		 0,-2, 0, 0,
+		-1, 1, matP._33, 1,
+		 0, 0, matP._43, 0
+	};
+static float4x4 matTex2World = mul(matTex2Proj, matInvVP);
+
+//-----------------------------------------------------------------------------
+
+// 深度とuv値からワールド座標を得る
+inline float4 ReconstructWPos(float2 Tex, float Depth)
+{
+	float4 wpos = mul(float4(float3(Tex.xy, 1) * Depth, 1), matTex2World);
+	wpos = wpos / wpos.w;
+	wpos.w = 1;
+	return wpos;
+}
+
+// ワールド座標、法線、深度を返す。
+inline void GetWND(float2 Tex, out float3 WPos, out float3 N, out float Depth)
+{
+	float4 ND = tex2D(NormalDepthSampPoint, Tex);
+	N = normalize(ND.xyz);
+	Depth = ND.w;
+	WPos = ReconstructWPos(Tex, Depth).xyz;
+}
+
+
+//-----------------------------------------------------------------------------
+// ブラー時の重みを計算
+// 深度と法線が一致するほど寄与度を上げる
+inline float CalcBlurWeight(float4 d0, float4 d1)
+{
+	float d = abs(d0.w - d1.w) * 100.0 / d1.w;
+		// NOTE: 1.0/max(d1.w,1)を事前に計算しておけば、ループ内から除算を削除できる?
+//	float d = log(d0.w/max(d1.w,1)) * 100.0;
+	float n = max(dot(d0.xyz, d1.xyz), 0);
+	return exp(-d*d -1e-4) * (n * n);
+}
+
+//-----------------------------------------------------------------------------
+// ジッター
+
+inline float GetJitterOffset(int2 iuv)
+{
+	int index = (iuv.x % 4) * 4 + (iuv.y % 4);
+#if 0
+	return JitterOffsets[index];
+#else
+	int index2 = ((iuv.x/4) % 4) * 4 + ((iuv.y/4) % 4);
+	return (JitterOffsets[index] + JitterOffsets[index2] * 1/16.0);
+#endif
+}
+
+
+//-----------------------------------------------------------------------------
+// 探索方向
+
+#if defined(ENABLE_JITTERED_DIRECTION)
+inline float2 hash2( float2 p )
+{
+	p *= (1.0 / 128.0);
+	p = float2(dot(p, float2(127.1,311.7)), dot(p, float2(269.5,183.3)) );
+	return frac(sin(p) * 43758.5453); 
+}
+#endif
+
+inline float3 GetRandomVector(int2 iuv)
+{
+	#if defined(ENABLE_JITTERED_DIRECTION)
+	// 完全ランダム
+	float u = iuv.x + time * (FPS * 47.0);
+	float v = iuv.y + time * (FPS * 83.0);
+	float2 rnd = hash2(float2(u,v));
+	float t = rnd.x;
+	float p = rnd.y;
+	#else
+	int index = (iuv.x % 4) * 4 + (iuv.y % 4);
+	float2 dir = Directions[index];
+	float t = dir.x;
+	float p = dir.y;
+	#endif
+
+	float ct = (1.0 - t);
+	float st = sqrt(1.0 - t * t);
+	return float3(cos(p) * st, sin(p) * st, ct);
+}
+
+
+// グリッド感を減らすために、探索開始位置をズラす
+inline float3 GetRandomPosition(int2 iuv)
+{
+	// return float3(0,0,0);
+	int index = (iuv.x % 5) * 5 + (iuv.y % 5);
+	float2 offset = JitterPositions[index];
+	return (matInvV[0].xyz * offset.x + matInvV[1].xyz * offset.y) * GRID_SIZE_;
+}
+
+inline float3 GetUniformVector(int index)
+{
+	#if DIRECTION_NUM == 16
+		float2 dir = Directions[index];
+	#else
+		float2 dir = Directions14[index];
+	#endif
+
+	float t = dir.x;
+	float p = dir.y;
+	float ct = (1.0 - t);
+	float st = sqrt(1.0 - t * t);
+
+	return normalize(float3(cos(p) * st, sin(p) * st, ct));
+}
+
+inline float3 GetSphericalVector(int index)
+{
+	return Spherical3Design[index];
+}
+
+inline float3 RotateDirection(float3 front, float3 rotv)
+{
+	float3 right = normalize(cross(float3(front.zxy), front));
+	float3 up = normalize(cross(front, right));
+	right = cross(up, front);
+
+	return right * rotv.x + up * rotv.y + front * rotv.z;
+}
+
+
+
+//-----------------------------------------------------------------------------
+//
+
+inline float CalcDiffuse(float3 L, float3 N, float3 V, float smoothness)
+{
+	float roughness = (1 - smoothness);
+	float sigma2 = roughness * roughness;
+
+	// A tiny improvement of Oren-Nayar reflectance model
+	float NL = saturate(dot(N ,L));
+	float NV = abs(dot(N, V)+1e-5);
+	float LV = saturate(dot(L, V));
+	float s = LV - NL * NV;
+	float st = (s <= 0.0) ? s : (s / (max(NL,NV)+1e-6));
+//	float A = 1.0 / ((PI * 0.5 - 2.0/3.0) * sigma2 + PI);
+	float A = 1 / ((0.5 - 2.0/3.0/PI) * sigma2 + 1);  // MEMO: 正規化分を戻す。
+	float B = sigma2 * A;
+	float result = NL * (A + B * st);
+
+	return saturate(result);
+}
+
+// 金属の場合、F0はrgb毎に異なる値を持つ
+inline float CalcFresnel(float NV, float F0)
+{
+	// Schlickの近似式
+//	return F0 + (1.0 - F0) * pow(1 - NV, 5);
+	float fc = pow(max(1 - NV, 1e-5), 5);
+	return (1.0 - F0) * fc + F0;
+}
+
+//スペキュラの計算
+float CalcSpecular(float3 L, float3 N, float3 V, float smoothness, float f0)
+{
+	float3 H = normalize(L + V);
+
+	float a = max(1 - smoothness, 1e-3);
+	a *= a;
+
+	float NH = saturate(dot(N, H));
+	float NL = saturate(dot(N, L));
+	float LH = saturate(dot(L, H));
+
+	float CosSq = (NH * NH) * (a - 1) + 1;
+	float D = a / (CosSq * CosSq); // MEMO: 正規化項の1.0/PIを削っている。
+	float F = CalcFresnel(LH, f0);
+
+	float k2 = a * a * 0.25;	// = (a * 0.5)^2
+	float vis = (1.0/4.0) / (LH * LH * (1 - k2) + k2);
+	return saturate(NL * D * F * vis);
+}
+
+// 適当なリフレクタンスの計算
+inline float CalcReflectance(float3 N, float3 V, float smoothness, float f0)
+{
+	float NV = abs(dot(N,V));
+	float f = CalcFresnel(NV, f0);
+	float a = max(1 - smoothness, 1e-3);
+	float g = 1.0 / pow(2, a * 4.0); // ラフなほど暗くなる
+	return saturate(f) * g;
+}
+
+// 逆光の計算
+inline float CalcBackLight(float3 L, float3 N, float3 V, float sss, float thick)
+{
+	float rimLight = 0;
+/*
+	const float LTDistortion = 0.2;	// 光源の向きを法線側に曲げる率
+	const float LTPower = 5.0;
+	float3 LTView = -V + N * LTDistortion;	// リムライト
+	rimLight += exp2(saturate(dot(V, -LTView)) * LTPower - LTPower) * 0.1;
+*/
+
+	// 逆光状態での光の透過
+	const float ThicknessScale = 10.0;	// 厚みに対する光の吸収度合い
+	float inl = max(-dot(N,L),0);
+	rimLight += min(exp(-thick * (2.0 - sss) * ThicknessScale - 1e-4), inl) * inl * max(-dot(L,V), 0);
+
+	return rimLight * sss;
+}
+
+
+//ある色が1を超えると、他の色にあふれる
+inline float3 OverExposure(float3 color)
+{
+#if 0
+	float3 expcol = color;
+	#define	OverExposureRatio 0.85
+/*
+	expcol.gb += max(color.r - 1, 0) * OverExposureRatio * float2(0.65, 0.6);
+	expcol.rb += max(color.g - 1, 0) * OverExposureRatio * float2(0.5, 0.6);
+	expcol.rg += max(color.b - 1, 0) * OverExposureRatio * float2(0.5, 0.6);
+*/
+	expcol.gb += color.r * OverExposureRatio * float2(0.3, 0.1);
+	expcol.rb += color.g * OverExposureRatio * float2(0.3, 0.3);
+	expcol.rg += color.b * OverExposureRatio * float2(0.1, 0.3);
+	return expcol;
+#endif
+
+	return saturate(color) + rgb2gray(max(color - 1, 0));
+}

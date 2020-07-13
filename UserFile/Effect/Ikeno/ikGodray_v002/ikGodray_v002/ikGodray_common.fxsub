@@ -1,0 +1,427 @@
+//-----------------------------------------------------------------------------
+// レンズゴースト
+
+//パラメータ
+
+//****************** 以下は弄らないほうがいい設定
+
+// 太陽のサイズ
+#define SUN_BUFFER_SIZE		32
+
+// マスクの描画サイズ。mask.fx内と同じ値にする
+float FrameScale = 0.8;
+
+//******************設定はここまで
+
+
+// ぼかし処理の重み係数：
+float4 BlurWeightArray[] = {
+	float4(0.0920246, 0.0902024, 0.0849494, 0.0768654),
+	float4(0.0668236, 0.0558158, 0.0447932, 0.0345379)
+};
+static float BlurWeight[8] = (float[8])BlurWeightArray;
+
+// ジッター用
+float4 JitterOffsets4[4] =
+{
+	float4(6 / 16.0, 1 / 16.0, 12/ 16.0, 2 / 16.0),
+	float4(9 / 16.0, 14/ 16.0, 5 / 16.0, 11/ 16.0),
+	float4(0 / 16.0, 7 / 16.0, 13/ 16.0, 4 / 16.0),
+	float4(15/ 16.0, 8 / 16.0, 3 / 16.0, 10/ 16.0),
+};
+float4 JitterOffsetsPattern[4] =
+{
+	float4(1,0,0,0),
+	float4(0,1,0,0),
+	float4(1,0,1,0),
+	float4(0,0,0,1),
+};
+//static float JitterOffsets[16] = (float[16])JitterOffsets4;
+
+float AcsSi : CONTROLOBJECT < string name = "(self)"; string item = "Si"; >;
+float AcsTr : CONTROLOBJECT < string name = "(self)"; string item = "Tr"; >;
+float time : TIME;
+
+
+//-----------------------------------------------------------------------------
+
+#define	PI	(3.14159265359)
+
+float Script : STANDARDSGLOBAL <
+	string ScriptOutput = "color";
+	string ScriptClass = "scene";
+	string ScriptOrder = "postprocess";
+> = 0.8;
+
+// スクリーンサイズ
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+static float2 ViewportOffset = float2(0.5,0.5)/ViewportSize.xy;
+static float2 AspectScale = float2(1, ViewportSize.y / ViewportSize.x);
+
+float4x4 matP		: PROJECTION;
+float4x4 matV		: VIEW;
+float4x4 matVP		: VIEWPROJECTION;
+float4x4 matVPInv	: VIEWPROJECTIONINVERSE;
+float4x4 matWInv	: WORLDINVERSE;
+float4x4 matLightVP : VIEWPROJECTION < string Object = "Light"; >;
+
+float3	CameraPosition	: POSITION  < string Object = "Camera"; >;
+float3	CameraDirection : DIRECTION < string Object = "Camera"; >;
+
+#if defined(USE_CTRL_POSITION) && USE_CTRL_POSITION > 0
+// モデルの位置に仮のライトを置く
+#if defined(CTRL_BONE_NAME)
+float3 ctrlPos : CONTROLOBJECT < string name = CTRL_NAME; string item = CTRL_BONE_NAME;>;
+#else
+float3 ctrlPos : CONTROLOBJECT < string name = CTRL_NAME;>;
+#endif
+#if USE_CTRL_POSITION == 1
+static float3 LightDirection = normalize(-ctrlPos);
+static float3 LightPosition = CameraPosition - (LightDirection * 4096 * 16); // 適当
+#else
+static float3 LightDirection = normalize(CameraPosition - ctrlPos);
+static float3 LightPosition = ctrlPos;
+#endif
+#else
+// MMDのライト方向を元にする
+float3	LightDirection	: DIRECTION < string Object = "Light"; >;
+static float3 LightPosition = CameraPosition - (LightDirection * 4096 * 16); // 適当
+#endif
+
+float3	LightSpecular    : SPECULAR  < string Object = "Light"; >;
+
+
+// レンダリングターゲットのクリア値
+float4 ClearColor = {1,1,1,1};
+float ClearDepth  = 1.0;
+
+
+//-----------------------------------------------------------------------------
+// マスクマップ
+texture MaskMapRT: OFFSCREENRENDERTARGET <
+	string Description = "Mask Map for ikGodray";
+	float4 ClearColor = { 1, 0, 0, 1 };
+	int2 Dimensions = {BUFFER_SIZE, BUFFER_SIZE};
+	float ClearDepth = 1.0;
+	string Format = "R16F";
+	bool AntiAlias = true;
+	int MipLevels = 1;
+	string DefaultEffect = 
+		"self = hide;"
+		"* = mask.fx";
+>;
+
+sampler MaskSamp = sampler_state {
+	texture = <MaskMapRT>;
+	MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = NONE;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+texture SunMap: RENDERCOLORTARGET <
+	int2 Dimensions = {SUN_BUFFER_SIZE, SUN_BUFFER_SIZE};
+	string Format = "R16F";
+	int MipLevels = 0;
+>;
+sampler SunSamp = sampler_state {
+	texture = <SunMap>;
+	MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = LINEAR;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+// オリジナルの描画結果を記録するためのレンダーターゲット
+texture2D ScnMap : RENDERCOLORTARGET <
+	int MipLevels = 1;
+	string Format = "A16B16G16R16F";
+>;
+sampler2D ScnSamp = sampler_state {
+	texture = <ScnMap>;
+	MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = NONE;
+	AddressU  = CLAMP; AddressV = CLAMP;
+};
+texture2D DepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+>;
+
+texture2D RayBuffer1 : RENDERCOLORTARGET <
+	int MipLevels = 1;
+	float4 ClearColor = { 0, 0, 0, 1 };
+	string Format = "R16F";
+>;
+sampler2D RaySamp1 = sampler_state {
+	texture = <RayBuffer1>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = NONE;
+	AddressU  = CLAMP; AddressV = CLAMP;
+};
+texture2D RayBuffer2 : RENDERCOLORTARGET <
+	int MipLevels = 1;
+	float4 ClearColor = { 0, 0, 0, 1 };
+	string Format = "R16F";
+>;
+sampler2D RaySamp2 = sampler_state {
+	texture = <RayBuffer2>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = NONE;
+	AddressU  = CLAMP; AddressV = CLAMP;
+};
+
+texture2D NoiseTex <
+	string ResourceName = "bluenoise.png";
+	int MipLevels = 1;
+>;
+sampler NoiseSamp = sampler_state {
+	texture = <NoiseTex>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU  = WRAP;	AddressV  = WRAP;
+};
+
+
+//-----------------------------------------------------------------------------
+// ガンマ補正
+bool bLinearMode : CONTROLOBJECT < string name = "ikLinearEnd.x"; >;
+const float epsilon = 1.0e-6;
+const float gamma = 2.2;
+float3 DegammaAlways(float3 col)
+{
+	return pow(max(col,epsilon), gamma);
+}
+float3 Degamma(float3 col)
+{
+	return (!bLinearMode) ? pow(max(col,epsilon), gamma) : col;
+}
+float3 Gamma(float3 col)
+{
+	return (!bLinearMode) ? pow(max(col,epsilon), 1.0/gamma) : col;
+}
+float4 Degamma4(float4 col) { return float4(Degamma(col.rgb), col.a); }
+float4 Gamma4(float4 col) { return float4(Gamma(col.rgb), col.a); }
+float rgb2gray(float3 rgb)
+{
+	return dot(float3(0.299, 0.587, 0.114), max(rgb,0));
+}
+
+
+float GetJitterOffset(float2 texCoord)
+{
+#if 0
+	int2 iuv = texCoord * ViewportSize;
+	int4 mod4 = fmod(floor(iuv.xyxy * float2(1,1/4.0).xxyy), 4);
+	float4 work11 = JitterOffsets4[mod4.x];
+	float4 work12 = JitterOffsets4[mod4.z];
+	float4 work21 = JitterOffsetsPattern[mod4.y];
+	float4 work22 = JitterOffsetsPattern[mod4.w];
+	return dot(work11, work21) + dot(work21, work22) / 16.0;
+#else
+	return tex2D(NoiseSamp, texCoord * (ViewportSize / 256.0)).r;
+#endif
+}
+
+
+float2 CalcLightPPos()
+{
+	float4 ppos = mul(float4(LightPosition, 1), matVP);
+	return ppos.xy / ppos.w * float2(0.5, -0.5) + 0.5;
+}
+
+float2 ConverMaskPosition(float2 coord)
+{
+//	return (((coord * 2.0 - 1.0) * FrameScale) + 1.0) * 0.5;
+	return coord * FrameScale - FrameScale * 0.5 + 0.5;
+}
+
+
+//-----------------------------------------------------------------------------
+// 固定定義
+//
+//-----------------------------------------------------------------------------
+struct VS_OUTPUT {
+	float4 Pos			: POSITION;
+	float4 TexCoord		: TEXCOORD0;
+	float4 RayColor		: TEXCOORD1;
+	float3 LightColor	: TEXCOORD2;
+};
+
+
+//-----------------------------------------------------------------------------
+// 共通のVS
+VS_OUTPUT VS_SetTexCoord( float4 Pos : POSITION, float4 Tex : TEXCOORD0, 
+	uniform bool bCalcColor)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.TexCoord.xy = Tex.xy + ViewportOffset.xy;
+	Out.TexCoord.zw = CalcLightPPos();
+
+	if (bCalcColor)
+	{
+		float intensity = saturate(-dot(LightDirection, CameraDirection));
+		intensity *= intensity * AcsTr * 154.0 / 255.0;
+
+		Out.RayColor.rgb = RAY_COLOR * LightSpecular * intensity;
+
+		float lod = log2(SUN_BUFFER_SIZE);
+		float mask = tex2Dlod( SunSamp, float4(0.5,0.5, 0, lod)).r * (4.0 / PI);
+		Out.LightColor = LIGHT_COLOR * LightSpecular * intensity * mask;
+
+		Out.RayColor.w = AcsSi * 0.1 * LIGHT_LENGTH;
+	}
+
+	return Out;
+}
+
+//-----------------------------------------------------------------------------
+// 
+VS_OUTPUT VS_DrawSun( float4 Pos : POSITION, float4 Tex : TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	float2 lightPos = ConverMaskPosition(CalcLightPPos());
+	float2 offset = (Tex.xy - 0.5) * SUN_BUFFER_SIZE / BUFFER_SIZE;
+	Out.TexCoord.xy = Tex.xy * 2 - 1.0;
+	Out.TexCoord.zw = lightPos + offset;
+	return Out;
+}
+
+float4 PS_DrawSun( VS_OUTPUT IN) : COLOR
+{
+	float sun = tex2Dlod( MaskSamp, float4(IN.TexCoord.zw,0,0)).r;
+	sun *= (dot(IN.TexCoord.xy, IN.TexCoord.xy) < 1.0);
+	return float4(sun, 0,0,1);
+}
+
+//-----------------------------------------------------------------------------
+// 
+
+float4 PS_DrawRay( VS_OUTPUT IN) : COLOR
+{
+	float4 Tex = IN.TexCoord;
+
+	float rayScale = LIGHT_SIZE / (NUM_SAMPLES + 2.0);
+	float sum = 0;
+	float offset = GetJitterOffset(Tex.xy) + 1;
+
+#if 1
+	// 光源を起点に参照範囲を決める
+	float2 v = (Tex.xy - Tex.zw) * rayScale;
+	float2 coord0 = Tex.zw + v * offset;
+#else
+	// 現在位置を起点に参照範囲を決める
+	float2 v = (Tex.zw - Tex.xy) * rayScale;
+	float2 coord0 = Tex.xy + v * offset;
+#endif
+
+	for(int i = 0; i < NUM_SAMPLES; i++)
+	{
+		float2 coord = coord0 + v * i;
+		coord = ConverMaskPosition(coord);
+		sum += tex2Dlod( MaskSamp, float4(coord, 0, 0)).r;
+	}
+	sum *= (1.0 / NUM_SAMPLES);
+
+	// テンポラルブラー
+	#if defined(ENABLE_TEMPORAL_BLUR) && ENABLE_TEMPORAL_BLUR > 0
+	float oldSum = tex2D( RaySamp2, Tex.xy ).r;
+	float diff = exp2(-abs(oldSum - sum)) * (time > 1 / 120.0);
+	sum = lerp(sum, oldSum, diff * 0.5);
+	#endif
+
+	return float4(sum, 0,0,1);
+}
+
+
+//-----------------------------------------------------------------------------
+// 放射ブラー
+float4 PS_DirectionBlur( float4 Tex: TEXCOORD0, uniform sampler2D smp, uniform float stepLen) : COLOR
+{
+	float2 uv = Tex.xy;
+	float2 v = normalize((Tex.zw - Tex.xy) * AspectScale);
+	float2 offset = v * (stepLen / ViewportSize);
+
+	float fog = tex2D( smp, uv).r * BlurWeight[0];
+	[unroll] for(int i = 1; i < 8; i ++) {
+		float t = i;
+		float fp = tex2D(smp, uv + offset * t).r;
+		float fn = tex2D(smp, uv - offset * t).r;
+		fog += (fp + fn) * BlurWeight[i];
+	}
+
+	return float4(fog, 0,0,1);
+}
+
+//-----------------------------------------------------------------------------
+// 最後に元画面と計算結果を合成する
+float4 PS_Last( VS_OUTPUT IN) : COLOR
+{
+	float4 Tex = IN.TexCoord;
+
+	float4 color = Degamma4(tex2D( ScnSamp, Tex.xy ));
+
+	float2 v = (Tex.xy - Tex.zw);
+	float2 dist = v * AspectScale;
+	float attenuation = exp2(-dot(dist, dist) * IN.RayColor.w);
+	float sum = tex2D( RaySamp1, Tex.xy ).r * attenuation;
+	color.rgb += IN.RayColor.rgb * sum;
+	color.rgb += IN.LightColor.rgb * attenuation;
+
+	// レンズゴースト
+	#if ENBLE_LENS_GHOST > 0
+	float2 sunPos = 1 - Tex.zw;
+	float2 uv = (Tex.xy - sunPos) * (16.0 * AspectScale);
+	float sun = tex2Dlod( SunSamp, float4(uv + 0.5, 0, 3)).r * 0.2;
+	color.rgb += IN.LightColor.rgb * sun;
+	#endif
+
+	// TESTTEST
+	#if 0
+	color.rgb = sum;
+	color.b = tex2D( MaskSamp, ConverMaskPosition(Tex.xy)).r;
+	#endif
+
+	return Gamma4(color);
+}
+
+//-----------------------------------------------------------------------------
+technique Godray <
+	string Script = 
+		"RenderColorTarget0=ScnMap;"
+		"RenderDepthStencilTarget=DepthBuffer;"
+		"ClearSetColor=ClearColor;"
+		"ClearSetDepth=ClearDepth;"
+		"Clear=Color;	Clear=Depth;"
+		"ScriptExternal=Color;"
+
+		"RenderColorTarget0=SunMap;		Pass=DrawSunPass;"
+		"RenderColorTarget0=RayBuffer1;	Pass=DrawRayPass;"
+#if 1
+		"RenderColorTarget0=RayBuffer2;	Pass=Blur4Pass;"
+		"RenderColorTarget0=RayBuffer1;	Pass=BlurPass;"
+#endif
+		"RenderColorTarget0=;"
+		"RenderDepthStencilTarget=;"
+		"Pass=LastPass;"
+	;
+> {
+	pass DrawSunPass < string Script= "Draw=Buffer;"; > {
+		VertexShader = compile vs_3_0 VS_DrawSun();
+		PixelShader  = compile ps_3_0 PS_DrawSun();
+	}
+
+	pass DrawRayPass < string Script= "Draw=Buffer;"; > {
+		VertexShader = compile vs_3_0 VS_SetTexCoord(false);
+		PixelShader  = compile ps_3_0 PS_DrawRay();
+	}
+	pass Blur4Pass < string Script= "Draw=Buffer;"; > {
+		VertexShader = compile vs_3_0 VS_SetTexCoord(false);
+		PixelShader  = compile ps_3_0 PS_DirectionBlur(RaySamp1, 2.0);
+	}
+	pass BlurPass < string Script= "Draw=Buffer;"; > {
+		VertexShader = compile vs_3_0 VS_SetTexCoord(false);
+		PixelShader  = compile ps_3_0 PS_DirectionBlur(RaySamp2, 1.0);
+	}
+
+	pass LastPass < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(true);
+		PixelShader  = compile ps_3_0 PS_Last();
+	}
+}
+//-----------------------------------------------------------------------------

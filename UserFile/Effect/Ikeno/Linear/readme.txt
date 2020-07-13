@@ -1,0 +1,5 @@
+複数のエフェクト間でリニアワークフローを行うためのエフェクト(群)。
+詳しくは、ikLinearフォルダ内のreadme.txtを参照のこと。
+
+AutoLuminous4L、MotionBlur3LはそぼろさんのAutoLuminous4、
+MotionBlur3を改造したものです。

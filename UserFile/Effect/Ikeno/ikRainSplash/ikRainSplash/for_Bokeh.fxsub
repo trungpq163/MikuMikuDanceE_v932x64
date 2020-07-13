@@ -1,0 +1,166 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// 
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define ParticleSize	4.0
+
+#define	PATTERN_FILENAME	"splash.png"
+#define	NumSplashInTextureW	4	// 横方向
+#define	NumSplashInTextureH	4	// 縦方向
+
+#define	UNIT_COUNT		1
+
+#define	CoordTextureName	SplashCoordTex
+
+const float AlphaThroughThreshold = 0.75;
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+// なにもない描画しない場合の背景までの距離
+#define FAR_DEPTH		1000
+
+#define TEX_WIDTH		1024
+#define TEX_HEIGHT		UNIT_COUNT
+
+#define PAI 3.14159265f   // π
+
+float AcsTr  : CONTROLOBJECT < string name = "(self)"; string item = "Tr"; >;
+
+int RepeatCount = UNIT_COUNT;  // シェーダ内描画反復回数
+int RepeatIndex;               // 複製モデルカウンタ
+
+
+// 座標変換行列
+float3   CameraPosition    : POSITION  < string Object = "Camera"; >;
+
+float4x4 matV		: VIEW;
+float4x4 matVP		: VIEWPROJECTION;
+float4x4 matWVP		: WORLDVIEWPROJECTION;
+float4x4 matVInv	: VIEWINVERSE;
+
+static float3x3 BillboardMatrix = {
+	normalize(matVInv[0].xyz),
+	normalize(matVInv[1].xyz),
+	normalize(matVInv[2].xyz),
+};
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+    texture2D ParticleTex <
+        string ResourceName = PATTERN_FILENAME;
+        int MipLevels = 1;
+    >;
+    sampler ParticleSamp = sampler_state {
+        texture = <ParticleTex>;
+        MinFilter = LINEAR;
+        MagFilter = LINEAR;
+        MipFilter = NONE;
+        AddressU  = CLAMP;
+        AddressV  = CLAMP;
+    };
+
+// 粒子座標記録用
+shared texture CoordTextureName : RENDERCOLORTARGET;
+sampler CoordSmpCpy
+{
+   Texture = <CoordTextureName>;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
+    MinFilter = NONE;
+    MagFilter = NONE;
+    MipFilter = NONE;
+};
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////////////////////////
+// パーティクル描画
+
+struct VS_OUTPUT2
+{
+    float4 Pos       : POSITION;    // 射影変換座標
+    float4 Tex       : TEXCOORD0;   // テクスチャ
+    float4 VPos      : TEXCOORD1;
+};
+
+// 頂点シェーダ
+VS_OUTPUT2 Particle_VS(float4 Pos : POSITION)
+{
+	VS_OUTPUT2 Out=(VS_OUTPUT2)0;
+
+	int i = RepeatIndex;
+	int j = round( Pos.z * 100.0f );
+	int index = i * TEX_WIDTH + j;
+	float2 texCoord = float2((j+0.5f)/TEX_WIDTH, (i+0.5f)/TEX_HEIGHT);
+
+	// テクスチャ
+	int splashPattern = index % (NumSplashInTextureW * NumSplashInTextureH);
+	int splashPatternW = splashPattern % NumSplashInTextureW;
+	int splashPatternH = floor(splashPattern / NumSplashInTextureW);
+	Out.Tex.xy = Pos.xy * (10 * 0.5) + 0.5;
+	Out.Tex.x = (Out.Tex.x + splashPatternW) / NumSplashInTextureW;
+	Out.Tex.y = (Out.Tex.y + splashPatternH) / NumSplashInTextureH;
+	Out.Tex.y = 1.0 - Out.Tex.y;
+
+	// 粒子の座標
+	float4 Pos0 = tex2Dlod(CoordSmpCpy, float4(texCoord,0,0));
+
+	Pos.xy *= ParticleSize;
+	Pos.z = 0;
+	Pos.xyz = mul(Pos.xyz, BillboardMatrix);
+
+	Pos.xyz += Pos0.xyz;
+	Pos.w = 1.0f;
+	Out.Pos = (Pos0.w > 0.0) ? mul( Pos, matVP ) : float4(0,0,0,0);
+	// 少し手前に出す
+	Out.Pos.z -= 1 / max(Out.Pos.w, 1.0);
+
+	Out.VPos = mul(Pos, matV);
+
+	// 深度に応じて薄くする
+	float depth = Out.VPos.z;
+	Out.Tex.w = 1.0 / (depth/100.0 + 1);
+
+   return Out;
+}
+
+
+// ピクセルシェーダ
+float4 Particle_PS( VS_OUTPUT2 IN ) : COLOR0
+{
+    // 粒子の色
+	float alpha = (AcsTr * 0.5 + 0.5) * IN.Tex.w;
+	alpha *= tex2D(ParticleSamp, IN.Tex.xy).r;
+	clip(alpha - AlphaThroughThreshold);
+
+	float distance = length(IN.VPos.xyz);
+	return float4(distance / FAR_DEPTH, 0, 0, 1);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+technique MainTec1 < string MMDPass = "object";
+   string Script = 
+            "LoopByCount=RepeatCount;"
+            "LoopGetIndex=RepeatIndex;"
+                "Pass=DrawObject;"
+            "LoopEnd=;";
+>{
+    pass DrawObject {
+        ZENABLE = TRUE; ZWRITEENABLE = FALSE;
+        CullMode = NONE;
+        VertexShader = compile vs_3_0 Particle_VS();
+        PixelShader  = compile ps_3_0 Particle_PS();
+    }
+}
+
+technique MainTec2 < string MMDPass = "object_ss"; > {}

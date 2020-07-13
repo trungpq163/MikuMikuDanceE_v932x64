@@ -1,0 +1,99 @@
+//-----------------------------------------------------------------------------
+// 屈折マップを作る
+
+#if REFRACTION_TYPE > 0
+float4 PS_SynthRefraction( float2 texCoord: TEXCOORD0) : COLOR
+{
+	float4 albedo = tex2D(ColorMap, texCoord);
+
+	float3 diff = tex2D(DiffuseMapSamp, texCoord).rgb;
+	float3 spec = tex2D(ReflectionMapSamp, texCoord).rgb;
+
+	// スカイドームの色を取得する
+	MaterialParam mat = GetMaterial(texCoord, albedo);
+	diff = IsNotMask(mat) ? diff : 1;
+
+	float4 baseColor;
+	baseColor.rgb = albedo.rgb * diff + spec;
+	baseColor.a = 1;
+
+	return baseColor;
+}
+
+#if REFRACTION_TYPE > 1
+
+
+VS_OUTPUT VS_DownsampleRefraction( float4 Pos : POSITION, float2 Tex : TEXCOORD0, uniform int baseScale)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+
+	float2 pixsize = floor(ViewportSize * WORKSPACE_SCALE / baseScale);
+	Out.Tex.xy = Tex.xy + 2.0 / pixsize;
+	Out.Tex.zw = 1.0 / pixsize;
+
+	return Out;
+}
+
+float4 PS_DownsampleRefraction( float4 texCoord: TEXCOORD0, uniform sampler smp) : COLOR
+{
+	float4 color = 0;
+
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2(-2,-2)) * 1.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 0,-2)) * 2.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 2,-2)) * 1.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2(-2, 0)) * 2.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 0, 0)) * 4.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 2, 0)) * 2.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2(-2, 2)) * 1.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 0, 2)) * 2.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 2, 2)) * 1.0;
+	color *= 1.0 / 16.0 * 4.0;
+
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2(-1,-1));
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 1,-1));
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2(-1, 1));
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 1, 1));
+	color *= 1.0 / 4.0 / 2.0;
+
+	color.a = 1;
+	return color;
+}
+
+
+
+VS_OUTPUT VS_UpsampleRefraction( float4 Pos : POSITION, float2 Tex : TEXCOORD0, uniform int baseScale)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+
+	float2 pixsize = floor(ViewportSize * WORKSPACE_SCALE / baseScale);
+	Out.Tex.xy = Tex.xy + 0.5 / pixsize;
+	Out.Tex.zw = 1.0 / pixsize;
+
+	return Out;
+}
+
+float4 PS_UpsampleRefraction( float4 texCoord: TEXCOORD0, uniform sampler smp) : COLOR
+{
+	float4 color = 0;
+
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2(-1,-1)) * 1.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 0,-1)) * 2.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 1,-1)) * 1.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2(-1, 0)) * 2.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 0, 0)) * 4.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 1, 0)) * 2.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2(-1, 1)) * 1.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 0, 1)) * 2.0;
+	color += tex2D(smp, texCoord.xy + texCoord.zw * float2( 1, 1)) * 1.0;
+	color *= 1.0 / 16.0;
+
+	color.a = 1;
+	return color;
+}
+
+#endif
+
+#endif
+

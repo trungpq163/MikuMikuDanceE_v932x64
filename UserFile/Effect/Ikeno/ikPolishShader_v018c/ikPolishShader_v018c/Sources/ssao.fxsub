@@ -1,0 +1,275 @@
+//-----------------------------------------------------------------------------
+// SSDO
+
+#if SSAORayCount > 0
+
+// 色の反射も計算する?
+#if SSAO_QUALITY >= 2
+#define FILTER_MODE			MinFilter = POINT; MagFilter = POINT; MipFilter = NONE;
+#define LINEAR_FILTER_MODE	MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = NONE;
+#define ADDRESSING_MODE		AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+
+texture SSAOMapRT : OFFSCREENRENDERTARGET <
+	string Description = "SSAO Depth for ikPolishShader";
+	float2 ViewPortRatio = {0.5, 0.5};
+	#if SSAO_QUALITY >= 3
+	string Format = "R32F";		// 深度情報
+	#else
+	string Format = "R16F";		// 深度情報
+	#endif
+
+	float4 ClearColor = { 0, 0, 0, 0 };
+	float ClearDepth = 1.0;
+	int MipLevels = 1;
+	string DefaultEffect = 
+		HIDE_EFFECT
+		"*.pmd = ./SSAO/SSAOObject.fx;"
+		"*.pmx = ./SSAO/SSAOObject.fx;"
+		"*.x = ./SSAO/SSAOObject.fx;"
+		"* = hide;" ;
+>;
+
+sampler GIDepthSamp = sampler_state {
+	texture = <SSAOMapRT>;
+	FILTER_MODE
+	ADDRESSING_MODE
+};
+
+inline float4 GetSSDO(float2 Tex)
+{
+	#if defined(ENABLE_SSDO) && ENABLE_SSDO > 0
+	float2 uv = Tex.xy * (1.0 / GIFrameScale) + (0.5 - 0.5 * (1.0 / GIFrameScale));
+	return tex2Dlod(ColorMap,float4(uv,0,0));
+	#else
+	return 0;
+	#endif
+}
+
+inline float3 GetWPosForSSAO(float2 Tex)
+{
+	float Depth = tex2Dlod( GIDepthSamp, float4(Tex,0,0)).x;
+	float2 uv = Tex.xy * (1.0 / GIFrameScale) + (0.5 - 0.5 * (1.0 / GIFrameScale));
+	return ReconstructWPos(uv, Depth);
+}
+
+#else
+inline float4 GetSSDO(float2 Tex)
+{
+	#if defined(ENABLE_SSDO) && ENABLE_SSDO > 0
+	return tex2Dlod(ColorMap,float4(Tex,0,0));
+	#else
+	return 0;
+	#endif
+}
+inline float3 GetWPosForSSAO(float2 Tex)
+{
+	GeometryInfo geom = GetWNDLod(Tex);
+	return geom.wpos;
+}
+#endif
+
+
+
+//-----------------------------------------------------------------------------
+// SSAO
+
+
+struct VS_SSAO_OUTPUT {
+	float4 Pos		: POSITION;		// 射影変換座標
+	float4 Tex		: TEXCOORD0;	// テクスチャ
+
+	float4	SmpStep		: TEXCOORD1;
+	float4	AOFactor	: TEXCOORD2;
+	float2	AOFactor2	: TEXCOORD3;
+};
+
+
+VS_SSAO_OUTPUT VS_SSAO( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_SSAO_OUTPUT Out = (VS_SSAO_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset2;
+	Out.Tex.zw = Out.Tex.xy * WorkSize / 16.0; // for jitter
+
+	Out.SmpStep.xy = (64.0 / 1024.0) / SSAORayCount * ViewportAspect;
+	Out.SmpStep.zw = SampStep;
+	#if SSAO_QUALITY >= 2
+	Out.SmpStep.xy *= GIFrameScale;
+	Out.SmpStep.zw *= 2.0;
+	#endif
+
+	Out.AOFactor.rgb = (GIScale / SSAORayCount) * LightColor;
+	Out.AOFactor.w = AmbientPower;
+
+	Out.AOFactor2.x = mSSAOBias * 0.1;
+	Out.AOFactor2.y = 1.0 / pow(DepthLength, 6); // InvDepthLength^6
+
+	return Out;
+}
+
+float4 PS_SSAO( VS_SSAO_OUTPUT IN ) : COLOR
+{
+	float2 texCoord = IN.Tex.xy;
+
+	GeometryInfo geom = GetWND(texCoord);
+
+	float angleMul = 7.0 / SSAORayCount * (PI * 2.0);
+	float angleAdd = GetJitterOffset(IN.Tex.zw) * (PI * 2.0);
+
+	float2 radiusMul = IN.SmpStep.xy;
+	float2 radiusAdd = IN.SmpStep.zw;
+
+	#if SSAO_QUALITY >= 3
+	float bias = IN.AOFactor2.x + geom.nd.depth * (0.5 / 8388608.0);
+	#else
+	float bias = IN.AOFactor2.x + geom.nd.depth * (0.5 / 1024.0);
+	#endif
+
+	#if SSAO_QUALITY >= 2
+	texCoord = texCoord * GIFrameScale + (-0.5 * GIFrameScale + 0.5);
+	#endif
+
+	float2 sum = 0;
+	float4 col = 0;
+
+	// MEMO: unrollするとレジスタを使い過ぎてコンパイルが通らないことがある
+	// [unroll]
+	for(int j = 0; j < SSAORayCount; j++)
+	{
+		float2 sc;
+		sincos(j * angleMul + angleAdd, sc.x, sc.y);
+		float2 uv = sc * (j * radiusMul + radiusAdd) + texCoord;
+
+		float3 RayPos = GetWPosForSSAO(uv);
+		float3 v = RayPos - geom.wpos;
+
+		float distance2 = dot(v, v);
+		v = v * rsqrt(max(distance2, 1e-4));
+		float dotVN = max(dot(v, geom.nd.normal) - bias, 0.0f);
+
+		float f = max((DepthLength * DepthLength) - distance2, 0.0f);
+		float2 f2 = float2(f, IN.AOFactor2.y) * f;
+		float falloff = f2.x * f2.y;
+			// falloff = f * f * f * InvDepthLength6;
+
+		float2 ao = float2(min(falloff * dotVN, 1.0), falloff);
+		#if defined(ENABLE_SSDO) && ENABLE_SSDO > 0
+		col.rgb += GetSSDO(uv).rgb * ao.x;
+		#endif
+		sum += ao;
+	}
+
+	float s = saturate(1.0 - (sum.x / max(sum.y, 1e-3)) * IN.AOFactor.w);
+	#if defined(ENABLE_SSDO) && ENABLE_SSDO > 0
+	col.rgb *= IN.AOFactor.rgb;
+	#endif
+
+	#if defined(RSMCount) && RSMCount > 0
+	float4 rsm = GetRSMColor(IN.Tex.xy) * s;
+	col.rgb += rsm.rgb;
+	s *= (1 - rsm.w);
+	#endif
+
+	return float4(col.rgb * col.rgb, s);
+}
+
+
+// 深度を考慮したブラー
+VS_OUTPUT VS_BlurSSAO( float4 Pos : POSITION, float2 Tex : TEXCOORD0, uniform bool bBlurX)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+
+	float2 offset = (bBlurX) ? float2(SampStep.x, 0) : float2(0, SampStep.y);
+	Out.Tex.zw = offset * WORKSPACE_RES;
+
+	return Out;
+}
+
+float4 PS_BlurSSAO( float4 Tex: TEXCOORD0, uniform sampler smp) : COLOR
+{
+	float2 texCoord = Tex.xy;
+	float2 offset = Tex.zw;
+
+	float4 color0 = tex2D( smp, texCoord );
+	NormalDepth nd0 = GetNormalDepthRaw(texCoord);
+	float depthRate = 100.0 / max(nd0.depth, 1.0);
+	float weightSum = 1.0;
+	nd0.depth *= depthRate;
+
+	float4 Color = color0;
+	[unroll] for(int i = 1; i < 8; i++)
+	{
+		float4 uv = offset.xyxy * float4(i,i, -i,-i) + texCoord.xyxy;
+		float t2 = (i * i) * (-0.5 * LOG2_E / (8.0 * 8.0));
+		NormalDepth ndp = GetNormalDepthRaw(uv.xy);
+		NormalDepth ndn = GetNormalDepthRaw(uv.zw);
+		float4 cp = tex2D(smp, uv.xy);
+		float4 cn = tex2D(smp, uv.zw);
+		float2 w = CalcBlurWeightOpt(ndp, ndn, nd0, t2, depthRate);
+		Color += cp * w.x;
+		Color += cn * w.y;
+		weightSum += w.x;
+		weightSum += w.y;
+	}
+
+	Color = Color / weightSum;
+	return Color;
+}
+
+
+float4 PS_Upscale( float4 Tex: TEXCOORD0, uniform sampler smp) : COLOR
+{
+	NormalDepth ND = GetNormalDepthRaw(Tex.xy);
+	float2 texCoord = Tex.xy;
+	float depthRate = 100.0 / max(ND.depth, 1.0);
+	ND.depth = 100.0;	// ND.depth * depthRate; // x * 100 / x == 100
+
+	float4 result = 0;
+	float weight = 0;
+	float2 uv0;
+	float w;
+
+	#define CALC_WEIGHT(u,v, dist)	\
+		uv0 = float2(u,v) * (1.0 / WorkSize) + texCoord;	\
+		w = CalcBlurWeight(ND, GetNormalDepthRaw(uv0), dist, depthRate);
+	#define ACCUMULATE_RESULT	\
+		result += tex2D(smp, uv0) * w;	\
+		weight += w;
+
+	#define INTEGRATE_RESULT(u,v, dist)	\
+		CALC_WEIGHT(u,v, dist) ACCUMULATE_RESULT
+
+	// INTEGRATE_RESULT( 0, 0, 0);
+	CALC_WEIGHT(0,0, -0.01/(8.0*8.0))
+	w = max(w, 1e-4); // 最低限の値を保証
+	ACCUMULATE_RESULT
+
+	float d = (1.41 * 1.41) * -0.5 / (8.0*8.0);
+	INTEGRATE_RESULT(-1,-1, d);
+	INTEGRATE_RESULT( 1,-1, d);
+	INTEGRATE_RESULT(-1, 1, d);
+	INTEGRATE_RESULT( 1, 1, d);
+
+	d = (1.0 * 1.0) * -0.5 / (8.0*8.0);
+	INTEGRATE_RESULT(-1, 0, d);
+	INTEGRATE_RESULT( 1, 0, d);
+	INTEGRATE_RESULT( 0,-1, d);
+	INTEGRATE_RESULT( 0, 1, d);
+
+	return result / weight; // max(weight, 1e-4);
+}
+
+
+inline float4 GetSSAOFull(float2 tex) { return tex2D(SSAOWorkSamp, tex); }
+inline float GetSSAO(float2 tex) { return GetSSAOFull(tex).w;}
+
+#else
+
+inline float4 GetSSAOFull(float2 tex) { return float4(0,0,0,1); }
+inline float GetSSAO(float2 tex) { return GetSSAOFull(tex).w;}
+
+#endif
+

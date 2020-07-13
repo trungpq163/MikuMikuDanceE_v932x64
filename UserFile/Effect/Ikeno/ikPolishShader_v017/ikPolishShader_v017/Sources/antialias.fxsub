@@ -1,0 +1,86 @@
+//-----------------------------------------------------------------------------
+// 簡易アンチエイリアス
+// ハードウェアによるエッジのスムージングが効かない為、エフェクトでエッジのギザギザを軽減する
+
+#if defined(ENABLE_AA) && ENABLE_AA > 0
+
+sampler AntialiasWorkSamp = sampler_state {
+	texture = <FullWorkMap>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+VS_OUTPUT VS_Antialias( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy;
+	Out.Tex.zw = ViewportOffset * 2.0;
+	return Out;
+}
+
+float4 PS_Antialias( float4 Tex: TEXCOORD0, uniform sampler2D smp ) : COLOR
+{
+	float2 texCoord = Tex.xy;
+	float2 offset = Tex.zw;
+	float4 center = tex2D(smp, Tex.xy);
+
+	// 色の差が大きいところ
+	float3 rgbL = tex2D( smp, texCoord + float2(-1, 0) * offset).rgb;
+	float3 rgbR = tex2D( smp, texCoord + float2( 1, 0) * offset).rgb;
+	float3 rgbU = tex2D( smp, texCoord + float2( 0,-1) * offset).rgb;
+	float3 rgbD = tex2D( smp, texCoord + float2( 0, 1) * offset).rgb;
+	float lumaC = rgb2gray(center.rgb);
+	float lumaL = rgb2gray(rgbL);
+	float lumaR = rgb2gray(rgbR);
+	float lumaU = rgb2gray(rgbU);
+	float lumaD = rgb2gray(rgbD);
+	float4 gradCol = abs(lumaC - float4(lumaL,lumaR,lumaU,lumaD));
+
+	// 色が近いなら無視
+	float w = saturate(dot(gradCol, 1));
+
+#if 1
+	// 深度の差が大きいところ
+	// 色が似ていて深度が違うものを似ていると判定しないように、
+	// 近似度のチェックには深度も利用する。
+	float DC = tex2D( NormalSamp, texCoord).w;
+	float DL = tex2D( NormalSamp, texCoord + float2(-1, 0) * offset).w;
+	float DR = tex2D( NormalSamp, texCoord + float2( 1, 0) * offset).w;
+	float DU = tex2D( NormalSamp, texCoord + float2( 0,-1) * offset).w;
+	float DD = tex2D( NormalSamp, texCoord + float2( 0, 1) * offset).w;
+	float4 grad = abs(DC - float4(DL,DR,DU,DD)) * 10.0 / DC;
+	grad = max(grad, gradCol);
+
+	float4 rcpGrad = 1.0 / clamp(grad * 4.0, 1.0, 4.0);
+	float gradX = clamp(grad.x - grad.y, -1, 1);	// xの差が大きい
+	float gradY = clamp(grad.z - grad.w, -1, 1);	// yの差が大きい
+
+	// 適当
+	grad = max(saturate(grad) * 4.0, 0.1);
+	rcpGrad.zw *= max(grad.x, grad.y);
+	rcpGrad.xy *= max(grad.z, grad.w);
+
+	float2 vl = float2(-1, gradY) * rcpGrad.x;
+	float2 vr = float2( 1, gradY) * rcpGrad.y;
+	float2 vu = float2(gradX, -1) * rcpGrad.z;
+	float2 vd = float2(gradX,  1) * rcpGrad.w;
+
+	float3 cl = tex2D(smp, texCoord + vl * offset).rgb;
+	float3 cr = tex2D(smp, texCoord + vr * offset).rgb;
+	float3 cu = tex2D(smp, texCoord + vu * offset).rgb;
+	float3 cd = tex2D(smp, texCoord + vd * offset).rgb;
+	float3 col = (center.rgb + cl + cr + cu + cd) * (1.0 / 5.0);
+#else
+	// 簡易版
+	float3 col = (center.rgb + rgbL + rgbR + rgbU + rgbD) * (1.0 / 5.0);
+#endif
+
+	col = lerp(center.rgb, col, w);
+	col = ColorCorrectToOutput(col);
+
+	return float4(col, 1);
+}
+
+#endif
+

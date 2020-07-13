@@ -1,0 +1,519 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  PanelLightObject.fxsub Non Shadow Edition ver1.0
+//  作成: そぼろ
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ユーザーパラメータ
+
+//ライト発光強度
+float LightPower2 = 3;
+
+//拡散光係数
+float AmbientPower = 0.15;
+
+//距離減衰係数(0～4程度)
+float Distance_Attenuate = 1.6;
+
+//ライトマップテクスチャ：コメントアウト解除で有効化
+//#define LIGHTMAP_TEXTURE "lightmap1.png"
+
+//疑似トゥーン処理
+#define PARATOON  1
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+
+// 座法変換行列
+float4x4 WorldViewProjMatrix      : WORLDVIEWPROJECTION;
+float4x4 WorldMatrix              : WORLD;
+float4x4 ViewMatrix               : VIEW;
+
+float3   CameraPosition    : POSITION  < string Object = "Camera"; >;
+
+// マテリアル色
+float4   MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+float3   MaterialAmbient   : AMBIENT  < string Object = "Geometry"; >;
+float3   MaterialEmmisive  : EMISSIVE < string Object = "Geometry"; >;
+float3   MaterialSpecular  : SPECULAR < string Object = "Geometry"; >;
+float    SpecularPower     : SPECULARPOWER < string Object = "Geometry"; >;
+float3   MaterialToon      : TOONCOLOR;
+float4   EdgeColor         : EDGECOLOR;
+// ライト色
+float3   LightDiffuse      : DIFFUSE   < string Object = "Light"; >;
+float3   LightAmbient      : AMBIENT   < string Object = "Light"; >;
+float3   LightSpecular     : SPECULAR  < string Object = "Light"; >;
+
+
+
+//光強度のMMDからの制御
+float alpha1 : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "Tr"; >;
+float size_acc : CONTROLOBJECT < string name = "(OffscreenOwner)"; >;
+float4x4 matrix_acc : CONTROLOBJECT < string name = "(OffscreenOwner)"; >;
+
+//PMX入力
+float power_pmx : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "Power"; >;
+float size_pmx : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "Size"; >;
+float4x4 matrix_pmx : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "発光中心"; >;
+
+bool exist_acc : CONTROLOBJECT < string name = "PanelLight.x"; >;
+
+static bool IsPMX = (power_pmx > 0) || (size_pmx > 0) || (!exist_acc);
+
+//パラメータ入力選択
+static float power_in = lerp(alpha1, power_pmx, IsPMX);
+static float size_in = lerp(size_acc, size_pmx * 100, IsPMX);
+
+static float4x4 sizemat = { size_in, 0, 0, 0,
+                            0, size_in, 0, 0,
+                            0, 0, size_in, 0,
+                            0, 0, 0,       1};
+
+static float4x4 LightMatrix = lerp(matrix_acc, mul(sizemat, matrix_pmx), IsPMX);
+static float3 LightMainCenter = mul(float4(0, 0, 0, 1), LightMatrix).xyz;
+
+static float3 LightMainVector = normalize(mul(float4(0, 1, 0, 1), LightMatrix).xyz - LightMainCenter);
+static float3 LightXVector = normalize(mul(float4(1, 0, 0, 1), LightMatrix).xyz - LightMainCenter);
+static float3 LightZVector = normalize(mul(float4(0, 0, 1, 1), LightMatrix).xyz - LightMainCenter);
+    
+
+bool use_toon;
+
+//ライトパワー
+static const float lpower = power_in * LightPower2;
+
+//制御色合成
+static const float4 DiffuseColor  = MaterialDiffuse  * float4(LightDiffuse, 1.0f);
+static float3 AmbientColor  = MaterialAmbient * lerp(0.7, 1.2, use_toon) + MaterialEmmisive * lerp(1, 0.7, use_toon);
+static const float3 SpecularColor = MaterialSpecular;
+
+//距離減衰の中央位置設定。PowerCenterがなければ20
+
+#define PowerCenterDistance 20
+#define PowerColdDistance   3
+
+
+bool     transp;   // 半透明フラグ
+bool     spadd;    // スフィアマップ加算合成フラグ
+#define SKII1    1500
+#define SKII2    8000
+#define Toon     3
+
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+    texture = <ObjectSphereMap>;
+    MINFILTER = ANISOTROPIC;
+    MAGFILTER = ANISOTROPIC;
+    MIPFILTER = LINEAR;
+    MAXANISOTROPY = 16;
+};
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = ANISOTROPIC;
+    MAGFILTER = ANISOTROPIC;
+    MIPFILTER = LINEAR;
+    MAXANISOTROPY = 16;
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#ifdef LIGHTMAP_TEXTURE
+//光源テクスチャ
+texture2D Tex1 <
+    string ResourceName = LIGHTMAP_TEXTURE;
+    int MipLevels = 0;
+>;
+sampler Tex1Samp = sampler_state {
+    texture = <Tex1>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = LINEAR;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+};
+
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//MMM対応
+
+#ifdef MIKUMIKUMOVING
+    
+    #define GETPOS MMM_SkinnedPosition(IN.Pos, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1)
+    
+    int voffset : VERTEXINDEXOFFSET;
+    
+#else
+    
+    struct MMM_SKINNING_INPUT{
+        float4 Pos : POSITION;
+        float2 Tex : TEXCOORD0;
+        float4 AddUV1 : TEXCOORD1;
+        float4 AddUV2 : TEXCOORD2;
+        float4 AddUV3 : TEXCOORD3;
+        float3 Normal : NORMAL;
+        int Index     : _INDEX;
+    };
+    
+    #define GETPOS (IN.Pos)
+    
+    const int voffset = 0;
+    
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////
+// 輪郭描画
+
+// 頂点シェーダ
+float4 ColorRender_VS(MMM_SKINNING_INPUT IN) : POSITION 
+{
+    // カメラ視点のワールドビュー射影変換
+    return mul( GETPOS, WorldViewProjMatrix );
+}
+
+// ピクセルシェーダ
+float4 ColorRender_PS() : COLOR
+{
+    // 黒で塗りつぶし
+    return float4(0,0,0,1);
+}
+
+// 輪郭描画用テクニック
+technique EdgeTec < string MMDPass = "edge"; > {
+    pass DrawEdge {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 ColorRender_VS();
+        PixelShader  = compile ps_2_0 ColorRender_PS();
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 影描画
+
+// 地面影は表示しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+// MMD標準のセルフシャドウは表示しない
+technique ZplotTec < string MMDPass = "zplot"; > { }
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウOFF）
+
+struct VS_OUTPUT {
+    float4 Pos          : POSITION;     // 射影変換座標
+    float4 ZCalcTex     : TEXCOORD0;    // Z値
+    float2 Tex          : TEXCOORD1;    // テクスチャ
+    float3 Normal       : TEXCOORD2;    // 法線
+    float3 PosFromLight : TEXCOORD3;    // カメラとの相対位置
+    float2 SpTex        : TEXCOORD4;    // スフィアマップテクスチャ座標
+    float4 WorldPos     : TEXCOORD5;    // ワールド座標
+    
+};
+
+// 頂点シェーダ
+VS_OUTPUT Basic_VS(MMM_SKINNING_INPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+    
+    float4 pos = GETPOS;
+    
+    ////ワールド座標の算出
+    Out.WorldPos = mul( pos, WorldMatrix );
+    
+    // カメラ視点のワールドビュー射影変換
+    Out.Pos = mul( pos, WorldViewProjMatrix );
+    
+    //ライトとの相対位置
+    Out.PosFromLight = Out.WorldPos.xyz - LightMainCenter.xyz;
+    
+    // 頂点法線
+    Out.Normal = normalize( mul( IN.Normal, (float3x3)WorldMatrix ) );
+    
+    // テクスチャ座標
+    Out.Tex = IN.Tex;
+    
+    if ( useSphereMap ) {
+        // スフィアマップテクスチャ座標
+        float2 NormalWV = mul( Out.Normal, (float3x3)ViewMatrix ).xy;
+        Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+        Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+    }
+    
+    return Out;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////
+// ピクセルシェーダ
+
+
+static float3 rectvtx1 = mul(float4( 2, 0, 2, 1), LightMatrix).xyz;
+static float3 rectvtx2 = mul(float4( 2, 0,-2, 1), LightMatrix).xyz;
+static float3 rectvtx3 = mul(float4(-2, 0,-2, 1), LightMatrix).xyz;
+static float3 rectvtx4 = mul(float4(-2, 0, 2, 1), LightMatrix).xyz;
+
+
+float4 Basic_PS(VS_OUTPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon) : COLOR0
+{
+    
+    float4 Color = float4(0,0,0, DiffuseColor.a);
+    float3 Specular = float3(0,0,0);
+    
+    float Distance  = dot(IN.PosFromLight, LightMainVector);
+    float XDistance = dot(IN.PosFromLight, LightXVector);
+    float ZDistance = dot(IN.PosFromLight, LightZVector);
+    
+    float DistanceRate = 1 / (max(0, Distance / 10) + 0.5);
+    DistanceRate = pow(max(0, DistanceRate), Distance_Attenuate) * (1 + Distance_Attenuate * 0.5);
+    
+    
+    //境界積分法///////////////////////////////
+    //参考：http://nis-lab.is.s.u-tokyo.ac.jp/~nis/CG/cgtxt/cg5/cg52.htm
+    
+    
+    float3 rectvtx_trans[5] = {
+        rectvtx1 - IN.WorldPos.xyz,
+        rectvtx2 - IN.WorldPos.xyz,
+        rectvtx3 - IN.WorldPos.xyz,
+        rectvtx4 - IN.WorldPos.xyz,
+        rectvtx1 - IN.WorldPos.xyz
+    };
+    float sum = 0;
+    
+    #ifndef MIKUMIKUMOVING
+    [unroll] //ループ展開
+    #endif
+    for(int i = 0; i < 4; i++){
+        
+        float3 p1 = rectvtx_trans[i];
+        float3 p2 = rectvtx_trans[i+1];
+        
+        float3 vec1 = normalize(p1);
+        float3 vec2 = normalize(p2);
+        float3 vec3 = cross(vec1, vec2);
+        
+        float beta = acos(dot(vec1, vec2));
+        float cos_sigma = dot(vec3, -IN.Normal);
+        
+        //cos_sigma = sign(cos_sigma) * pow(cos_sigma, 0.3);
+        
+        sum += beta * cos_sigma;
+        
+    }
+    
+    sum = sum * 0.08;
+    sum = max(0, sum);
+    #if PARATOON==1
+    sum = sign(sum) * sqrt(sum) * 0.5; //疑似トゥーン
+    #endif
+    sum *= DistanceRate;
+    //sum *= max(0, dot( IN.Normal, -LightMainVector ));
+    sum *= saturate(1 + dot( IN.Normal, -LightMainVector )) * (Distance > 0); //背面キャンセル
+    
+    Color.rgb = AmbientColor.rgb * sum;
+    Specular = pow( max(0, MaterialSpecular * sum), abs(SpecularPower) );
+    
+    
+    //疑似アンビエント項/////////////////////
+    
+    float ambient;
+    float3 HLAmbient;
+    
+    //ハーフランバート
+    ambient = max(0, 0.4 + dot( IN.Normal, -LightMainVector ) * 0.6);
+    //範囲制限
+    ambient *= saturate((2.3 - abs(XDistance / size_in)) / 0.3);
+    ambient *= saturate((2.3 - abs(ZDistance / size_in)) / 0.3);
+    
+    HLAmbient = max(0, ambient * MaterialEmmisive * AmbientPower);
+    if(useToon) HLAmbient *= MaterialToon; //トゥーン適用
+    
+    Color.rgb = max(Color.rgb, HLAmbient);
+    
+    
+    //テクスチャ適用/////////////////////
+    
+    if ( useTexture ) {
+        // テクスチャ適用
+        float4 TexColor = tex2D( ObjTexSampler, IN.Tex );
+        Color *= TexColor;
+    }
+    if ( useSphereMap ) {
+        // スフィアマップ適用
+        float4 TexColor = tex2D(ObjSphareSampler,IN.SpTex);
+        if(spadd){
+            //Color.rgb += TexColor.rgb;
+        }else{
+            Color.rgb *= TexColor.rgb;
+        }
+    }
+    
+    // スペキュラ適用
+    Color.rgb += Specular;
+    
+    Color.rgb *= lpower;
+    
+    //ライトマップテクスチャ適用
+    #ifdef LIGHTMAP_TEXTURE
+        
+        float2 uv = float2(XDistance, -ZDistance) / size_in / 4 + 0.5;
+        
+        float3 extnm = IN.Normal * Distance / dot(IN.Normal, LightMainVector);
+        float3 extpos = IN.WorldPos.xyz + extnm;
+        
+        float2 extuv = float2(-dot(extpos, LightXVector), dot(extpos, LightZVector)) / size_in / 4 + 0.5;
+        
+        float3 texcolor = (float3)0;
+        
+        texcolor += tex2Dlod(Tex1Samp, float4(uv, 0, 2)).rgb;
+        texcolor += tex2Dlod(Tex1Samp, float4(0.5,0.5, 0, 100)).rgb;
+        texcolor += tex2Dlod(Tex1Samp, float4(extuv, 0, 4)).rgb;
+        texcolor += float3(1,1,1);
+        
+        texcolor /= 4;
+        
+        Color.rgb *= texcolor;
+        
+    #endif
+    
+    return Color;
+    
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// テクニックのリスト
+
+// オブジェクト描画用テクニック（アクセサリ用）
+technique MainTec0 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, false);
+    }
+}
+
+technique MainTec1 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, false);
+    }
+}
+
+technique MainTec2 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, false);
+    }
+}
+
+technique MainTec3 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, false);
+    }
+}
+
+// オブジェクト描画用テクニック（PMDモデル用）
+technique MainTec4 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, true);
+    }
+}
+
+technique MainTec5 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, true);
+    }
+}
+
+technique MainTec6 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, true);
+    }
+}
+
+technique MainTec7 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, true);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウON）
+// セルフシャドウOFF時と同じ描画を行う
+
+// オブジェクト描画用テクニック（アクセサリ用）
+technique MainTecBS0  < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, false);
+    }
+}
+
+technique MainTecBS1  < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, false, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, false);
+    }
+}
+
+technique MainTecBS2  < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, false);
+    }
+}
+
+technique MainTecBS3  < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, false);
+    }
+}
+
+// オブジェクト描画用テクニック（PMDモデル用）
+technique MainTecBS4  < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, true);
+    }
+}
+
+technique MainTecBS5  < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, true);
+    }
+}
+
+technique MainTecBS6  < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, true);
+    }
+}
+
+technique MainTecBS7  < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, true);
+    }
+}

@@ -1,0 +1,64 @@
+// ŠgŽU”½ŽË€‚ÌŒvŽZ
+
+
+float3 CalcIndirectlight(float3 L, float3 N, float3 V, float2 texCoord, MaterialParam mat, float4 ambientOccu)
+{
+	float NV = saturate(dot(N, V));
+	float3 dominantN = GetDiffuseDominantDir(N, V, NV, mat.roughness);
+	float3 ambient = GetEnvColor(dominantN, 1.0).rgb;
+
+	float brdf = tex2D(EnvironmentBRDF, float2(mat.roughness, NV)).z;
+	ambient *= brdf;
+	ambient += ambientOccu.rgb;
+
+	return ambient * AmbientScale;
+}
+
+float3 CalcTranslucentColor(float3 L, float3 N, MaterialParam mat, float3 albedo, float translucence)
+{
+	float3 col = lerp(albedo, 1, dot(N,L)*0.5+0.5) * 0.95;
+	return exp2((col - 1.0) * (translucence * LOG2_E * ThicknessScale));
+}
+
+float4 PS_CalcDiffuse( float4 Tex: TEXCOORD0 ) : COLOR
+{
+	float2 texCoord = Tex.xy;
+
+	float4 albedo = tex2D(ColorMap, texCoord);
+	MaterialParam mat = GetMaterial(texCoord, albedo);
+	GeometryInfo geom = GetWND(texCoord);
+	float2 shadowInfo = tex2D(ShadowmapSamp, texCoord).xy;
+	float4 ambientOccu = GetSSAOFull(texCoord);
+
+	float3 V = normalize(CameraPosition - geom.wpos);
+	float3 L = -LightDirection;
+	float3 N = geom.nd.normal;
+
+	float shadow = shadowInfo.x;
+	float translucence = shadowInfo.y;
+	float attr = mat.attribute;
+	translucence = max((attr != MT_FACE && attr != MT_LEAF) * 5000.0, translucence);
+
+	float3 ao = lerp(albedo.rgb * mat.sssValue, 1, ambientOccu.w);
+
+	float3 diffuse = CalcDiffuse(L, N, V, mat) * shadow;
+	float3 scatter = CalcTranslucentColor(L, N, mat, albedo.rgb, translucence);
+	float3 directlight = lerp(diffuse, scatter, mat.sssValue * 0.5) * LightColor;
+	#if EXTRA_LIGHTS > 0
+	directlight += tex2D(LightMapSamp, texCoord).rgb * LightScale;
+	#endif
+	float3 indirectlight = CalcIndirectlight(L, N, V, texCoord, mat, ambientOccu);
+	float3 light = directlight + indirectlight * ao + mat.emissive;
+
+	#if SSSBlurCount > 0
+	float result_a = mat.sssValue;
+	#else
+	float result_a = shadow;
+	#endif
+
+	light = ApplyFog(light, -V, geom.nd.depth);
+
+	return float4(light * (1.0 - mat.metalness), result_a);
+}
+
+

@@ -1,0 +1,607 @@
+
+//-----------------------------------------------------------------------------
+
+// スフィアマップを無視する
+#define	IGNORE_SPHERE
+
+/*
+#if MATERIAL_TYPE != MT_EMISSIVE
+#undef	EMISSIVE_TYPE
+#define	EMISSIVE_TYPE	1
+#endif
+*/
+
+// 座法変換行列
+float4x4 matW		: WORLD;
+float4x4 matWV		: WORLDVIEW;
+float4x4 matWVP		: WORLDVIEWPROJECTION;
+
+// マテリアル色
+float4	MaterialDiffuse		: DIFFUSE  < string Object = "Geometry"; >;
+float3	MaterialAmbient		: AMBIENT  < string Object = "Geometry"; >;
+float3	MaterialEmissive	: EMISSIVE < string Object = "Geometry"; >;
+float3	MaterialSpecular	: SPECULAR < string Object = "Geometry"; >;
+float	SpecularPower		: SPECULARPOWER < string Object = "Geometry"; >;
+
+float3	CameraPosition		: POSITION  < string Object = "Camera"; >;
+float3	LightDiffuse		: DIFFUSE   < string Object = "Light"; >;
+
+// 材質モーフ対応
+float4	TextureAddValue		: ADDINGTEXTURE;
+float4	TextureMulValue		: MULTIPLYINGTEXTURE;
+float4	SphereAddValue		: ADDINGSPHERETEXTURE;
+float4	SphereMulValue		: MULTIPLYINGSPHERETEXTURE;
+
+bool	use_texture;
+bool	use_subtexture;    // サブテクスチャフラグ
+bool	spadd;	// スフィアマップ加算合成フラグ
+
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+	texture = <ObjectTexture>;
+	MINFILTER = LINEAR;	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;	ADDRESSV  = WRAP;
+};
+#if EMISSIVE_TYPE == 4
+shared texture SavedScreen: RENDERCOLORTARGET;
+sampler LightSamp = sampler_state {
+	texture = <SavedScreen>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU  = CLAMP; AddressV  = CLAMP;
+};
+#endif
+
+
+#if !defined(IGNORE_SPHERE)
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphereSampler = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = LINEAR;	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;	ADDRESSV  = WRAP;
+};
+#endif
+
+static float4 DiffuseColor  = float4(saturate((MaterialAmbient.rgb+MaterialEmissive.rgb)),MaterialDiffuse.a);
+
+
+// ガンマ補正
+#if MASK_FOR_HDR_SKYDOME > 0
+#define Degamma(x)	(x)
+#else
+#define Degamma(x)	pow(max(x,1e-4), 2.2)
+#endif
+
+float Luminance(float3 rgb)
+{
+	return dot(float3(0.299, 0.587, 0.114), max(rgb,0));
+}
+
+//static float3 SpecularColor = (Degamma(MaterialSpecular)) * 0.95 + 0.05;
+static float3 SpecularColor = (Degamma(MaterialSpecular * (LightDiffuse.r * 9 + 1))) * 0.95 + 0.05;
+	// MaterialSpecular はモデルなら1、アクセサリなら1/10になる。
+	// LightDiffuse は モデルなら0,0,0、アクセサリなら1,1,1になる。
+
+
+//-----------------------------------------------------------------------------
+// 
+
+// 指定IDのテクスチャを使用しているか?
+#define USE_TEXTURE_ID(n)	\
+	((METALNESS_MAP_ENABLE > 0 && METALNESS_MAP_FILE == n) || \
+	(SMOOTHNESS_MAP_ENABLE > 0 && SMOOTHNESS_MAP_FILE == n) || \
+	(EMISSIVE_MAP_ENABLE > 0 && EMISSIVE_MAP_FILE == n) || \
+	(INTENSITY_MAP_ENABLE > 0 && INTENSITY_MAP_FILE == n) || \
+	(SSS_MAP_ENABLE > 0 && SSS_MAP_FILE == n))
+
+#define TEXTURE_SAMPLER(_TexID)	TextureSamp_##_TexID
+
+// テクスチャの登録
+#define DECL_TEXTURE( _TexID) \
+	texture2D TextureMap_##_TexID < string ResourceName = TEXTURE_FILENAME_##_TexID; >; \
+	sampler2D TEXTURE_SAMPLER(_TexID) = sampler_state { \
+		texture = <TextureMap_##_TexID>; \
+		MinFilter = Linear;	MagFilter = Linear;	MipFilter = None; \
+		AddressU  = WRAP;	AddressV  = WRAP; \
+	};
+
+#define GET_CHANNEL_VALUE(vals, ch)	vals##.##ch
+
+#define DECL_READ_TEXTURE( _FuncName, _MacroName) \
+	float Get##_FuncName(float2 uv) { \
+		float4 vals = tex2D( TEXTURE_SAMPLER(_MacroName##_FILE), uv * (_MacroName##_LOOPNUM)); \
+		float val = GET_CHANNEL_VALUE(vals, _MacroName##_CHANNEL); \
+		return (val * (_MacroName##_SCALE) + (_MacroName##_OFFSET)); \
+	}
+
+#if USE_TEXTURE_ID(0)
+DECL_TEXTURE(0)
+#endif
+#if USE_TEXTURE_ID(1)
+DECL_TEXTURE(1)
+#endif
+#if USE_TEXTURE_ID(2)
+DECL_TEXTURE(2)
+#endif
+#if USE_TEXTURE_ID(3)
+DECL_TEXTURE(3)
+#endif
+
+#if METALNESS_MAP_ENABLE > 0
+DECL_READ_TEXTURE( Metalness, METALNESS_MAP)
+#else
+float GetMetalness(float2 uv) { return METALNESS_VALUE; }
+#endif
+
+#if SMOOTHNESS_MAP_ENABLE > 0
+DECL_READ_TEXTURE( Smoothness, SMOOTHNESS_MAP)
+#else
+	#if SMOOTHNESS_TYPE == 0
+	float GetSmoothness(float2 uv) { return saturate((log2(SpecularPower+1)-1)/8.0); }
+	#else
+	float GetSmoothness(float2 uv) { return SMOOTHNESS_VALUE; }
+	#endif
+#endif
+
+#if SSS_MAP_ENABLE > 0
+DECL_READ_TEXTURE( SSSValue, SSS_MAP)
+#else
+float GetSSSValue(float2 uv) { return SSS_VALUE; }
+#endif
+
+#if INTENSITY_MAP_ENABLE > 0
+DECL_READ_TEXTURE( Intensity, INTENSITY_MAP)
+#else
+float GetIntensity(float2 uv) { return 1.0; }
+#endif
+
+
+//-----------------------------------------------------------------------------
+
+
+#define ANISO_NUM 16
+
+#define DECL_NORMAL_TEXTURE( _name, _res) \
+	texture2D _name##Map < string ResourceName = _res; >; \
+	sampler2D _name##Samp = sampler_state { \
+		texture = <_name##Map>; \
+		MINFILTER = ANISOTROPIC;	MAGFILTER = ANISOTROPIC;	MIPFILTER = ANISOTROPIC; \
+		MAXANISOTROPY = ANISO_NUM; \
+		AddressU  = WRAP;	AddressV  = WRAP; \
+	}; \
+
+#if NORMALMAP_ENABLE > 0
+DECL_NORMAL_TEXTURE( NormalMain, NORMALMAP_MAIN_FILENAME)
+#if NORMALMAP_SUB_ENABLE > 0
+DECL_NORMAL_TEXTURE( NormalSub, NORMALMAP_SUB_FILENAME)
+#endif
+#endif
+
+#if PARALLAX_ENABLE > 0
+DECL_NORMAL_TEXTURE( Height, PARALLAX_FILENAME)
+#endif
+
+
+shared texture PPPNormalMapRT: RENDERCOLORTARGET;
+shared texture PPPMaterialMapRT: RENDERCOLORTARGET;
+// shared texture PPPAlbedoMapRT: RENDERCOLORTARGET;
+#if SMOOTHNESS_TYPE == 2
+float ConvertToRoughness(float val) { return val; }
+#else
+float ConvertToRoughness(float val) { return 1 - val; }
+#endif
+
+
+#if EMISSIVE_TYPE == 0
+#define ENABLE_AL	1
+#elif EMISSIVE_TYPE == 3 || EMISSIVE_TYPE == 4
+#define IS_LIGHT	1
+#endif
+
+
+struct VS_OUTPUT
+{
+	float4 Pos		: POSITION;
+	float3 Normal	: TEXCOORD0;
+	float4 Tex		: TEXCOORD1;
+	float4 WPos		: TEXCOORD2;
+	#if !defined(IGNORE_SPHERE)
+	float2 SpTex	: TEXCOORD3;
+	#endif
+	float Smoothness	: TEXCOORD4;
+
+	#if ENABLE_AL > 0
+	float4 ColorAL	: COLOR0;		// AL用の発光色
+	#endif
+};
+
+struct PS_OUT_MRT
+{
+	float4 Color		: COLOR0;
+	float4 Normal		: COLOR1;
+	float4 Material		: COLOR2;
+//	float4 Albedo		: COLOR3;
+};
+
+
+//-----------------------------------------------------------------------------
+// 自己発光
+
+#if ENABLE_AL > 0
+
+//テクスチャ高輝度識別閾値
+float LightThreshold = 0.9;
+
+bool	use_spheremap;		//	スフィアフラグ
+bool	use_toon;
+
+#include "Sources/autoluminous.fxsub"
+#endif
+
+#if IS_LIGHT > 0
+#define MaxLightIntensity	8
+float mLightIntensityP : CONTROLOBJECT < string name = "(self)"; string item = "ライト強度+"; >;
+float mLightIntensityN : CONTROLOBJECT < string name = "(self)"; string item = "ライト強度-"; >;
+static float3 LightIntensity = (mLightIntensityP * (MaxLightIntensity - 1) + 1.0) * saturate(1.0 - mLightIntensityN);
+#endif
+
+#if EMISSIVE_TYPE == 2
+#if EMISSIVE_MAP_ENABLE > 0
+DECL_READ_TEXTURE( EmissiveValue, EMISSIVE_MAP)
+#else
+float GetEmissiveValue(float2 uv) { return EMISSIVE_VALUE; }
+#endif
+#endif
+
+float4 GetEmissiveColor(VS_OUTPUT IN, float4 baseColor, out float emissive)
+{
+	emissive = 0;
+
+#if ENABLE_AL > 0
+	float4 alColor = GetAutoluminousColor(IN.ColorAL, IN.Tex);
+	baseColor.rgb += alColor.rgb;
+	emissive = alColor.w;
+
+#elif EMISSIVE_TYPE == 1
+	// 発行しない
+
+#elif EMISSIVE_TYPE == 2
+	// 真っ黒または透明なら無視
+	float colorIntensity = dot(baseColor.rgb, 1);
+	emissive = GetEmissiveValue(IN.Tex) * baseColor.a * (colorIntensity > 0.0);
+	baseColor.a = (emissive > 0.0) ? 1 : baseColor.a;
+
+#elif IS_LIGHT > 0
+	// 追加ライト EMISSIVE_TYPE == 3, 4
+/*
+	// ??? ライトの色にすべき?
+	float isLight = dot(MaterialEmissive, 1.0) > 0.0;
+	emissive = isLight * LightIntensity;
+	baseColor.rgb = isLight ? MaterialEmissive : baseColor;
+*/
+	emissive = (dot(baseColor.rgb, 1) * baseColor.a > 0.0) * LightIntensity;
+
+#endif
+
+	emissive = saturate(emissive / 8.0);
+	return baseColor;
+}
+
+
+//-----------------------------------------------------------------------------
+// 
+float SIGN(float f) { return (f >= 0.0) ? 1 : -1; }
+
+float3x3 ComputeTangent(float3 N, float3 V, float2 UV)
+{
+	float3 dp1 = ddx(V);
+	float3 dp2 = ddy(V);
+	float2 duv1 = ddx(UV);
+	float2 duv2 = ddy(UV);
+	float3x3 M = float3x3(dp1, dp2, cross(dp1, dp2));
+	float2x3 invM = float2x3(cross(M[1], M[2]), cross(M[2], M[0]));
+	float3 T0 = normalize(mul(float2(duv1.x, duv2.x), invM));
+	float3 B0 = normalize(mul(float2(duv1.y, duv2.y), invM));
+
+	// to be orthogonal matrix
+	float3 B = normalize(cross(N, T0));
+	float3 T = normalize(cross(B, N));
+	B *= SIGN(dot(B, B0));
+	T *= SIGN(dot(T, T0));
+
+	return float3x3(T, B, N);
+}
+
+#if NORMALMAP_ENABLE > 0
+float3 CalcNormal(float2 Tex, float3x3 matTangentToWorld)
+{
+	float2 tex = Tex * NORMALMAP_MAIN_LOOPNUM; //メイン
+	float3 NormalColor = tex2D(NormalMainSamp, tex).xyz * 2 - 1;
+	#if defined(NORMALMAP_MAIN_FLIP)
+	NormalColor.xy *= NORMALMAP_MAIN_FLIP;
+	#endif
+	NormalColor.xy *= NORMALMAP_MAIN_HEIGHT;
+
+	#if NORMALMAP_SUB_ENABLE > 0
+	float2 texSub = Tex * NORMALMAP_SUB_LOOPNUM; //サブ
+	float3 NormalColorSub = tex2D(NormalSubSamp, texSub).xyz * 2 - 1;
+	#if defined(NORMALMAP_SUB_FLIP)
+	NormalColorSub.xy *= NORMALMAP_SUB_FLIP;
+	#endif
+	NormalColor.xy += NormalColorSub.xy * NORMALMAP_SUB_HEIGHT;
+	#endif
+
+	// NormalColor = normalize(NormalColor);
+	return normalize(mul(NormalColor, matTangentToWorld));
+}
+#endif
+
+#if PARALLAX_ENABLE > 0
+float4 GetParallaxOffset(float2 uv, float3 V, float3x3 matTangentToWorld)
+{
+	float3x3 matWorldToTangent = transpose(matTangentToWorld);
+	matWorldToTangent[0] = normalize(matWorldToTangent[0]);
+	matWorldToTangent[1] = normalize(matWorldToTangent[1]);
+	matWorldToTangent[2] = normalize(matWorldToTangent[2]);
+	float3 vUv = mul(V, matWorldToTangent);
+	vUv.xyz = normalize(vUv.xyz);
+	vUv.xy *= (PARALLAX_LENGTH) * (PARALLAX_HEIGHT) / (vUv.z + 0.4142);
+
+	float2 dx = ddx(uv);
+	float2 dy = ddy(uv);
+
+	float3 uv0 = float3(uv * PARALLAX_LOOPNUM, 1);
+	float3 vuv = float3(vUv.xy * PARALLAX_LOOPNUM, -1) * (1.0 / PARALLAX_ITERATION);
+	float3 uv1 = uv0 - vuv;
+	float2 prevH = float2(1, 1);
+	float4 pt = 0;
+
+	for(int i = 0; i <= PARALLAX_ITERATION; i++)
+	{
+		uv1 += vuv;
+		float h = tex2Dgrad(HeightSamp, uv1.xy, dx, dy).x;
+		// float h = GET_CHANNEL_VALUE(tex2Dgrad(HeightSamp, uv1.xy, dx, dy), PARALLAX__CHANNEL);
+		float2 curH = float2(uv1.z, h);
+		if (curH.x <= curH.y)
+		{
+			pt = float4(curH, prevH.xy);
+			uv1 -= vuv;
+			vuv *= 0.5;
+		}
+		else
+		{
+			prevH = curH;
+		}
+	}
+
+	float2 fd = pt.xz - pt.yw;
+	float denom = fd.y - fd.x;
+	float z = (abs(denom) > 1e-4)
+		? saturate((pt.x * fd.y - pt.z * fd.x) / denom)
+		: 0;
+
+	float h0 = tex2Dgrad(HeightSamp, uv0.xy, dx, dy).x;
+	if (h0 == 1) z = 1;
+
+	// float height = z;
+	uv1.xy = uv0.xy + vUv.xy * PARALLAX_LOOPNUM * (1 - z);
+	float height = tex2Dgrad(HeightSamp, uv1.xy, dx, dy).x;
+	height *= PARALLAX_HEIGHT;
+
+	return float4(vUv.xy * (1.0 - z), height, 1);
+}
+#endif
+
+
+void PerturbateTexCoord(inout VS_OUTPUT IN)
+{
+#if PARALLAX_ENABLE > 0 || NORMALMAP_ENABLE > 0
+
+	float3 V = normalize(CameraPosition - IN.WPos.xyz);
+	float3 Norig = normalize(IN.Normal);
+	float2 texCoord = IN.Tex.xy;
+
+	float3x3 matTangentToWorld = ComputeTangent(Norig, V, texCoord);
+
+	#if PARALLAX_ENABLE > 0
+	float4 offset = GetParallaxOffset(texCoord, V, matTangentToWorld);
+	texCoord.xy += offset.xy;
+	IN.Tex.xy = texCoord;
+	IN.WPos.w -= offset.z;
+	#endif
+
+	#if NORMALMAP_ENABLE > 0
+	IN.Normal = CalcNormal(texCoord, matTangentToWorld);
+	#endif
+
+#endif
+}
+
+
+float4 GetTextureColor(float2 uv)
+{
+	float4 TexColor = tex2D( ObjTexSampler, uv);
+
+	#if EMISSIVE_TYPE == 4
+	TexColor.rgb = tex2D( LightSamp, uv).rgb;
+	#endif
+
+	TexColor.rgb = lerp(1, TexColor * TextureMulValue + TextureAddValue, TextureMulValue.a + TextureAddValue.a).rgb;
+	return TexColor;
+}
+
+float4 GetSphereColor(float2 uv)
+{
+	#if !defined(IGNORE_SPHERE)
+	float4 TexColor = tex2D(ObjSphereSampler, uv);
+	TexColor.rgb = lerp(spadd?0:1, TexColor * SphereMulValue + SphereAddValue, SphereMulValue.a + SphereAddValue.a).rgb;
+	return TexColor;
+	#else
+	return 1;
+	#endif
+}
+
+
+//-----------------------------------------------------------------------------
+// オブジェクト描画
+
+VS_OUTPUT Basic_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex: TEXCOORD0,
+	#if ENABLE_AL > 0
+	float4 AddUV1 : TEXCOORD1,
+	float4 AddUV2 : TEXCOORD2,
+	float4 AddUV3 : TEXCOORD3,
+	#endif
+	uniform bool useTexture, uniform bool useSphereMap)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	Out.Pos = mul( Pos, matWVP );
+	Out.Normal = normalize(mul(Normal,(float3x3)matW));
+	Out.Tex.xy = Tex;
+	Out.WPos = float4(mul( Pos, matW ).xyz, mul(Pos, matWV).z);
+
+	#if !defined(IGNORE_SPHERE)
+	if ( useSphereMap && !spadd) {
+		float2 NormalWV = normalize(mul( Normal, (float3x3)matWV )).xy;
+		Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+		Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+	}
+	#endif
+
+	#if ENABLE_AL > 0
+	float2 ALTex;
+	Out.ColorAL = DecodeALInfo(AddUV1, AddUV2, AddUV3, ALTex);
+	Out.Tex.zw = ALTex;
+	#endif
+
+	#if SMOOTHNESS_MAP_ENABLE == 0
+	Out.Smoothness.x = GetSmoothness(0);
+	#endif
+
+	return Out;
+}
+
+
+PS_OUT_MRT Basic_PS( VS_OUTPUT IN, uniform bool useTexture, uniform bool useSphereMap) : COLOR
+{
+	PS_OUT_MRT Out = (PS_OUT_MRT)0;
+
+	PerturbateTexCoord(IN);
+
+	float3 V = normalize(CameraPosition - IN.WPos.xyz);
+	float3 N = normalize(IN.Normal);
+	float depth = IN.WPos.w;
+	float2 texCoord = IN.Tex.xy;
+
+	float4 albedo = DiffuseColor;
+	#if MASK_FOR_HDR_SKYDOME > 0
+	#define RGBM_SCALE_FACTOR	6
+	albedo = GetTextureColor(texCoord);
+	albedo.rgb = albedo.rgb * albedo.a * RGBM_SCALE_FACTOR;
+	albedo.a = 1;
+	#else
+	if ( useTexture ) albedo *= GetTextureColor(texCoord);
+	#endif
+
+	#if !defined(IGNORE_SPHERE)
+	if ( useSphereMap && !spadd) albedo.rgb *= GetSphereColor(IN.SpTex).rgb;
+	#endif
+	albedo.rgb = Degamma(albedo.rgb);
+
+
+#if MATERIAL_TYPE != MT_MASK
+
+	float metalness = saturate(GetMetalness(texCoord));
+	#if SMOOTHNESS_MAP_ENABLE > 0
+	float smoothness = GetSmoothness(texCoord);
+	#else
+	float smoothness = IN.Smoothness.x;
+	#endif
+	float roughness = saturate(ConvertToRoughness(smoothness));
+	float sssValue = lerp(saturate(GetSSSValue(texCoord)), 0, metalness);
+	float intensity = saturate(GetIntensity(texCoord) * 0.5);
+
+	float emissive = 0;
+	albedo = GetEmissiveColor(IN, albedo, emissive);
+
+	clip(albedo.a - AlphaThreshold);
+
+	//-----------------------------------------------------------------------------
+	// 属性設定
+	// emissiveとsssは排他的
+	float attribute = (emissive >= 1.0/255.0) ? (MT_EMISSIVE) : (MATERIAL_TYPE);
+	float extraValue = (attribute == MT_EMISSIVE) ? emissive : sssValue;
+
+	#if INTENSITY_TYPE == 0
+	// 何もしない
+	#elif INTENSITY_TYPE == 1
+	attribute += MT_AO;
+	#elif INTENSITY_TYPE == 2
+	attribute += MT_CAVITY;
+	#elif INTENSITY_TYPE == 3
+	attribute += MT_CAVITY;
+	float NV = saturate(dot(N,V));
+	float cavity = (1.0 - NV) * (1.0 - NV);
+	intensity = lerp(intensity, 1, cavity);
+	#endif
+	float extraValue2 = intensity;
+
+	float materialID = attribute / 255.0;
+
+	//-----------------------------------------------------------------------------
+
+	#if SPECULAR_COLOR_TYPE == 0
+	// OLD STYLE
+	float3 speccol = (albedo.rgb * 0.5 + 0.5) * SpecularColor;
+	albedo.rgb = lerp(albedo.rgb, speccol, metalness);
+	#elif SPECULAR_COLOR_TYPE == 1
+	// ベース色をスペキュラ色にする
+	#elif SPECULAR_COLOR_TYPE == 2
+	// スペキュラ色のみで決定
+	albedo.rgb = lerp(albedo.rgb, SpecularColor, metalness);
+	#endif
+
+	Out.Color = float4(albedo.rgb, extraValue2);
+	Out.Material = float4(metalness, roughness, extraValue, materialID);
+//	Out.Albedo = float4(albedo.rgb, 1);
+
+#else
+	// マスク
+	Out.Color = float4(albedo.rgb, 0);
+#endif
+
+	Out.Normal = float4(N, depth);
+
+	return Out;
+}
+
+#define OBJECT_TEC(name, mmdpass, tex, sphere) \
+	technique name < string MMDPass = mmdpass; \
+	string Script = \
+		"RenderColorTarget0=;" \
+		"RenderColorTarget1=PPPNormalMapRT;" \
+		"RenderColorTarget2=PPPMaterialMapRT;" \
+		"Pass=DrawObject;" \
+	; \
+	> { \
+		pass DrawObject { \
+			AlphaTestEnable = FALSE; AlphaBlendEnable = FALSE; \
+			VertexShader = compile vs_3_0 Basic_VS(tex, sphere); \
+			PixelShader  = compile ps_3_0 Basic_PS(tex, sphere); \
+		} \
+	}
+
+
+OBJECT_TEC(MainTec0, "object", use_texture, use_subtexture)
+OBJECT_TEC(MainTecBS0, "object_ss", use_texture, use_subtexture)
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTech < string MMDPass = "shadow";  > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+//-----------------------------------------------------------------------------

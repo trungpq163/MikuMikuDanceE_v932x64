@@ -1,0 +1,1017 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>PathMakerPlugin</name>
+    </assembly>
+    <members>
+        <member name="T:PathMakerPlugin.VMDFormat">
+            <summary>
+            VMDフォーマットファイルへのアクセスとデータ管理を提供する
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.DefaultHeaderScript">
+            <summary>
+            標準のVMDファイルのヘッダ
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.PoseHeaderScript">
+            <summary>
+            標準のVPDファイルのヘッダ
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.MotionRecords">
+            <summary>
+            モーションレコードのリスト
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.ExpressionRecords">
+            <summary>
+            表情レコードのリスト
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecords">
+            <summary>
+            カメラレコードのリスト
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.LightRecords">
+            <summary>
+            照明レコードのリスト
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.ShadowRecords">
+            <summary>
+            セルフシャドウレコードのリスト
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.#ctor">
+            <summary>
+            初期値を設定してインスタンスを作成
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.Reset">
+            <summary>
+            格納された情報を初期化する
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.Clone">
+            <summary>
+            クラスの複製
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.Read(System.String)">
+            <summary>
+            VMDファイルを開いて情報を読み出す
+            </summary>
+            <param name="FileName">VMDファイルのフルパス</param>
+            <returns>成功すればtrue、失敗すればfalseを返す</returns>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.Read(System.IO.Stream)">
+            <summary>
+            VMDファイルのストリームから情報を読み出す
+            </summary>
+            <param name="stream">使用するストリーム</param>
+            <returns>成功すればtrue、失敗すればfalseを返す</returns>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.Write(System.String)">
+            <summary>
+            VMDファイルを開いて情報を書き出す
+            </summary>
+            <param name="FileName">VMDファイルのフルパス</param>
+            <returns>成功すればtrue、失敗すればfalseを返す</returns>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.Write(System.IO.Stream)">
+            <summary>
+            VMDファイルのストリームへ情報を書き出す
+            </summary>
+            <param name="stream">使用するストリーム</param>
+            <returns>成功すればtrue、失敗すればfalseを返す</returns>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ExportPoseData(System.Int32,System.String)">
+            <summary>
+            VPDファイルへ情報を書き出す
+            </summary>
+            <param name="FrameNumber">書き出したいフレーム番号</param>
+            <param name="FileName">VPDファイルのフルパス</param>
+            <returns>成功すればtrue、失敗すればfalseを返す</returns>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ExportPoseData(System.Int32,System.IO.Stream)">
+            <summary>
+            VPDファイルのストリームへ情報を書き出す
+            </summary>
+            <param name="FrameNumber">書き出したいフレーム番号</param>
+            <param name="stream">使用するストリーム</param>
+            <returns>成功すればtrue、失敗すればfalseを返す</returns>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ImportPoseData(System.Int32,System.String)">
+            <summary>
+            VPDファイルから情報を読み出す
+            </summary>
+            <param name="FrameNumber">読み込み先のフレーム番号</param>
+            <param name="FileName">VPDファイルのフルパス</param>
+            <returns>成功すればtrue、失敗すればfalseを返す</returns>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ImportPoseData(System.Int32,System.IO.Stream)">
+            <summary>
+            VPDファイルのストリームから情報を読み込む
+            </summary>
+            <param name="FrameNumber">読み込み先のフレーム番号</param>
+            <param name="stream">使用するストリーム</param>
+            <returns>成功すればtrue、失敗すればfalseを返す</returns>
+        </member>
+        <member name="P:PathMakerPlugin.VMDFormat.HeaderScript">
+            <summary>
+            ヘッダ文字列
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.VMDFormat.Actor">
+            <summary>
+            モデル名称
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.VMDFormat.Record">
+            <summary>
+            各レコードの基本クラス
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.Record.CompareTo(System.Object)">
+            <summary>
+            フレーム番号の大小を返します
+            </summary>
+            <param name="other">比較するレコード</param>
+            <returns>フレーム番号の差</returns>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.Record.Read(System.IO.Stream)">
+            <summary>
+            ストリームから単独のレコードを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.Record.Write(System.IO.Stream)">
+            <summary>
+            ストリームに単独のレコードを書き出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.Record.Clone">
+            <summary>
+            クラスの複製
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.VMDFormat.Record.FrameNumber">
+            <summary>
+            フレーム番号
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.VMDFormat.MotionRecord">
+            <summary>
+            モーションレコードの情報を格納するクラス
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.MotionRecord.#ctor(System.IO.Stream)">
+            <summary>
+            インスタンスの作成と同時にデータを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.MotionRecord.Clone">
+            <summary>
+            クラスの複製
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.MotionRecord.BoneName">
+            <summary>
+            ボーン名
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.MotionRecord.Trans">
+            <summary>
+            平行移動の情報
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.MotionRecord.Qt">
+            <summary>
+            回転の情報 (クオータニオン)
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.MotionRecord.CBX">
+            <summary>
+            X軸座標の補完曲線
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.MotionRecord.CBY">
+            <summary>
+            Y軸座標の補完曲線
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.MotionRecord.CBZ">
+            <summary>
+            Z軸座標の補完曲線
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.MotionRecord.CBQ">
+            <summary>
+            回転の補完曲線
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.MotionRecord.CompareTo(PathMakerPlugin.VMDFormat.MotionRecord)">
+            <summary>
+            フレーム番号の大小を比較します。フレーム番号が同じならボーン名を比較します
+            </summary>
+            <param name="other">比較するモーションレコード</param>
+            <returns></returns>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.MotionRecord.Read(System.IO.Stream)">
+            <summary>
+            ストリームから単独のレコードを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.MotionRecord.Write(System.IO.Stream)">
+            <summary>
+            ストリームに単独のレコードを書き出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.MotionRecord.read_cb(System.IO.BinaryReader,PathMakerPlugin.ComplementBezier@)">
+            <summary>
+            補完パターンの読み出し
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.MotionRecord.write_cb(System.IO.BinaryWriter,PathMakerPlugin.ComplementBezier@)">
+            <summary>
+            補完パターンの書き出し
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.VMDFormat.MotionRecord.DataLength">
+            <summary>
+            ファイル書き込み時のデータ長
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.VMDFormat.ExpressionRecord">
+            <summary>
+            表情レコードの情報を格納するクラス
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ExpressionRecord.#ctor(System.IO.Stream)">
+            <summary>
+            インスタンスの作成と同時にデータを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ExpressionRecord.Clone">
+            <summary>
+            クラスの複製
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.ExpressionRecord.ExpressionName">
+            <summary>
+            表情の名前
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.ExpressionRecord.Factor">
+            <summary>
+            表情パラメータ
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ExpressionRecord.Read(System.IO.Stream)">
+            <summary>
+            ストリームから単独のレコードを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ExpressionRecord.Write(System.IO.Stream)">
+            <summary>
+            ストリームに単独のレコードを書き出す
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.VMDFormat.ExpressionRecord.DataLength">
+            <summary>
+            ファイル書き込み時のデータ長
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.VMDFormat.CameraRecord">
+            <summary>
+            カメラレコードの情報を格納するクラス
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.CameraRecord.#ctor(System.IO.Stream)">
+            <summary>
+            インスタンスの作成と同時にデータを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.CameraRecord.Clone">
+            <summary>
+            クラスの複製
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecord.Distance">
+            <summary>
+            カメラ距離
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecord.Trans">
+            <summary>
+            平行移動の情報
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecord.Ang">
+            <summary>
+            回転の情報（オイラー角：ラジアン）
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecord.CBX">
+            <summary>
+            X軸座標の補完曲線
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecord.CBY">
+            <summary>
+            Y軸座標の補完曲線
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecord.CBZ">
+            <summary>
+            Z軸座標の補完曲線
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecord.CBQ">
+            <summary>
+            回転の補完曲線
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecord.CBD">
+            <summary>
+            距離の補完曲線
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecord.CBV">
+            <summary>
+            視野角の補完曲線
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.CameraRecord.ViewAngle">
+            <summary>
+            視野角 (25 to 125)
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.CameraRecord.Read(System.IO.Stream)">
+            <summary>
+            ストリームから単独のレコードを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.CameraRecord.Write(System.IO.Stream)">
+            <summary>
+            ストリームに単独のレコードを書き出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.CameraRecord.read_cb(System.IO.BinaryReader,PathMakerPlugin.ComplementBezier@)">
+            <summary>
+            補完パターンの読み出し
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.CameraRecord.write_cb(System.IO.BinaryWriter,PathMakerPlugin.ComplementBezier@)">
+            <summary>
+            補完パターンの書き出し
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.VMDFormat.CameraRecord.DataLength">
+            <summary>
+            ファイル書き込み時のデータ長
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.VMDFormat.LightRecord">
+            <summary>
+            照明レコードの情報を格納するクラス
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.LightRecord.#ctor(System.IO.Stream)">
+            <summary>
+            インスタンスの作成と同時にデータを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.LightRecord.Clone">
+            <summary>
+            クラスの複製
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.LightRecord.R">
+            <summary>
+            赤色要素 (0.0 to 1.0)
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.LightRecord.G">
+            <summary>
+            緑色要素 (0.0 to 1.0)
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.LightRecord.B">
+            <summary>
+            青色要素 (0.0 to 1.0)
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.LightRecord.Dir">
+            <summary>
+            照射方向の情報 (-1.0 to 1.0)
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.LightRecord.Read(System.IO.Stream)">
+            <summary>
+            ストリームから単独のレコードを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.LightRecord.Write(System.IO.Stream)">
+            <summary>
+            ストリームに単独のレコードを書き出す
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.VMDFormat.LightRecord.DataLength">
+            <summary>
+            ファイル書き込み時のデータ長
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.VMDFormat.ShadowRecord">
+            <summary>
+            照明レコードの情報を格納するクラス
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ShadowRecord.#ctor(System.IO.Stream)">
+            <summary>
+            インスタンスの作成と同時にデータを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ShadowRecord.Clone">
+            <summary>
+            クラスの複製
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.ShadowRecord.mode">
+            <summary>
+            モード(0-2)
+            </summary>
+        </member>
+        <member name="F:PathMakerPlugin.VMDFormat.ShadowRecord.Distance">
+            <summary>
+            距離 (0.1 - (dist * 0.00001))
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ShadowRecord.Read(System.IO.Stream)">
+            <summary>
+            ストリームから単独のレコードを読み出す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.VMDFormat.ShadowRecord.Write(System.IO.Stream)">
+            <summary>
+            ストリームに単独のレコードを書き出す
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.VMDFormat.ShadowRecord.DataLength">
+            <summary>
+            ファイル書き込み時のデータ長
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.ComplementBezier">
+            <summary>
+            補完ベジエ曲線の情報を格納する構造体の定義
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.ComplementBezier.ToString">
+            <summary>
+            4つの要素をカンマで結合して文字列に
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.ComplementBezier.FromString(System.String)">
+            <summary>
+            カンマ区切りの4つの数字の文字列から値の受け入れ
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.ComplementBezier.GetComplementValue(System.Single)">
+            <summary>
+            補完曲線から補完の値を取得
+            </summary>
+            <param name="x">0から1.0の実数</param>
+        </member>
+        <member name="T:PathMakerPlugin.Transfer">
+            <summary>
+            平行移動の情報を格納する構造体の定義
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Transfer.#ctor(System.Single,System.Single,System.Single)">
+            <summary>
+            要素を指定して新しいインスタンスを作成します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Transfer.GetDefault">
+            <summary>
+            初期値を取得
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Transfer.op_Addition(PathMakerPlugin.Transfer,PathMakerPlugin.Transfer)">
+            <summary>
+            要素同士の加算
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Transfer.op_Subtraction(PathMakerPlugin.Transfer,PathMakerPlugin.Transfer)">
+            <summary>
+            要素同士の減算
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Transfer.RotByQuaternion(PathMakerPlugin.Quaternion)">
+            <summary>
+            クオータニオンによる座標変換
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Transfer.op_Multiply(PathMakerPlugin.Transfer,PathMakerPlugin.Quaternion)">
+            <summary>
+            クオータニオンによる座標変換
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Transfer.Complement(PathMakerPlugin.Transfer,PathMakerPlugin.Transfer,System.Single,System.Single,System.Single)">
+            <summary>
+            2つの移動量の間の補完した値を返す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Transfer.ToString">
+            <summary>
+            3つの要素をカンマで結合して表示
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Transfer.ToString(System.String)">
+            <summary>
+            フォーマットを指定して3つの要素をカンマで結合して表示
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.Quaternion">
+            <summary>
+            ボーンの回転の情報を格納する構造体の定義 (クオータニオン)
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.#ctor(PathMakerPlugin.EulerAngle)">
+            <summary>
+            オイラー角からクオータニオンを生成
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.#ctor(System.Single,System.Single,System.Single)">
+            <summary>
+            オイラー角からクオータニオンを生成
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.GetDefault">
+            <summary>
+            初期値を取得
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.GetFullQt">
+            <summary>
+            1回転のクオータニオン
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.Multiply(PathMakerPlugin.Quaternion,PathMakerPlugin.Quaternion)">
+            <summary>
+            クオータニオンどうしの掛け算を行う
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.Multiply(PathMakerPlugin.Quaternion)">
+            <summary>
+            クオータニオンどうしの掛け算を行う
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.Conjugate(PathMakerPlugin.Quaternion)">
+            <summary>
+            共役なクオータニオンを返す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.Conjugate">
+            <summary>
+            共役なクオータニオンを返す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.Positive">
+            <summary>
+            wが正のクオータニオンを返す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.Negative">
+            <summary>
+            wが負のクオータニオンを返す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.Normalize">
+            <summary>
+            クオータニオンを正規化
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.op_Multiply(PathMakerPlugin.Quaternion,PathMakerPlugin.Quaternion)">
+            <summary>
+            クオータニオン同士の掛け算の演算子のオーバーロード
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.op_Multiply(PathMakerPlugin.Quaternion,System.Single)">
+            <summary>
+            クオータニオンの回転量を実数倍
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.op_LogicalNot(PathMakerPlugin.Quaternion)">
+            <summary>
+            !演算子を共役に割り当て
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.ToEulerAngle">
+            <summary>
+            クオータニオンをオイラー角に変換(ZXY)
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.Complement(PathMakerPlugin.Quaternion,PathMakerPlugin.Quaternion,System.Single)">
+            <summary>
+            2つのクオータニオンの間の補完した値を返す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.ToString">
+            <summary>
+            4つの要素をカンマで結合して返す
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Quaternion.ToString(System.String)">
+            <summary>
+            フォーマットを指定して4つの要素をカンマで結合して返す
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.Quaternion.Length">
+            <summary>
+            クオータニオンの大きさを取得
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.EulerAngle">
+            <summary>
+            オイラー角による回転の情報を格納する構造体の定義
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.EulerAngle.GetDefault">
+            <summary>
+            初期値を取得
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.EulerAngle.ToQuaternion">
+            <summary>
+            オイラー角をクオータニオンに変換(ZXY)
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.EulerAngle.DegToRad(System.Single)">
+            <summary>
+            度をラジアンに変換
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.EulerAngle.RadToDeg(System.Single)">
+            <summary>
+            ラジアンを度に変換
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.EulerAngle.ToString">
+            <summary>
+            3つの要素をカンマで結合してdegreeで表示:主にデバッグ用
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.EulerAngle.Xd">
+            <summary>
+            Degreeによる回転角度
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.EulerAngle.Yd">
+            <summary>
+            Degreeによる回転角度
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.EulerAngle.Zd">
+            <summary>
+            Degreeによる回転角度
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.Point3D">
+            <summary>
+            3次元上の点を表す構造体。書き易さ優先で演算子のオーバーロードしまくり
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Point3D.#ctor(System.Double,System.Double,System.Double)">
+            <summary>
+            要素を指定して新しいインスタンスを作成します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Point3D.op_Multiply(PathMakerPlugin.Point3D,System.Double)">
+            <summary>
+            点の座標の実数倍
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Point3D.op_Addition(PathMakerPlugin.Point3D,PathMakerPlugin.Point3D)">
+            <summary>
+            点の座標の加算
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Point3D.op_Addition(PathMakerPlugin.Point3D,PathMakerPlugin.Vector3D)">
+            <summary>
+            点をベクトルに従って移動
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Point3D.op_Subtraction(PathMakerPlugin.Point3D,PathMakerPlugin.Point3D)">
+            <summary>
+            点と点の間のベクトルを算出
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.Point3D.X">
+            <summary>
+            X軸座標
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.Point3D.Y">
+            <summary>
+            Y軸座標
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.Point3D.Z">
+            <summary>
+            Z軸座標
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.Vector3D">
+            <summary>
+            3次元ベクトル表す構造体。書き易さ優先で演算子のオーバーロードしまくり
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Vector3D.#ctor(System.Double,System.Double,System.Double)">
+            <summary>
+            要素を指定して新しいインスタンスを作成します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Vector3D.Normalize">
+            <summary>
+            正規化されたベクトルを返します
+            </summary>
+            <returns>正規化されたベクトル</returns>
+        </member>
+        <member name="M:PathMakerPlugin.Vector3D.Cross(PathMakerPlugin.Vector3D,PathMakerPlugin.Vector3D)">
+            <summary>
+            ベクトルの外積（クロス積）を求める
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Vector3D.op_Addition(PathMakerPlugin.Vector3D,PathMakerPlugin.Vector3D)">
+            <summary>
+            成分の加算
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Vector3D.op_Subtraction(PathMakerPlugin.Vector3D,PathMakerPlugin.Vector3D)">
+            <summary>
+            成分の減算
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Vector3D.op_Multiply(PathMakerPlugin.Vector3D,System.Double)">
+            <summary>
+            ベクトルの実数倍
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Vector3D.op_Division(PathMakerPlugin.Vector3D,System.Double)">
+            <summary>
+            ベクトルの実数倍
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.Vector3D.op_Multiply(PathMakerPlugin.Vector3D,PathMakerPlugin.Vector3D)">
+            <summary>
+            ベクトルの内積
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.Vector3D.X">
+            <summary>
+            X軸成分
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.Vector3D.Y">
+            <summary>
+            Y軸成分
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.Vector3D.Z">
+            <summary>
+            Z軸成分
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.Vector3D.Length">
+            <summary>
+            ベクトルの大きさ
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.PictureBoxPaintEventHandler">
+            <summary>
+            PathMaker上のメインピクチャボックスが描画された時のイベントを提供します
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.DataRenewEventHandler">
+            <summary>
+            PathMakerでデータが更新された時のイベントを提供します
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.IPlugin">
+            <summary>
+            プラグインで実装するインターフェース
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPlugin.Run">
+            <summary>
+            プラグインを実行
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPlugin.Name">
+            <summary>
+            プラグインの名前
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPlugin.Version">
+            <summary>
+            プラグインのバージョン
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPlugin.Description">
+            <summary>
+            プラグインの説明
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPlugin.Host">
+            <summary>
+            プラグインのホスト
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.IPlayer">
+            <summary>
+            出力結果からプレビュー再生を行うためのインターフェース
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPlayer.Start">
+            <summary>
+            再生を返します
+            </summary>
+            <returns>成功:true, 失敗:false</returns>
+        </member>
+        <member name="M:PathMakerPlugin.IPlayer.NextFrame">
+            <summary>
+            次のフレームに進みます
+            </summary>
+            <returns>成功:true, 失敗または終了:false</returns>
+        </member>
+        <member name="M:PathMakerPlugin.IPlayer.Draw">
+            <summary>
+            パスメイカー上に再生マーカーを描画します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPlayer.End">
+            <summary>
+            再生を終了します
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPlayer.tr">
+            <summary>
+            原点からの移動量
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPlayer.qt">
+            <summary>
+            回転
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPlayer.Playing">
+            <summary>
+            再生が開始されているかを示します
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPlayer.Frame">
+            <summary>
+            再生中のフレーム数を取得します
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPlayer.Index">
+            <summary>
+            再生中のキーフレーム番号を取得します
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.IPluginHost">
+            <summary>
+            プラグインのホストで実装するインターフェイス
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.ShowTitleMessage(System.String)">
+            <summary>
+            タイトルバーにメッセージを表示する
+            </summary>
+            <param name="msg">表示するメッセージ</param>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.GetMarkerPoints(PathMakerPlugin.Point3D[]@)">
+            <summary>
+            マーカーの座標のリストを取得します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.GetMarkerSpeeds(System.Double[]@)">
+            <summary>
+            マーカーごとの速度倍率のリストを取得します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.GetSplinePoints(PathMakerPlugin.Point3D[]@)">
+            <summary>
+            スプライン補完された座標のリストを取得します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.SetMarkerPoints(PathMakerPlugin.Point3D[]@)">
+            <summary>
+            マーカーの座標のリストを設定します。
+            要素数が異なる時は速度がリセットされます。
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.SetMarkerSpeeds(System.Double[]@)">
+            <summary>
+            マーカーごとの速度のリストを設定します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.GetDrawPoint(PathMakerPlugin.Point3D)">
+            <summary>
+            3次元上の点をピクチャボックス上の点に変換します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.GetGraphics">
+            <summary>
+            メインの描画バッファへのGraphicsを作成して返します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.PictureBoxRefresh">
+            <summary>
+            描画バッファを画面に表示します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.GetOutputCSV">
+            <summary>
+            CSV出力の結果を返します
+            </summary>
+            <returns>CSV出力の文字列</returns>
+        </member>
+        <member name="M:PathMakerPlugin.IPluginHost.GetOutput">
+            <summary>
+            出力の結果を返します
+            </summary>
+            <returns>出力VMDデータ</returns>
+        </member>
+        <member name="P:PathMakerPlugin.IPluginHost.BoneName">
+            <summary>
+            現在のボーン名を取得または設定します
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPluginHost.IsCameraMode">
+            <summary>
+            カメラモードか否かを返します
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPluginHost.Speed">
+            <summary>
+            現在の基準速度を取得または設定します
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPluginHost.OutFileName">
+            <summary>
+            出力ファイルの名前を取得または設定します
+            </summary>
+        </member>
+        <member name="E:PathMakerPlugin.IPluginHost.PictureBoxPaintEvent">
+            <summary>
+            PathMaker上のメインピクチャボックスが描画される時のイベント
+            </summary>
+        </member>
+        <member name="E:PathMakerPlugin.IPluginHost.DataRenewEvent">
+            <summary>
+            PathMakerでデータが更新された時のイベント
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.IPluginHost.Player">
+            <summary>
+            プレビュー再生機能にアクセス
+            </summary>
+        </member>
+        <member name="T:PathMakerPlugin.MMDAccess">
+            <summary>
+            MMD本体へのアクセスを提供します
+            </summary>
+        </member>
+        <member name="M:PathMakerPlugin.MMDAccess.SearchMainWindow">
+            <summary>
+            MMDのプロセスを探します
+            </summary>
+            <returns>MMDのプロセス</returns>
+        </member>
+        <member name="M:PathMakerPlugin.MMDAccess.SearchModelListComboBox">
+            <summary>
+            MMDのモデル選択コンボボックスが見つかっていない時、モデル選択コンボボックスを探します
+            </summary>
+            <returns>見つかったらtrue、見つからなければfalseを返します</returns>
+        </member>
+        <member name="P:PathMakerPlugin.MMDAccess.ActorName">
+            <summary>
+            MMDのモデル選択コンボボックスが見つかっている時、選択されているモデルの名前を返します
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.MMDAccess.IsCamera">
+            <summary>
+            MMDのモデル選択コンボボックスが見つかっている時、カメラが選択されているか返します
+            </summary>
+        </member>
+        <member name="P:PathMakerPlugin.MMDAccess.ModelListComboBoxHandle">
+            <summary>
+            MMDのモデル選択コンボボックスが見つかっている時、モデル選択コンボボックスのハンドルを返します
+            </summary>
+        </member>
+    </members>
+</doc>

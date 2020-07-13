@@ -1,0 +1,4 @@
+ikボケ用に水面の奥行きを出力するエフェクトファイル。
+
+ikボケのLinearDepthMapRTタブで、ikUWController.pmxに対して、UWControllerDepth.fxを割り当てる。
+ikボケを使用しない。または水面を表示しない場合は不要。

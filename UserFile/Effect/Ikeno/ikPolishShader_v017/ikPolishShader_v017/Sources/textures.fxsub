@@ -1,0 +1,172 @@
+
+//-----------------------------------------------------------------------------
+// テクスチャ
+
+// スクリーン
+texture2D ScnMap : RENDERCOLORTARGET <
+	float2 ViewPortRatio = {1.0,1.0};
+	int MipLevels = 1;
+	bool AntiAlias = false;
+	string Format = OutputTexFormat;
+>;
+sampler ScnSamp = sampler_state {
+	texture = <ScnMap>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+texture2D DepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+>;
+
+// ベースカラーマップ(スペキュラ色として使う)
+texture ColorMapRT: OFFSCREENRENDERTARGET <
+	float2 ViewPortRatio = {COLORMAP_SCALE, COLORMAP_SCALE};
+	float4 ClearColor = { 0, 0, 0, 1 };
+	float ClearDepth = 1.0;
+	string Format = "A8R8G8B8" ;	// 陰影計算なしの色。リフレクタンスの元データとして使用。
+	int Miplevels = 1;
+	bool AntiAlias = false;
+	string Description = "MaterialMap for ikPolishShader";
+	string DefaultEffect = 
+		HIDE_EFFECT
+		"*.pmd = ./Materials/MaterialMap.fx;"
+		"*.pmx = ./Materials/MaterialMap.fx;"
+		"rgbm_*.x = ./Materials/MaterialMap_Mask.fx;"	// 空扱いする
+		"*.x = ./Materials/MaterialMap.fx;"
+		"* = hide;";
+>;
+sampler ColorMap = sampler_state {
+	texture = <ColorMapRT>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+// 材質マップ
+shared texture PPPMaterialMapRT: RENDERCOLORTARGET <
+	float2 ViewPortRatio = {COLORMAP_SCALE, COLORMAP_SCALE};
+	string Format = "A8R8G8B8" ;
+	int Miplevels = 1;
+>;
+sampler MaterialMap = sampler_state {
+	texture = <PPPMaterialMapRT>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+// 法線マップ
+shared texture PPPNormalMapRT: RENDERCOLORTARGET <
+	float2 ViewPortRatio = {COLORMAP_SCALE, COLORMAP_SCALE};
+	#if SSAO_QUALITY >= 3
+	string Format = "A32B32G32R32F";		// RGBに法線。Aには深度情報
+	#else
+	string Format = "A16B16G16R16F";		// RGBに法線。Aには深度情報
+	#endif
+	int Miplevels = 1;
+>;
+sampler NormalSamp = sampler_state {
+	texture = <PPPNormalMapRT>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+
+// アンビエントと映り込みを格納する。
+shared texture2D PPPReflectionMap : RENDERCOLORTARGET <
+	float2 ViewPortRatio = {1, 1};
+	string Format = ReflectionTexFormat;
+>;
+sampler ReflectionMapSamp = sampler_state {
+	texture = <PPPReflectionMap>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = NONE;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+// ワーク
+texture2D FullWorkMap : RENDERCOLORTARGET <
+	float2 ViewPortRatio = {1, 1};
+	string Format = ReflectionTexFormat;
+>;
+sampler FullWorkSamp = sampler_state {
+	texture = <FullWorkMap>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = NONE;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+sampler FullWorkSampPoint = sampler_state {
+	texture = <FullWorkMap>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+#if WORKSPACE_RES != 1
+// 縮小バッファ
+texture2D HalfWorkMap : RENDERCOLORTARGET <
+	float2 ViewPortRatio = {WORKSPACE_SCALE, WORKSPACE_SCALE};
+	string Format = ReflectionTexFormat;
+>;
+sampler HalfWorkSamp = sampler_state {
+	texture = <HalfWorkMap>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+texture2D HalfWorkMap2 : RENDERCOLORTARGET <
+	float2 ViewPortRatio = {WORKSPACE_SCALE, WORKSPACE_SCALE};
+	string Format = ReflectionTexFormat;
+>;
+sampler HalfWorkSamp2 = sampler_state {
+	texture = <HalfWorkMap2>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+#endif
+
+
+// シャドウマップの計算結果格納用
+texture2D ShadowmapMap : RENDERCOLORTARGET <
+	float2 ViewPortRatio = {1, 1};
+	string Format = ShadowMapTexFormat;
+>;
+sampler ShadowmapSamp = sampler_state {
+	texture = <ShadowmapMap>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+// SSDOの計算と結果格納用 (SSDO.rgb + 遮蔽度)
+texture2D SSAOWorkMap : RENDERCOLORTARGET <
+	float2 ViewPortRatio = {1, 1};
+	string Format = ReflectionTexFormat;
+>;
+sampler SSAOWorkSamp = sampler_state {
+	texture = <SSAOWorkMap>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+texture2D EnvironmentBRDFTex <
+	string ResourceName = "Assets/EnvironmentBRDF.dds";
+	// string Format = "A16B16G16R16F";
+	int MipLevels = 1;
+>;
+sampler EnvironmentBRDF = sampler_state {
+	texture = <EnvironmentBRDFTex>;
+	MinFilter = LINEAR;
+	MagFilter = LINEAR;
+	MipFilter = NONE;
+	AddressU  = CLAMP;
+	AddressV  = CLAMP;
+};
+
+texture2D NoiseTex <
+	string ResourceName = "Assets/noise.png";
+	int MipLevels = 1;
+>;
+sampler NoiseSamp = sampler_state {
+	texture = <NoiseTex>;
+	MinFilter = POINT;
+	MagFilter = POINT;
+	MipFilter = NONE;
+	AddressU  = WRAP;
+	AddressV  = WRAP;
+};
+

@@ -1,0 +1,14 @@
+
+Parameters
+0.Index
+1.TextureFileName
+2.X
+3.Y
+4.Z
+5.Size
+6.Aspect
+7.StartTime
+8.EndTime
+9.FadeIn
+10.MasterAlpha
+11.BillBoard

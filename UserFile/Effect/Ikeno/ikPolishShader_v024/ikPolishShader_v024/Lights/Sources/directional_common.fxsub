@@ -1,0 +1,96 @@
+//-----------------------------------------------------------------------------
+// 方向付きライトでの共通処理
+
+
+//-----------------------------------------------------------------------------
+float4x4 matW			: WORLD;
+float3 CameraPosition	: POSITION  < string Object = "Camera"; >;
+
+DECLARE_PARAM(float4x4, LightObjectMatrix, "全ての親");
+DECLARE_PARAM(float, mLightAngle, "ライト角度");
+static const float LightFOV = lerp(LightAngleMax, LightAngleMin, mLightAngle) * DEG_TO_RAD * 0.5;
+
+#if defined(LightWidthMin)
+static float LightExtent = max(LightSize.x, LightSize.y);
+static float2 LightAspect = LightExtent / LightSize.xy;
+#endif
+
+// ライト用シャドウマップのnear-far
+#define PROJ_NEAR 2
+#define PROJ_FAR  (LightShadowDistance)
+
+float4x4 GetLightViewMatrix(float4x4 mat, float3 pos)
+{
+	float3x3 matRot = transpose((float3x3)mat);
+	return float4x4(
+		matRot[0], 0,
+		matRot[1], 0,
+		matRot[2], 0,
+		mul(-pos, matRot), 1);
+}
+
+float4x4 GetLightProjMatrix()
+{
+	const float ProjFar = PROJ_FAR;
+	const float ProjNear = PROJ_NEAR;
+	const float Sx = 1 / tan(40 * DEG_TO_RAD);
+	const float Sz = ProjFar / (ProjFar - ProjNear);
+//	const float Sx = 1 / tan(LightFOV);
+	const float Sw = -Sz * ProjNear;
+
+	float4x4 out1 = {
+		Sx,0, 0, 0,
+		0, Sx,0, 0,
+		0, 0, Sz,1,
+		0, 0, Sw,0
+	};
+
+	return out1;
+}
+
+float4x4 GetInverseMatrix(float4x4 mat)
+{
+	float3x3 matRot = transpose((float3x3)mat);
+	return float4x4(
+		matRot[0], 0,
+		matRot[1], 0,
+		matRot[2], 0,
+		mul(-mat._41_42_43, matRot), 1);
+}
+
+float4x4 GetInverseProjMatrix(float4x4 mat)
+{
+	float a = mat._11;
+	float b = mat._22;
+	float c = mat._33;
+	float d = mat._34;
+	float e = mat._43;
+
+	float4x4 out1 = {
+		1/a,0 ,0 ,0,
+		0 ,1/b,0 ,0,
+		0 ,0 , 0,1/e,
+		0 ,0 ,1/d, -c/(d*e)
+	};
+
+	return out1;
+}
+
+static const float3 LightPosition = LightObjectMatrix._41_42_43;
+static const float3 LightRight = normalize(-LightObjectMatrix._11_12_13);
+static const float3 LightUp = normalize(-LightObjectMatrix._21_22_23);
+static const float3 LightDirection = normalize(LightObjectMatrix._31_32_33);
+
+static const float3 LightCameraPosition = LightPosition - LightDirection;
+static const float4x4 matLightV = GetLightViewMatrix(LightObjectMatrix, LightCameraPosition);
+
+static const float4x4 matLightP = GetLightProjMatrix();
+static const float4x4 matLightVP = mul(matLightV, matLightP);
+static const float4x4 matLightWVP = mul(matW, matLightVP);
+
+static const float4x4 matLightInvV = GetInverseMatrix(matLightV);
+static const float4x4 matLightInvP = GetInverseProjMatrix(matLightP);
+static const float4x4 matLightInvVP = mul(matLightInvP, matLightInvV);
+
+//-----------------------------------------------------------------------------
+

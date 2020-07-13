@@ -1,0 +1,108 @@
+
+// ikWetFloor用に写り込み位置や写り込む量を計算する。
+
+#include "ikWetFloorSettings.fxsub"
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+float4 FloorPosition: CONTROLOBJECT < string Name = "(OffscreenOwner)"; >;
+
+// パラメータ宣言
+
+// 座法変換行列
+float4x4 matW	: WORLD;
+float4x4 matVP	: VIEWPROJECTION;
+float4x4 matWVP	: WORLDVIEWPROJECTION;
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+float3   CameraPosition	: POSITION  < string Object = "Camera"; >;
+
+inline float CalcFresnel(float NV, float F0)
+{
+	return F0 + (1.0 - F0) * pow(1 - NV, 5);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウOFF）
+
+struct VS_OUTPUT
+{
+	float4 Pos        : POSITION;    // 射影変換座標
+	float4 WPos	  : TEXCOORD0;
+	float3 WNormal	  : TEXCOORD1;
+	float2 Tex	  : TEXCOORD3;
+};
+
+// 頂点シェーダ
+VS_OUTPUT Basic_VS(float4 Pos : POSITION, float3 Normal : NORMAL,float2 Tex: TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+	Out.Pos = mul( Pos, matWVP );
+	Out.WPos = mul( Pos, matW );
+	Out.WNormal = mul( Normal, (float3x3)matW );
+	Out.Tex = Tex;
+	return Out;
+}
+
+// ピクセルシェーダ
+float4 Basic_PS( VS_OUTPUT IN ) : COLOR
+{
+	// α値が閾値以下の箇所は描画しない
+	float alpha = tex2D( ObjTexSampler, IN.Tex ).a;
+	clip(alpha - AlphaThroughThreshold);
+
+	// 視線と水平に近いほど反射する。
+	float3 v = normalize(IN.WPos.xyz - CameraPosition);
+	float dotNV = abs(dot(v, IN.WNormal));
+	float f = saturate(CalcFresnel(dotNV, 0.03)) * (1 - Fresnel0) + Fresnel0;
+	f *= ReflectionRatio;
+
+	float distanceY = IN.WPos.y - FloorPosition.y;
+	float distance = 1.0 - saturate(abs(distanceY) / HeightThreshold);
+	float normal = pow(saturate(IN.WNormal.y), 8); // 上向き以外は写り込みを軽減
+
+	// オフセット
+	float4 wpos = float4(IN.WPos.x, FloorPosition.y, IN.WPos.zw);
+
+	return float4(wpos.xyz, saturate(f * distance * normal));
+}
+
+// オブジェクト描画用テクニック
+technique MainTec < string MMDPass = "object"; > {
+    pass DrawObject
+    {
+	AlphaBlendEnable = false;
+	AlphaTestEnable = false;
+        VertexShader = compile vs_2_0 Basic_VS();
+        PixelShader  = compile ps_2_0 Basic_PS();
+    }
+}
+
+// オブジェクト描画用テクニック
+technique MainTecBS  < string MMDPass = "object_ss"; > {
+    pass DrawObject {
+	AlphaBlendEnable = false;
+	AlphaTestEnable = false;
+        VertexShader = compile vs_2_0 Basic_VS();
+        PixelShader  = compile ps_2_0 Basic_PS();
+    }
+}
+
+technique EdgeTec < string MMDPass = "edge"; > { }
+technique ShadowTec < string MMDPass = "shadow"; > { }
+technique ZplotTec < string MMDPass = "zplot"; > { }
+
+///////////////////////////////////////////////////////////////////////////////////////////////

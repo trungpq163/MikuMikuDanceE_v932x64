@@ -1,0 +1,645 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+// 設定ファイル
+#include "../settings.fxsub"
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+float AcsSi : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "Si"; >;
+static float GRID_SIZE_ = (AcsSi * 0.1 * GRID_SIZE);
+
+#define		VOXEL_SIZE		(VOXEL_SIZE_SQRT * VOXEL_SIZE_SQRT)
+static float FarDepth = (VOXEL_SIZE * GRID_SIZE_);
+#define		INV_GRID_SIZE	(1.0 / GRID_SIZE_)
+#define		TEX_WIDTH		(VOXEL_SIZE * VOXEL_SIZE_SQRT)
+#define		TEX_HEIGHT		(VOXEL_SIZE * VOXEL_SIZE_SQRT)
+
+//-----------------------------------------------------------------------------
+
+float3 CenterPosition : CONTROLOBJECT < string name = "(OffscreenOwner)"; >;
+static float3 GridCenterPosition = (floor(CenterPosition * INV_GRID_SIZE + VOXEL_SIZE) - VOXEL_SIZE) * GRID_SIZE_;
+static float3 GridOffset = floor(GridCenterPosition * INV_GRID_SIZE + VOXEL_SIZE) % VOXEL_SIZE;
+
+//#define TargetPosition	CenterPosition
+float3 LightDirection	: DIRECTION < string Object = "Light"; >;
+
+#include	"../Sources/rsm_common.fxsub"
+
+
+//-----------------------------------------------------------------------------
+
+// 座法変換行列
+float4x4 matW			: WORLD;
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+
+static float4x4 matLightWV = mul(matW, matLightV);
+static float4x4 matLightWVP = mul(matLightWV, matLightP);
+
+
+// アクセの位置がグリッドの中心にくるようにする
+float4x4 CreateViewMatrix(float3 foward)
+{
+	float3 right = cross(float3(0,1,0), foward);
+	right = normalize(length(right) < 0.5 ? cross(float3(1,0,0), foward) : right);
+
+	float3x3 mat;
+	mat[2].xyz = foward;
+	mat[0].xyz = right;
+	mat[1].xyz = normalize(cross(foward, right));
+
+	float3x3 matRot = transpose((float3x3)mat);
+	float3 pos = GridCenterPosition - foward * FarDepth * 0.5;
+
+	return float4x4(
+		matRot[0], 0,
+		matRot[1], 0,
+		matRot[2], 0,
+		mul(-pos, matRot), 1);
+}
+
+// パース無し
+static float4x4 matP = {
+	1.0 / (FarDepth * 0.5),	0,	0,	0,
+	0,	1.0 / (FarDepth * 0.5),	0,	0,
+	0,	0,	1.0 / FarDepth,	0,
+	0,	0,	0,	1
+};
+
+static float4x4 matWVPxy = mul(mul(matW, CreateViewMatrix(float3(0,0,1))), matP);
+static float4x4 matWVPyz = mul(mul(matW, CreateViewMatrix(float3(1,0,0))), matP);
+static float4x4 matWVPxz = mul(mul(matW, CreateViewMatrix(float3(0,1,0))), matP);
+
+// マテリアル色
+float4	MaterialDiffuse		: DIFFUSE  < string Object = "Geometry"; >;
+float3	MaterialAmbient		: AMBIENT  < string Object = "Geometry"; >;
+float3	MaterialEmissive	: EMISSIVE < string Object = "Geometry"; >;
+static float3 AmbientColor  = MaterialAmbient + MaterialEmissive;
+//static float4 DiffuseColor  = MaterialDiffuse;
+static float4 DiffuseColor  = saturate( float4(AmbientColor.rgb, MaterialDiffuse.a));
+
+// 材質モーフ対応
+float4	TextureAddValue   : ADDINGTEXTURE;
+float4	TextureMulValue   : MULTIPLYINGTEXTURE;
+
+float3	LightSpecular	 	: SPECULAR  < string Object = "Light"; >;
+
+const float epsilon = 1.0e-6;
+const float gamma = 2.2;
+inline float3 Degamma(float3 col) { return pow(max(col,epsilon), gamma); }
+inline float3 Gamma(float3 col) { return pow(max(col,epsilon), 1.0/gamma); }
+inline float4 Degamma4(float4 col) { return float4(Degamma(col.rgb), col.a); }
+inline float4 Gamma4(float4 col) { return float4(Gamma(col.rgb), col.a); }
+inline float rgb2gray(float3 rgb)
+{
+	return dot(float3(0.299, 0.587, 0.114), rgb);
+}
+
+static float3 LightColor = Degamma(saturate(LightSpecular)) * 3.0;
+
+bool	use_texture;	//	テクスチャフラグ
+bool	use_toon;		//	トゥーンフラグ
+bool	parthf;			// パースペクティブフラグ
+bool	transp;			// 半透明フラグ
+bool	spadd;			// スフィアマップ加算合成フラグ
+bool	opadd;
+
+#if defined(FORCE_LIGHT)
+#define		OPADD_FLAG		1
+#else
+#define		OPADD_FLAG		opadd
+#endif
+
+
+#define SKII1	1500
+#define SKII2	8000
+#define Toon	 3
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+	texture = <ObjectTexture>;
+	MINFILTER = LINEAR;	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;	ADDRESSV  = WRAP;
+};
+
+#if defined(ENABLE_AL)
+#ifndef TEXTURE_SELECTLIGHT
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = POINT;
+	MAGFILTER = POINT;
+	MIPFILTER = NONE;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+sampler ObjSphareSampler2 = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	MIPFILTER = NONE;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+#endif
+#endif
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+//sampler DefSampler : register(s0);
+
+// 法線出力用
+shared texture2D VoxelPackNormal: RENDERCOLORTARGET;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+#define SPECULAR_BASE 100
+#define SYNC false
+
+#define	PI	(3.14159265359)
+
+
+#if defined(ENABLE_AL)
+float3 MaterialSpecular  : SPECULAR < string Object = "Geometry"; >;
+bool use_spheremap;
+bool use_subtexture;
+
+
+	float4 EgColor; 
+	float4 SpcColor;
+	static float SpecularPower = SpcColor.a;
+	static float materialAlpha = EgColor.a;
+
+float LightUp : CONTROLOBJECT < string name = "(self)"; string item = "LightUp"; >;
+float LightUpE : CONTROLOBJECT < string name = "(self)"; string item = "LightUpE"; >;
+float LightOff : CONTROLOBJECT < string name = "(self)"; string item = "LightOff"; >;
+float Blink : CONTROLOBJECT < string name = "(self)"; string item = "LightBlink"; >;
+float BlinkSq : CONTROLOBJECT < string name = "(self)"; string item = "LightBS"; >;
+float BlinkDuty : CONTROLOBJECT < string name = "(self)"; string item = "LightDuty"; >;
+float BlinkMin : CONTROLOBJECT < string name = "(self)"; string item = "LightMin"; >;
+float LClockUp : CONTROLOBJECT < string name = "(self)"; string item = "LClockUp"; >;
+float LClockDown : CONTROLOBJECT < string name = "(self)"; string item = "LClockDown"; >;
+
+#if defined(AL_NAME)
+bool ALExist : CONTROLOBJECT < string name = AL_NAME; >;
+float4x4 ALMatWorld : CONTROLOBJECT < string name = AL_NAME; >; 
+float ALScaling0 : CONTROLOBJECT < string name = AL_NAME; >;
+static float AL_Scaling = (ALExist ? ALScaling0 * 0.1 * (1.0 + ALMatWorld._43 / 100) : 1.0) * AL_Power;
+#else
+float AL_Scaling = AL_Power;
+#endif
+
+//時間
+float ftime : TIME <bool SyncInEditMode = SYNC;>;
+
+static float duty = (BlinkDuty <= 0) ? 0.5 : BlinkDuty;
+static float timerate = ((Blink > 0) ? ((1 - cos(saturate(frac(ftime / (Blink * 10)) / (duty * 2)) * 2 * PI)) * 0.5) : 1.0)
+					  * ((BlinkSq > 0) ? (frac(ftime / (BlinkSq * 10)) < duty) : 1.0);
+static float timerate1 = timerate * (1 - BlinkMin) + BlinkMin;
+
+static float ClockShift = (1 + LClockDown * 5) / (1 + LClockUp * 5);
+
+static bool IsEmittion = (SPECULAR_BASE < SpecularPower)/* && (SpecularPower <= (SPECULAR_BASE + 100))*/ && (length(MaterialSpecular) < 0.01);
+static float EmittionPower0 = IsEmittion ? ((SpecularPower - SPECULAR_BASE) / 7.0) : 1;
+static float EmittionPower1 = EmittionPower0 * (LightUp * 2 + 1.0) * pow(400, LightUpE) * (1.0 - LightOff);
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+float texlight(float3 rgb){
+	float val = saturate((length(rgb) - LightThreshold) * 3);
+	
+	val *= 0.2;
+	
+	return val;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+float3 HSV_to_RGB(float3 hsv){
+	float H = frac(hsv.x);
+	float S = hsv.y;
+	float V = hsv.z;
+	
+	float3 Color = 0;
+	
+	float Hp3 = H * 6.0;
+	float h = floor(Hp3);
+	float P = V * (1 - S);
+	float Q = V * (1 - S * (Hp3 - h));
+	float T = V * (1 - S * (1 - (Hp3 - h)));
+	
+	Color.rgb += float3(V, T, P) * max(0, 1 - abs(h - 0));
+	Color.rgb += float3(Q, V, P) * max(0, 1 - abs(h - 1));
+	Color.rgb += float3(P, V, T) * max(0, 1 - abs(h - 2));
+	Color.rgb += float3(P, Q, V) * max(0, 1 - abs(h - 3));
+	Color.rgb += float3(T, P, V) * max(0, 1 - abs(h - 4));
+	Color.rgb += float3(V, P, Q) * max(0, 1 - abs(h - 5));
+	
+	return Color;
+}
+
+bool DecisionSystemCode(float4 SystemCode){
+	bool val = (0.199 < SystemCode.r) && (SystemCode.r < 0.201)
+			&& (0.699 < SystemCode.g) && (SystemCode.g < 0.701);
+	return val;
+}
+
+float4 getFlags(float flagcode){
+	float4 val = frac(flagcode * float4(0.1, 0.01, 0.001, 0.0001));
+	val = floor(val * 10 + 0.001);
+	return val;
+}
+
+float2 DecisionSequenceCode(float4 color){
+	bool val = (color.r > 0.99) && (abs(color.g - 0.5) < 0.02)
+			&& ((color.b < 0.01) || (color.g > 0.99));
+	
+	return float2(val, (color.b < 0.01));
+}
+#endif
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTec < string MMDPass = "shadow"; > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウON）
+
+struct BufferShadow_OUTPUT {
+	float4 Pos		: POSITION;
+	float3 Normal	: TEXCOORD0;
+	float4 Tex		: TEXCOORD1;
+	float4 GridPos	: TEXCOORD3;
+	float4 PPos		: TEXCOORD4;
+	float Attribute		: TEXCOORD5;
+
+	float4 ColorAL   : COLOR0;	  // AL用の色
+};
+
+struct PS_OUT_MRT
+{
+	float4 Color		: COLOR0;
+	float4 Normal		: COLOR1;
+	float Depth			: DEPTH;
+};
+
+struct DrawRSM_OUTPUT {
+	float4 Pos	  : POSITION;	 // 射影変換座標
+	float2 Tex	  : TEXCOORD0;	// テクスチャ
+	float Distance	: TEXCOORD1;
+	float3 Normal	: TEXCOORD2;
+	float4 PPos		: TEXCOORD3;
+
+	float4 Color	: COLOR0;	   // ディフューズ色
+};
+
+
+struct PS_OUT_MRT2
+{
+	float4 Color		: COLOR0;
+	float4 Normal		: COLOR1;
+};
+
+	struct VS_INPUT{
+		float4 Pos : POSITION;
+		float2 Tex : TEXCOORD0;
+		float4 AddUV1 : TEXCOORD1;
+		float4 AddUV2 : TEXCOORD2;
+		float4 AddUV3 : TEXCOORD3;
+		float4 Normal : NORMAL;
+		
+	};
+
+// 頂点シェーダ
+/*
+BufferShadow_OUTPUT DrawObject_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0,
+	int Index: _INDEX, uniform bool useTexture, uniform int mode)
+*/
+BufferShadow_OUTPUT DrawObject_VS(VS_INPUT IN,
+	int Index: _INDEX, uniform bool useTexture, uniform int mode)
+{
+	BufferShadow_OUTPUT Out = (BufferShadow_OUTPUT)0;
+
+	float4 Pos = IN.Pos;
+	float3 Normal = IN.Normal;
+	float2 Tex = IN.Tex;
+
+	#if defined(ENABLE_AL)
+	float4 SystemCode = IN.AddUV1;
+	float4 ColorCode = IN.AddUV2;
+	float4 AppendCode = IN.AddUV3;
+	
+	bool IsALCode = DecisionSystemCode(SystemCode);
+	float4 flags = getFlags(SystemCode.w);
+	#endif
+
+
+	float3 N = normalize( mul( Normal, (float3x3)matW ) );
+	float3 gpos = mul( Pos, matW ).xyz - GridCenterPosition;
+
+	float3 coef = 0;
+	if (mode == 0)
+	{
+		Out.Pos = mul( Pos, matWVPxy);
+		coef = float3(gpos.z, N.z, GridOffset.z);
+	}
+	else if (mode == 1)
+	{
+		Out.Pos = mul( Pos, matWVPyz);
+		coef = float3(gpos.x, N.x, GridOffset.x);
+	}
+	else
+	{
+		Out.Pos = mul( Pos, matWVPxz);
+		coef = float3(gpos.y, N.y, GridOffset.y);
+	}
+
+	// 1つのテクスチャを3つに分割。3面図のそれぞれを描画する
+	Out.Pos.y = (Out.Pos.y + (3-mode * 2.0) * Out.Pos.w) * (1.0 / 4.0);
+
+	// ボクセルグリッド決定用の情報
+	Out.GridPos.x = coef.x * INV_GRID_SIZE + (VOXEL_SIZE * 0.5) + coef.z;
+	Out.GridPos.w = floor(Index / 64);
+
+	Out.PPos = Out.Pos;
+	Out.Normal = N;
+	Out.Tex.xy = Tex.xy;
+
+#if defined(ENABLE_AL)
+	// AL対応
+	#ifndef TEXTURE_SELECTLIGHT
+	Out.ColorAL = MaterialDiffuse;
+	Out.ColorAL.a = materialAlpha;
+	Out.ColorAL.rgb += MaterialEmissive / 2;
+	Out.ColorAL.rgb *= 0.5;
+	Out.ColorAL.rgb = IsEmittion ? Out.ColorAL.rgb : float3(0,0,0);
+	
+	// 頂点発光 ////////////////////////
+	
+	float3 UVColor = ColorCode.rgb;
+	UVColor = lerp(UVColor, HSV_to_RGB(UVColor), flags.y);
+	UVColor *= ColorCode.a;
+	
+	Out.ColorAL.rgb += IsALCode ? UVColor : float3(0,0,0);
+	
+	float Tv = SystemCode.z * ClockShift;
+	float Ph = AppendCode.y * ClockShift;
+	float timerate2 = (Tv > 0)
+		? ((1 - cos(saturate(frac((ftime + Ph) / Tv) / (duty * 2)) * 2 * PI)) * 0.5)
+		: ((Tv < 0) ? (frac((ftime + Ph) / (-Tv / PI * 180)) < duty) : 1.0);
+	Out.ColorAL.rgb *= max(timerate2 * (1 - BlinkMin) + BlinkMin, !IsALCode);
+	Out.ColorAL.rgb *= max(timerate1, SystemCode.z != 0);
+	#endif
+
+	Out.Tex.z = IsALCode * AppendCode.x;
+	Out.Tex.w = IsALCode * flags.x;
+#endif
+
+	return Out;
+}
+
+
+/*
+	充填順序を計算
+	ボクセル空間は隙間が多いので、座標の一致したボクセルだけを格納すると無駄が多い。
+	優先度をつけて、他の座標のボクセルも埋めていく。
+	あとで再構築する必要がある。
+*/
+int StocasticOrder(float2 ppos, int grid, int randomseed, out float depth)
+{
+	// 現在位置のグリッド深度
+	int2 part = floor(ppos + 0.5) % VOXEL_SIZE_SQRT;
+	int index = (part.y * VOXEL_SIZE_SQRT + part.x);
+
+	// 該当ボクセルグリッド内か？
+	int gridDist = (index - grid + VOXEL_SIZE) % VOXEL_SIZE;
+
+	// グリッド内での位置に応じて優先度をつける。
+	// 優先度が高いほど手前に表示する。
+	// 優先度が同率の場合、頂点番号で調整する。
+	int hit8 = gridDist;
+	int hit4 = (gridDist % 4 + (gridDist / 8) % 4);
+	int hit2 = (gridDist % 2 + (gridDist / 8) % 2);
+	float priority = (hit8 != 0) + (hit4 != 0) + (hit2 != 0);
+		// 完全一致なら0点。対象外なら3点
+	depth = (priority * 256.0 + (randomseed % 256)) * (1.0 / (256*4));
+
+	return grid;
+}
+
+
+// ピクセルシェーダ
+PS_OUT_MRT DrawObject_PS(BufferShadow_OUTPUT IN, uniform bool useTexture, uniform int mode)
+{
+	float2 ppos = (IN.PPos.xy / IN.PPos.w * float2(0.5,-0.5) + 0.5) * ViewportSize.xy;
+	// 別のフェイス?
+	if (floor(ppos.y / TEX_HEIGHT) != mode) discard;
+	// 深度が合わない?
+	int grid = floor(IN.GridPos.x + 0.5);
+	if (grid < 0 || grid >= VOXEL_SIZE) discard;
+
+	// 深度と、所属ボクセル識別用のid
+	float depth;
+	int patternNo = StocasticOrder(ppos, grid, IN.GridPos.w, depth) * 4 + mode;
+
+	float4 Color = DiffuseColor;
+	float4 TexColor = float4(1,1,1, DiffuseColor.a);
+	if ( useTexture ) {
+		// テクスチャ適用
+		TexColor = tex2D( ObjTexSampler, IN.Tex );
+		// 材質モーフ対応
+		float4 MorphColor = TexColor * TextureMulValue + TextureAddValue;
+		float MorphRate = TextureMulValue.a + TextureAddValue.a;
+		TexColor.rgb = lerp(1, MorphColor, MorphRate).rgb;
+		Color *= TexColor;
+	}
+	clip(Color.a - AlphaThreshold);
+
+	float emissiveIntensity = 0;
+
+	// 発光シーケンス ////////////////////////
+#if defined(ENABLE_AL)
+	float4 ColorAL = IN.ColorAL;
+
+	#ifndef TEXTURE_SELECTLIGHT
+	if(use_spheremap){
+		//float4 spcolor1 = tex2Dlod(ObjSphareSampler, float4(1,0,0,0));
+		float4 spcolor2 = tex2Dlod(ObjSphareSampler, float4(1,1,0,0));
+		float4 spcolor3 = tex2Dlod(ObjSphareSampler, float4(0,1,0,0));
+		
+		float Ts = spcolor3.r * (255 * 60) + spcolor3.g * 255 + spcolor3.b * (255 / 100.0);
+		Ts *= ClockShift;
+		
+		float t1 = frac((ftime/* + Ph * IsALCode*/) / Ts);
+		float4 spcolor4 = tex2Dlod(ObjSphareSampler, float4(t1 * 0.25,0,0,0));
+		float4 spcolor5 = tex2Dlod(ObjSphareSampler2, float4(t1 * 0.25,0,0,0));
+		
+		float2 sel = DecisionSequenceCode(spcolor2);
+		
+		ColorAL.rgb *= lerp(float3(1,1,1), lerp(spcolor5.rgb, spcolor4.rgb, sel.y), sel.x);
+	}
+	#endif
+
+		float4 texcolor = TexColor;
+		texcolor.rgb = saturate(texcolor.rgb - IN.Tex.z);
+
+		#ifdef TEXTURE_SELECTLIGHT
+			ColorAL = texcolor;
+			ColorAL.rgb *= texlight(ColorAL.rgb);
+		#else
+			float4 Color2, Color3;
+			
+			Color2 = ColorAL * texcolor;
+			Color3 = ColorAL * texcolor;
+			Color3.rgb *= texlight(texcolor.rgb);
+			
+			ColorAL = (IN.Tex.w < 0.1) ? Color2 : ((IN.Tex.w < 1.1) ? ColorAL : Color3);
+		#endif
+
+		ColorAL.rgb *= (use_toon ? EmittionPower1 : EmittionPower0) * AL_Scaling; 
+		Color.rgb += ColorAL.rgb;
+
+		emissiveIntensity = rgb2gray(ColorAL.rgb);
+#endif
+	// 発光シーケンス //////////////////////// ここまで
+
+	#if defined(FORCE_EMISSIVE)
+		emissiveIntensity = 0.5;
+	#else
+		emissiveIntensity = OPADD_FLAG ? rgb2gray(Color.rgb) * 0.5 : emissiveIntensity;
+	#endif
+	int attribute = floor(saturate(emissiveIntensity * Color.a) * 127) * 2 + (OPADD_FLAG ? 0 : 1);
+
+	Color.rgb = Degamma(Color.rgb);
+	Color.a = attribute * (1.0 / 255.0);
+
+	PS_OUT_MRT Out;
+	Out.Color = Color;
+	Out.Normal = float4(normalize(IN.Normal), patternNo);
+	Out.Depth = depth;
+
+	return Out;
+}
+
+
+//-----------------------------------------------------------------------------
+// RSM
+
+// 頂点シェーダ
+DrawRSM_OUTPUT DrawRSM_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, uniform bool useTexture)
+{
+	DrawRSM_OUTPUT Out = (DrawRSM_OUTPUT)0;
+
+	int mode = 3;
+
+	Out.Pos = mul( Pos, matLightWVP );
+	// 加算半透明は除外
+	Out.Pos.w *= (OPADD_FLAG ? 0 : 1);
+	Out.Pos.y = (Out.Pos.y + (3-mode * 2.0) * Out.Pos.w) * (1.0 / 4.0);
+
+	Out.PPos = Out.Pos;
+
+	Out.Distance = mul(Pos, matLightWV).z;
+	Out.Normal = mul(Normal, (float3x3)matW);
+
+	Out.Tex = Tex;
+
+	return Out;
+}
+
+// ピクセルシェーダ
+PS_OUT_MRT2 DrawRSM_PS(DrawRSM_OUTPUT IN, uniform bool useTexture)
+{
+	// 画面外?
+	int mode = 3;
+	float2 ppos = (IN.PPos.xy / IN.PPos.w * float2(0.5,-0.5) + 0.5) * ViewportSize.xy;
+	if (floor(ppos.y / TEX_HEIGHT) != mode) discard;
+
+	float4 Color = DiffuseColor;
+	if ( useTexture ) {
+		float4 TexColor = tex2D( ObjTexSampler, IN.Tex );
+		// 材質モーフ対応
+		float4 MorphColor = TexColor * TextureMulValue + TextureAddValue;
+		float MorphRate = TextureMulValue.a + TextureAddValue.a;
+		TexColor.rgb = lerp(1, MorphColor, MorphRate).rgb;
+		Color *= TexColor;
+	}
+
+	// 裏面を明るくしないようにする
+	float3 N = normalize(IN.Normal.xyz);
+	float diffuse = dot(N,-LightDirection);
+
+	clip(Color.a - AlphaThreshold);
+
+	PS_OUT_MRT2 Out;
+	Out.Color = float4(Degamma(Color.rgb) * LightColor * diffuse, 1);
+	Out.Normal = float4(N, IN.Distance);
+
+	return Out;
+}
+
+
+//-----------------------------------------------------------------------------
+
+
+#define	RENDER_MODE_SETTINGS	AlphaTestEnable = FALSE; AlphaBlendEnable = FALSE; CullMode = none;
+//#define	RENDER_MODE_SETTINGS	CullMode = none; ZEnable = false;
+#define	RENDER_RSM_MODE_SETTINGS	AlphaTestEnable = FALSE; AlphaBlendEnable = FALSE;
+#if defined(ENABLE_DOUBLE_SIDE_SHADOW) && ENABLE_DOUBLE_SIDE_SHADOW > 0
+#define	SET_CULL_MODE		CullMode = NONE;
+#else
+#define	SET_CULL_MODE
+#endif
+
+#define OBJECT_TEC(name, mmdpass, tex) \
+	technique name < string MMDPass = mmdpass; \
+	string Script = \
+		"RenderColorTarget0=; RenderColorTarget1=VoxelPackNormal;" \
+		"Pass=DrawObject;" \
+		"Pass=DrawObjectYZ;" \
+		"Pass=DrawObjectXZ;" \
+		"Pass=DrawRSM;" \
+		"RenderColorTarget1=;" \
+	; \
+	> { \
+		pass DrawObject { \
+			RENDER_MODE_SETTINGS \
+			VertexShader = compile vs_3_0 DrawObject_VS(tex, 0); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(tex, 0); \
+		} \
+		pass DrawObjectYZ { \
+			RENDER_MODE_SETTINGS \
+			VertexShader = compile vs_3_0 DrawObject_VS(tex, 1); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(tex, 1); \
+		} \
+		pass DrawObjectXZ { \
+			RENDER_MODE_SETTINGS \
+			VertexShader = compile vs_3_0 DrawObject_VS(tex, 2); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(tex, 2); \
+		} \
+		pass DrawRSM { \
+			RENDER_RSM_MODE_SETTINGS SET_CULL_MODE \
+			VertexShader = compile vs_3_0 DrawRSM_VS(tex); \
+			PixelShader  = compile ps_3_0 DrawRSM_PS(tex); \
+		} \
+	}
+
+OBJECT_TEC(MainTec0, "object", use_texture)
+OBJECT_TEC(MainTecBS0, "object_ss", use_texture)
+
+///////////////////////////////////////////////////////////////////////////////////////////////

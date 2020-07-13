@@ -1,0 +1,115 @@
+
+
+// Octahedron normal vector encoding from Krzysztof Narkowicz
+// https://knarkowicz.wordpress.com/2014/04/16/octahedron-normal-vector-encoding/
+
+float2 OctWrap( float2 v )
+{
+#if 0
+	return ( 1.0 - abs( v.yx ) ) * ( v.xy >= 0.0 ? 1.0 : -1.0 );
+#else
+	// MMD 32bit”Å‚Í‚±‚¿‚ç‚Å‚È‚¢‚Æ³í‚É“®ì‚µ‚È‚¢
+	float sx = v.x >= 0.0 ? 1.0 : -1.0;
+	float sy = v.y >= 0.0 ? 1.0 : -1.0;
+	return ( 1.0 - abs( v.yx ) ) * float2(sx,sy);
+#endif
+}
+
+float2 WrapXForSafetyBorder(float2 uv) { return float2((2 - abs(uv.x)) * sign(uv.x), -uv.y); }
+float2 WrapYForSafetyBorder(float2 uv) { return float2(-uv.x, (2 - abs(uv.y)) * sign(uv.y)); }
+
+float2 EncodeOctahedronScale( float3 n, float scale )
+{
+	n.xy /= dot(abs(n),1);
+	n.xy = n.z > 0.0 ? n.xy : OctWrap( n.xy );
+	return n.xy * scale + 0.5;
+}
+
+float2 EncodeOctahedron( float3 n )
+{
+	return EncodeOctahedronScale( n, 0.25 );
+}
+
+float3 DecodeOctahedron( float2 encN )
+{
+	// Mip-map—p‚Ìd•¡•”•ª‚ð”½“]‚³‚¹‚é
+	encN = encN * 4.0 - 2.0;
+	encN = (abs(encN.x) > 1) ? WrapXForSafetyBorder(encN) : encN;
+	encN = (abs(encN.y) > 1) ? WrapYForSafetyBorder(encN) : encN;
+
+	float3 n;
+	n.z = 1.0 - abs( encN.x ) - abs( encN.y );
+	n.xy = n.z >= 0.0 ? encN.xy : OctWrap( encN.xy );
+
+	n = normalize( n );
+	return n;
+}
+
+
+float3 TEnvVec0 = normalize(float3( 1, 1, 1));
+float3 TEnvVec1 = normalize(float3(-1, 1,-1));
+float3 TEnvVec2 = normalize(float3( 1,-1,-1));
+float3 TEnvVec3 = normalize(float3(-1,-1, 1));
+
+float3x3 CalcViewMat(float3 v0, float3 v1)
+{
+	float3 v2 = normalize(cross(v1, v0));
+	v1 = normalize(cross(v0, v2));
+	return (float3x3(
+		float3(v2.x, v1.x, v0.x),
+		float3(v2.y, v1.y, v0.y),
+		float3(v2.z, v1.z, v0.z)));
+}
+
+float4 GetTetrahedronUV(float3 N)
+{
+	N = normalize(N);
+
+	float d0 = dot(TEnvVec0, N);
+	float d1 = dot(TEnvVec1, N);
+	float d2 = dot(TEnvVec2, N);
+	float d3 = dot(TEnvVec3, N);
+
+/*
+	float longest = max(max(d0,d1),max(d2,d3));
+	if (longest == d0)
+	else if (longest == d1)
+	else if (longest == d2)
+	else
+	‚Ì‚Ù‚¤‚ª‚‘¬?
+*/
+
+	float3 v0, v1;
+	float2 offset;
+	if (d0 > d1 && d0 > d2 && d0 > d3)
+	{
+		v0 = TEnvVec0;
+		v1 = TEnvVec1;
+		offset = float2(1,1) / 4.0;
+	}
+	else if (d1 > d2 && d1 > d3)
+	{
+		v0 = TEnvVec1;
+		v1 = TEnvVec2;
+		offset = float2(3,1) / 4.0;
+	}
+	else if (d2 > d3)
+	{
+		v0 = TEnvVec2;
+		v1 = TEnvVec3;
+		offset = float2(1,3) / 4.0;
+	}
+	else
+	{
+		v0 = TEnvVec3;
+		v1 = TEnvVec0;
+		offset = float2(3,3) / 4.0;
+	}
+
+	float3x3 mat = CalcViewMat(v0, v1);
+	float3 texCoord = mul(N, mat);
+	texCoord.xy *= ((1 / 2.8) * float2(0.25, -0.25)) / texCoord.z;
+
+	return float4(texCoord.xy + offset, 0,0);
+}
+

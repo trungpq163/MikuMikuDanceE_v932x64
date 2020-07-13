@@ -1,0 +1,72 @@
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// SSDO
+
+#if defined(ENABLE_SSGI) && ENABLE_SSGI > 0 && SSAORayCount > 0
+
+#define FILTER_MODE			MinFilter = POINT; MagFilter = POINT; MipFilter = NONE;
+#define LINEAR_FILTER_MODE	MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = NONE;
+#define ADDRESSING_MODE		AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+
+texture SSGIMapRT : OFFSCREENRENDERTARGET <
+	string Description = "FakeGI for ikPolishShader";
+	float2 ViewPortRatio = {WORKSPACE_SCALE * 0.5, WORKSPACE_SCALE * 0.5};
+	string Format = "A8R8G8B8";
+	float4 ClearColor = { 0, 0, 0, 0 };
+	float ClearDepth = 1.0;
+	int MipLevels = 1;
+	string DefaultEffect = 
+		"self = hide;"
+		CONTROLLER_NAME " = hide;"
+		"*.pmd = ./Diffuse/DiffuseObject.fx;"
+		"*.pmx = ./Diffuse/DiffuseObject.fx;"
+		"*.x = ./Diffuse/DiffuseObject.fx;"
+		"* = hide;" ;
+>;
+
+sampler SSGISamp = sampler_state {
+	texture = <SSGIMapRT>;
+	FILTER_MODE
+	ADDRESSING_MODE
+};
+
+// ê[ìxÉ}ÉbÉv
+shared texture PPPGIDepthMapRT: RENDERCOLORTARGET <
+	float2 ViewPortRatio = {WORKSPACE_SCALE * 0.5, WORKSPACE_SCALE * 0.5};
+	#if SSAO_QUALITY >= 2
+	string Format = "R32F";		// ê[ìxèÓïÒ
+	#else
+	string Format = "R16F";		// ê[ìxèÓïÒ
+	#endif
+	float4 ClearColor = { 0, 0, 0, 1 };
+	int MipLevels = 1;
+>;
+
+sampler GIDepthSamp = sampler_state {
+	texture = <PPPGIDepthMapRT>;
+	FILTER_MODE
+	ADDRESSING_MODE
+};
+
+inline float4 GetSSGI(float2 Tex2) { return tex2Dlod(SSGISamp,float4(Tex2,0,0)); }
+
+inline float3 GetWPos_SSGI(float2 Tex)
+{
+	float Depth = tex2Dlod( GIDepthSamp, float4(Tex,0,0)).x;
+	float2 uv = Tex.xy * (1.0 / GIFrameScale) + (0.5 - 0.5 * (1.0 / GIFrameScale));
+	return ReconstructWPos(uv, Depth);
+}
+
+/*
+inline float3 GetWPosDpeth_SSGI(float2 Tex, out float Depth)
+{
+	Depth = tex2Dlod( GIDepthSamp, float4(Tex,0,0)).x;
+	float2 uv = Tex.xy * (1.0 / GIFrameScale) + (0.5 - 0.5 * (1.0 / GIFrameScale));
+	return ReconstructWPos(uv, Depth);
+}
+*/
+
+#endif
+
+

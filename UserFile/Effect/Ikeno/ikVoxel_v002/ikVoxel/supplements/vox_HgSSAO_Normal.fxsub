@@ -1,0 +1,229 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// 針金PのHgSSAO用に法線を出力する
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// HgSSAO用の設定
+// スクリーン内描画範囲の倍率(画面縁SSAO処理のため広範囲を描画)
+#define ScrSizeRatio  1.1
+
+
+//----------------------------------------------------------------------------
+// voxel用パラメータ宣言
+
+// ブロックのサイズ。0.1～1.0程度。
+float VoxelGridSize = 0.5;
+
+// テクスチャの解像度を下げる。8～32程度。
+// 8でテクスチャを8分割する。小さいほど粗くなる。
+float VoxelTextureGridSize = 16;
+
+// 無視する透明度の閾値
+float VoxelAlphaThreshold = 0.05;
+
+// ブロックを描画するとき半透明を考慮する?
+// 0:不透明で描画、1:半透明度を利用する。
+#define VOXEL_ENBALE_ALPHA_BLOCK	1
+
+// ブロックのフチを丸めるか? 0.0～0.1程度 大きいほどエッジ部分が強調される
+// ※ 0にしても計算誤差でエッジが見える場合があります。
+float VoxelBevelOffset = 0.05;
+
+// チェック回数。4～16程度。多いほど正確になるが重くなる。
+#define VOXEL_ITERATION_NUMBER	6
+
+// 外部からブロックサイズをコントロールするアクセサリ名
+#define VOXEL_CONTROLLER_NAME	"ikiVoxelSize.x"
+
+// 付き抜けチェックをする? 0:しない、1:チェックする。
+// 1にすることで床が抜けるのを回避できる。代わりに見た目がおかしくなる。
+#define VOXEL_ENABLE_FALLOFF		0
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座法変換行列
+float4x4 matWV			: WORLDVIEW;
+float4x4 matW			: WORLD;
+float4x4 matV			: VIEW;
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+
+static float2 TrueScnScale = float2( floor(ViewportSize*ScrSizeRatio) ) / ViewportSize;
+
+// 座標変換行列
+float4x4 ProjMatrix0     : PROJECTION;
+static float4x4 matP = float4x4( ProjMatrix0[0] / TrueScnScale.x,
+                                 ProjMatrix0[1] / TrueScnScale.y,
+                                 ProjMatrix0[2],
+                                 ProjMatrix0[3] );
+
+static float4x4 matWVP = mul(matWV, matP);
+static float4x4 matVP = mul(matV, matP);
+
+
+float3   CameraPosition	: POSITION  < string Object = "Camera"; >;
+float3   CameraDirection : DIRECTION  < string Object = "Camera"; >;
+
+
+
+// マテリアル色
+float4	DiffuseColor		: DIFFUSE  < string Object = "Geometry"; >;
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+	texture = <ObjectTexture>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+};
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+
+//#define VOXEL_ENABLE_OUPUT_COLOR
+#include "../vox_commons.fxsub"
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTec < string MMDPass = "shadow"; > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+// シャドウバッファのサンプラ。"register(s0)"なのはMMDがs0を使っているから
+sampler DefSampler : register(s0);
+
+struct BufferShadow_OUTPUT
+{
+	float4 Pos		: POSITION;	 // 射影変換座標
+	float2 Tex		: TEXCOORD1;	// テクスチャ
+	float3 Normal   : TEXCOORD2;	// 法線
+	float3 Distance	: TEXCOORD3;
+	float4 WPos		: TEXCOORD4;	// Z値
+};
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// ブロック単位で色を塗るための情報を出力する
+BufferShadow_OUTPUT DrawInfo_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0)
+{
+	BufferShadow_OUTPUT Out = (BufferShadow_OUTPUT)0;
+	Out.Pos = mul( Pos, matWVP );
+	Out.Distance = mul( Pos, matWV ).xyz;
+	Out.Tex = Tex;
+	return Out;
+}
+
+float4 DrawInfo_PS(BufferShadow_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+	float alpha = DiffuseColor.a;
+	if ( useTexture ) alpha *= tex2D( ObjTexSampler, AlignTexture(IN.Tex)).a;
+	clip(alpha - VoxelAlphaThreshold);
+
+	return float4(IN.Distance.z, 0,0, 1);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// ブロックにヒットするか調べながら描画する
+BufferShadow_OUTPUT DrawObject_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0,
+	uniform bool useTexture, uniform bool bExpand)
+{
+	BufferShadow_OUTPUT Out = (BufferShadow_OUTPUT)0;
+
+	Out.WPos = mul( Pos, matW );
+
+	float3 wNormal = normalize( mul( Normal, (float3x3)matW ) );
+	Out.Normal = wNormal;
+
+	if (bExpand)
+	{
+		// 法線方向に拡大
+		float3 vNormal = normalize(Normal - dot(Normal, CameraDirection));
+		Out.WPos.xyz += vNormal * VoxelScaledGridSize;
+	}
+
+	Out.Pos = mul( Out.WPos, matVP );
+
+	Out.Distance.x = mul(Out.WPos, matV).z;
+	Out.Distance.yz = mul(float4(0,VoxelScaledGridSize,Out.Distance.x,1), matP).yw;
+	Out.Distance.y *= ViewportSize.y * 0.5 / 2.0;
+
+	Out.Tex = Tex;
+
+	return Out;
+}
+
+float4 DrawObject_PS(BufferShadow_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+	#if defined(VOXEL_ENBALE_ALPHA_BLOCK) && VOXEL_ENBALE_ALPHA_BLOCK > 0
+	float alpha = DiffuseColor.a;
+	if ( useTexture ) alpha *= tex2D( ObjTexSampler, AlignTexture(IN.Tex)).a;
+	clip(alpha - VoxelAlphaThreshold);
+	#endif
+
+	float3 V = AdjustVector(normalize(CameraPosition - IN.WPos.xyz));
+
+	//-----------------------------------------------------------
+	// どのブロックにヒットするか探す
+	float3 hitblock = 0;
+	float4 albedo = Raytrace(IN.WPos, -V, hitblock);
+	clip(albedo.w - 1e-3); // ヒットしなかった
+
+	float3 N = IN.Normal;
+	float3 hitpos = CalcPositionAndNormal(hitblock, N, V, IN.Distance.z / IN.Distance.y);
+
+
+	// HgSSAOはビュー空間での法線を受け取る
+	N = mul(N, (float3x3)matV);
+    // 法線(-1～+1を0～1に正規化)
+	float4 result = float4((N + 1) * 0.5, 1);
+
+	return result;
+}
+
+
+
+#define OBJECT_TEC(name, mmdpass, tex) \
+	technique name < string MMDPass = mmdpass; bool UseTexture = tex; \
+	string Script = \
+		"RenderColorTarget0=VoxelInfoTex; RenderDepthStencilTarget=VoxelDepthBuffer;" \
+		"ClearSetColor=VoxelClearColor; ClearSetDepth=VoxelClearDepth; Clear=Color; Clear=Depth;" \
+		"Pass=DrawInfo;" \
+		"RenderColorTarget0=; RenderDepthStencilTarget=;" \
+		"Pass=DrawFalloff; Pass=DrawObject;" \
+; \
+	> { \
+		pass DrawInfo { \
+			AlphaBlendEnable = false; AlphaTestEnable = false; \
+			VertexShader = compile vs_3_0 DrawInfo_VS(); \
+			PixelShader  = compile ps_3_0 DrawInfo_PS(tex); \
+		} \
+		pass DrawFalloff { /* 拡大すると穴が開くことがあるので念のために */ \
+			VertexShader = compile vs_3_0 DrawObject_VS(tex, false); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(tex); \
+		} \
+		pass DrawObject { \
+			CullMode = none; \
+			VertexShader = compile vs_3_0 DrawObject_VS(tex, true); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(tex); \
+		} \
+	}
+
+OBJECT_TEC(MainTec0, "object", false)
+OBJECT_TEC(MainTec1, "object", true)
+
+OBJECT_TEC(MainTecBS0, "object_ss", false)
+OBJECT_TEC(MainTecBS1, "object_ss", true)
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+

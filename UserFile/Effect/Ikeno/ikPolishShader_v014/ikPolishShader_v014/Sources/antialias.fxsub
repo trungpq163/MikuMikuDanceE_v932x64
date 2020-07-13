@@ -1,0 +1,97 @@
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// アンチエイリアス
+// ハードウェアによるエッジのスムージングが効かない為、エフェクトでエッジのギザギザを軽減する
+
+
+#if defined(ENABLE_AA) && ENABLE_AA > 0
+
+
+#if WORKSPACE_RES != 1
+texture2D AntialiasWorkMap : RENDERCOLORTARGET <
+	float2 ViewPortRatio = {1.0,1.0};
+	string Format = OutputTexFormat;
+>;
+
+#define RENDERTARGET_ANTIALIAS	AntialiasWorkMap
+#else
+// WORKSPACEの解像度が1なら、映り込み用のワークを流用できる。
+#define RENDERTARGET_ANTIALIAS	ReflectionWorkMap
+#endif
+
+#define RENDERTARGET_ANTIALIAS_SAMPLER	AntialiasWorkSamp
+#define RENDERTARGET_ANTIALIAS_STRING	TO_STRING(RENDERTARGET_ANTIALIAS)
+
+sampler RENDERTARGET_ANTIALIAS_SAMPLER = sampler_state {
+	texture = <RENDERTARGET_ANTIALIAS>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+
+
+float4 PS_Antialias( float2 Tex: TEXCOORD0, uniform sampler2D smp ) : COLOR
+{
+	float2 offset = ViewportOffset * 2.0;
+	float4 center = tex2D(smp, Tex);
+
+	// 色の差が大きいところ
+	float3 rgbL = tex2D( smp, Tex + float2(-1, 0) * offset).rgb;
+	float3 rgbR = tex2D( smp, Tex + float2( 1, 0) * offset).rgb;
+	float3 rgbU = tex2D( smp, Tex + float2( 0,-1) * offset).rgb;
+	float3 rgbD = tex2D( smp, Tex + float2( 0, 1) * offset).rgb;
+	float lumaC = rgb2gray(center.rgb);
+	float lumaL = rgb2gray(rgbL);
+	float lumaR = rgb2gray(rgbR);
+	float lumaU = rgb2gray(rgbU);
+	float lumaD = rgb2gray(rgbD);
+	float4 gradCol = abs(lumaC - float4(lumaL,lumaR,lumaU,lumaD));
+
+	// 色が近いなら無視
+	float w = saturate(dot(gradCol, 1));
+
+#if 1
+	// 深度の差が大きいところ
+	// 色が似ていて深度が違うものを似ていると判定しないように、
+	// 近似度のチェックには深度も利用する。
+	float DC = tex2D( NormalSamp, Tex).w;
+	float DL = tex2D( NormalSamp, Tex + float2(-1, 0) * offset).w;
+	float DR = tex2D( NormalSamp, Tex + float2( 1, 0) * offset).w;
+	float DU = tex2D( NormalSamp, Tex + float2( 0,-1) * offset).w;
+	float DD = tex2D( NormalSamp, Tex + float2( 0, 1) * offset).w;
+	float4 grad = abs(DC - float4(DL,DR,DU,DD)) * 10.0 / DC;
+	grad = max(grad, gradCol);
+
+	float4 rcpGrad = 1.0 / clamp(grad * 4.0, 1.0, 4.0);
+	float gradX = clamp(grad.x - grad.y, -1, 1);	// xの差が大きい
+	float gradY = clamp(grad.z - grad.w, -1, 1);	// yの差が大きい
+
+	// 適当
+	grad = max(saturate(grad) * 4.0, 0.1);
+	rcpGrad.zw *= max(grad.x, grad.y);
+	rcpGrad.xy *= max(grad.z, grad.w);
+
+	float2 vl = float2(-1, gradY) * rcpGrad.x;
+	float2 vr = float2( 1, gradY) * rcpGrad.y;
+	float2 vu = float2(gradX, -1) * rcpGrad.z;
+	float2 vd = float2(gradX,  1) * rcpGrad.w;
+
+	float3 cl = tex2D(smp, Tex + vl * offset).rgb;
+	float3 cr = tex2D(smp, Tex + vr * offset).rgb;
+	float3 cu = tex2D(smp, Tex + vu * offset).rgb;
+	float3 cd = tex2D(smp, Tex + vd * offset).rgb;
+	float3 col = (center.rgb + cl + cr + cu + cd) * (1.0 / 5.0);
+#else
+	// 簡易版
+	float3 col = (center.rgb + rgbL + rgbR + rgbU + rgbD) * (1.0 / 5.0);
+#endif
+
+//	return float4(center.rgb, 1);
+//	return float4(col, 1);
+//	return float4(lerp(center.rgb, float3(1,0,0), w), 1);
+//col.rgb = float3(1,0,0);
+	return float4(Gamma(lerp(center.rgb, col, w)), 1);
+}
+#endif
+

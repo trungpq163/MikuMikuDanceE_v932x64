@@ -1,0 +1,245 @@
+//-----------------------------------------------------------------------------
+// SSGI
+
+#if ENABLE_SSGI > 0
+
+// 色
+//#define	SSGIColorSampler	FullWorkSamp
+#define	SSGIColorSampler	HalfWorkSamp3
+
+static float2 SSGIKernelSizeScale = abs(1.0 * matP._11 * (0.5/8.0)) / matP._34 / SSAORayCount * ViewportAspect;
+
+// color boost
+float3 ColorBoost(float3 col)
+{
+	float g0 = Luminance(col.rgb);
+	col.rgb *= col.rgb;
+	float g1 = Luminance(col.rgb);
+	col.rgb *= (g0 / max(g1, 0.001));
+	return col;
+}
+
+
+VS_SSAO_OUTPUT VS_SSGI( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_SSAO_OUTPUT Out = (VS_SSAO_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+	Out.Tex.zw = (Tex.xy + ViewportOffset2) * WorkSize * 100.0 / NOISE_TEXTURE_SIZE;
+
+	Out.SmpStep.xy = SSGIKernelSizeScale;
+
+	Out.AOFactor.rgb = LightColor;
+	Out.AOFactor.w = GIScale;
+
+	return Out;
+}
+
+float4 PS_SSGI( VS_SSAO_OUTPUT IN ) : COLOR
+{
+	float2 texCoord = IN.Tex.xy;
+
+	GeometryInfo geom = GetWND(texCoord);
+	float3 N = geom.nd.normal;
+
+	float angleMul = GOLDEN_ANGLE;
+	float angleAdd = GetJitterOffset(IN.Tex.zw) * (PI * 2.0);
+
+// 深度に応じて変えるべき?
+//	float2 radiusMul = 0.2 / SSAORayCount * ViewportAspect;
+	float2 radiusMul = IN.SmpStep.xy / max(geom.nd.depth, 1.0);
+	float2 radiusAdd = SampStep;
+	float bias = mSSAOBias * 0.1 + geom.nd.depth * (0.5 / 1024.0);
+
+	float2 sum = 0;
+	float4 col = 0;
+
+	for(int j = 0; j < SSAORayCount; j++)
+	{
+		float2 sc;
+		sincos(j * angleMul + angleAdd, sc.x, sc.y);
+		float2 uv = sc * (j * radiusMul + radiusAdd) + texCoord;
+
+		GeometryInfo geom1 = GetWND(uv);
+
+		float3 v = geom1.wpos - geom.wpos;
+		float vv = dot(v, v);
+		float falloff = 1.0 / max(vv * 0.01, 1.0);
+		float vn = saturate(dot(v, N) * rsqrt(vv) - bias);
+
+//		float3 v = normalize(geom1.wpos - geom.wpos);
+//		float vn = saturate(dot(v, N) - bias);
+			// vn=1: 壁に塞がれている。vn=0: 壁は視界外。
+
+//		float vn2 = saturate(dot(v, geom1.nd.normal) * -0.5 + 0.5);
+		float vn2 = saturate(dot(N, geom1.nd.normal) * -0.5 + 0.5);
+			// 後ろを向いている?
+
+		float4 col0 = tex2D(SSGIColorSampler, uv);
+		col0.rgb *= vn2;
+
+		col += col0 * vn * falloff;
+		sum.x += falloff; // 距離による重み
+	}
+
+	col /= max(sum.x, 0.01);
+	float4 result = float4(col.rgb / max(col.w, 0.001), col.w / SSAORayCount);
+
+	// RSMの効果を足す
+	#if RSMCount > 0
+	float4 rsm = GetRSMColor(texCoord);
+	result.rgb += rsm.rgb * IN.AOFactor.rgb * (1.0 - col.w);
+	// result.w = saturate(result.w + rsm.w);
+	#endif
+
+	// スケーリング
+	float giScale = IN.AOFactor.w;
+	result.rgb *= max(giScale, 1.0);
+	result.w *= saturate(giScale);
+
+	return result;
+}
+
+
+
+VS_OUTPUT VS_BlurSSGI( float4 Pos : POSITION, float2 Tex : TEXCOORD0,
+	uniform bool bBlurX, uniform float stepSize)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset * WORKSPACE_RES;
+
+	float2 offset = (bBlurX) ? float2(SampStep.x, 0) : float2(0, SampStep.y);
+	Out.Tex.zw = offset * stepSize * WORKSPACE_RES;
+
+	return Out;
+}
+
+float4 PS_BlurSSGI( float4 Tex: TEXCOORD0, uniform sampler smp) : COLOR
+{
+	float2 texCoord = Tex.xy;
+	float2 offset = Tex.zw;
+
+	float4 color0 = tex2D( smp, texCoord );
+	NormalDepth nd0 = GetNormalDepthRaw(texCoord);
+	float3 N = nd0.normal;
+	float depth = nd0.depth;
+	float depthMargin1 = 2.0 + depth * 0.05;
+
+	float weightSum = BlurWeight[0];
+	float4 Color = color0 * weightSum;
+
+	[unroll] for(int i = 1; i < 8; i++)
+	{
+		float4 uv = offset.xyxy * float4(i,i, -i,-i) + texCoord.xyxy;
+		NormalDepth ndp = GetNormalDepthRaw(uv.xy);
+		NormalDepth ndn = GetNormalDepthRaw(uv.zw);
+		float4 cp = tex2D(smp, uv.xy);
+		float4 cn = tex2D(smp, uv.zw);
+		float wp = (abs(depth - ndp.depth) < depthMargin1);
+		float wn = (abs(depth - ndn.depth) < depthMargin1);
+		wp *= BlurWeight[i] * saturate(dot(nd0.normal, ndp.normal) * 0.5 + 0.5);
+		wn *= BlurWeight[i] * saturate(dot(nd0.normal, ndn.normal) * 0.5 + 0.5);
+		Color += cp * wp;
+		Color += cn * wn;
+		weightSum += wp;
+		weightSum += wn;
+	}
+
+	Color = Color / weightSum;
+
+	return Color;
+}
+
+
+
+float4 PS_CreateSSGIBase( float4 Tex: TEXCOORD0) : COLOR
+{
+	float2 texCoord = Tex.zw;
+	float4 albedo = tex2D(ColorMap, texCoord);
+
+	MaterialParam material = GetMaterial(texCoord, albedo);
+	GeometryInfo geom = GetWND(texCoord);
+
+	float3 N = geom.nd.normal;
+	float3 L = -LightDirection;
+	float3 diff = saturate(dot(N, L) * tex2D(ShadowmapSamp, texCoord ).x) * LightColor;
+	#if EXTRA_LIGHTS > 0
+	diff += tex2D(LightMapSamp, texCoord).rgb;
+	#endif
+
+	float4 EnvColor = GetEnvColor(N, 1.0);
+//	EnvColor.rgb *= GetSSAO(texCoord); // 不要?
+	diff += EnvColor.rgb;
+
+	float4 baseColor;
+	baseColor.rgb = albedo.rgb * (diff + material.emissive);
+	baseColor.a = 1;
+
+/*
+	// スカイドームなら仮の色を割り当てる?
+	float3 V = normalize(CameraPosition - geom.wpos);
+	baseColor = lerp(GetEnvColor(-V, 0.0), baseColor, IsNotMask(material));
+*/
+	baseColor *= IsNotMask(material);
+
+	return baseColor;
+}
+
+
+float4 PS_SSGIUpscale( float4 Tex: TEXCOORD0, uniform sampler smp) : COLOR
+{
+	NormalDepth nd0 = GetNormalDepthRaw(Tex.xy);
+	float2 texCoord = Tex.xy;
+	float depthRate = CalcWeightDepth(nd0.depth);
+	float3 N = nd0.normal;
+
+	float4 result = 0;
+	float weight = 0;
+
+	NormalDepth nd1;
+	float4 col1;
+	float2 uv1;
+	float w;
+
+	texCoord = floor(texCoord * WorkSize) / WorkSize + SampStep * 0.5;
+
+	#undef INTEGRATE_RESULT
+	#define INTEGRATE_RESULT(u,v, w0)	\
+		uv1 = texCoord + float2(u,v) * SampStep * 2.0; \
+		nd1 = GetNormalDepthRaw(uv1); \
+		w = (nd0.depth - nd1.depth < 2.0) * saturate(dot(N, nd1.normal)) * w0; \
+		col1 = tex2D(smp, uv1); \
+		result += col1 * w;	weight += w;
+
+	INTEGRATE_RESULT( 1, 1, W2);
+	INTEGRATE_RESULT( 0, 1, W1);
+	INTEGRATE_RESULT(-1, 1, W2);
+
+	INTEGRATE_RESULT( 1, 0, W1);
+	INTEGRATE_RESULT(-1, 0, W1);
+
+	INTEGRATE_RESULT( 1,-1, W2);
+	INTEGRATE_RESULT( 0,-1, W1);
+	INTEGRATE_RESULT(-1,-1, W2);
+
+	INTEGRATE_RESULT( 0, 0, W0);
+	if (weight < 1e-4)
+	{
+		w = 1e-4;
+		result += col1 * w;	weight += w;
+	}
+
+	result /= weight;
+
+	result.rgb = result.rgb / max(result.w, 0.01);
+	result.rgb = ColorBoost(result.rgb);
+
+	float4 EnvColor = GetEnvColor(N, 1.0);
+	result.rgb = lerp(EnvColor.rgb, result.rgb, result.w);
+
+	return result;
+}
+
+#endif

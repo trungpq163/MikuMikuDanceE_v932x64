@@ -1,0 +1,199 @@
+
+// 共通処理、カテゴリ分けから漏れた汎用処理
+
+
+//-----------------------------------------------------------------------------
+// マクロ
+
+#define TO_STRING(str) #str
+
+
+//-----------------------------------------------------------------------------
+// 構造体
+
+struct VS_OUTPUT {
+	float4 Pos			: POSITION;
+	float4 Tex			: TEXCOORD0;
+};
+
+//-----------------------------------------------------------------------------
+// 
+
+// ぼかし処理の重み係数：
+float4 BlurWeightArray[] = {
+	float4(0.0920246, 0.0902024, 0.0849494, 0.0768654),
+	float4(0.0668236, 0.0558158, 0.0447932, 0.0345379)
+};
+static float BlurWeight[8] = (float[8])BlurWeightArray;
+
+
+//-----------------------------------------------------------------------------
+// 
+
+// 線形で出力する?
+bool bLinearMode : CONTROLOBJECT < string name = "ikLinearEnd.x"; >;
+
+float3 ColorCorrectFromInput(float3 col)
+{
+	return (!bLinearMode) ? Degamma(col) : col;
+}
+float3 ColorCorrectToOutput(float3 col)
+{
+	return (!bLinearMode) ? Gamma(col) : col;
+}
+
+/*
+static float4x4 matTex2Proj = {
+		 2, 0, 0, 0,
+		 0,-2, 0, 0,
+		-1, 1, matP._33, 1,
+		 0, 0, matP._43, 0
+	};
+static float4x4 matTex2World = mul(matTex2Proj, matInvVP);
+*/
+float3 ReconstructWPos(float2 Tex, float depth)
+{
+	// Tex.xy = (floor(Tex.xy * ViewportSize) + 0.5) / ViewportSize;
+//	float4 lpos = float4(Tex.xy * depth, depth, 1);
+//	return mul(lpos, matTex2World).xyz;
+
+	float2 coord = Tex.xy * float2(2,-2) + float2(-1,1);
+	float4 lpos = float4(coord, matP._33, 1) * depth;
+	lpos.z += matP._43;
+	return mul(lpos, matInvVP).xyz;
+}
+
+NormalDepth GetNormalDepthRaw(float2 Tex)
+{
+	return (NormalDepth)tex2D( NormalSamp, Tex);
+}
+NormalDepth GetNormalDepthRawLod(float2 Tex)
+{
+	return (NormalDepth)tex2Dlod( NormalSamp, float4(Tex,0,0));
+}
+
+GeometryInfo GetWND(float2 Tex)
+{
+	NormalDepth ND = GetNormalDepthRaw(Tex);
+	GeometryInfo tmp;
+	tmp.nd = ND;
+	tmp.wpos = ReconstructWPos(Tex, ND.depth);
+	return tmp;
+}
+
+GeometryInfo GetWNDLod(float2 Tex)
+{
+	NormalDepth ND = GetNormalDepthRawLod(Tex);
+	GeometryInfo tmp;
+	tmp.nd = ND;
+	tmp.wpos = ReconstructWPos(Tex, ND.depth);
+	return tmp;
+}
+
+// 座標だけ取得する
+float3 GetWPos(float2 Tex)
+{
+	return ReconstructWPos(Tex, GetNormalDepthRaw(Tex).depth);
+}
+
+// ブラーの強さを計算する
+float CalcBlurWeight(NormalDepth nd0, NormalDepth nd1, float r2, float depthRate)
+{
+	float d = nd1.depth * depthRate - nd0.depth;
+	float d2 = d * d;
+	return exp2(r2 - d2) * saturate(dot(nd0.normal, nd1.normal) * 0.5 + 0.5);
+}
+
+// 2つ同時に計算する。ほぼ速くならない。
+float2 CalcBlurWeightOpt(
+	NormalDepth nd1p, NormalDepth nd1n, NormalDepth nd0, 
+	float r2, float depthRate)
+{
+	float2 d = float2(nd1p.depth, nd1n.depth) * depthRate - nd0.depth;
+	float2 d2 = d * d;
+	float2 nn = float2(dot(nd0.normal, nd1p.normal), dot(nd0.normal, nd1n.normal));
+	return exp2(r2 - d2) * saturate(nn * 0.5 + 0.5);
+}
+
+float3 CalcBlurWeight3(NormalDepth nd0, NormalDepth nd1, float3 r2, float depthRate)
+{
+	float d = nd1.depth * depthRate - nd0.depth;
+	float d2 = d * d;
+	return exp2(r2 - d2.xxx) * saturate(dot(nd0.normal, nd1.normal) * 0.5 + 0.5);
+}
+
+// sss用の吸収度を取得する(ad hoc)
+float3 CalcAbsorptionColor(float2 texCoord)
+{
+	float3 rgb = tex2D(ColorMap, texCoord).rgb;
+
+	float g = rgb2gray(rgb);
+	rgb = rgb * rgb; // pow(rgb, 2.0);
+	rgb = (rgb * g / max(rgb2gray(rgb), 1e-4));
+
+	return saturate(1.0 - rgb) * 100 + 0.1;
+}
+
+bool IsTimeToReset()
+{
+	return (time < 0.001f);
+}
+
+float3 GetScreenPixel(float2 texCoord)
+{
+	return ColorCorrectFromInput(tex2D(ScnSamp, texCoord).rgb);
+}
+
+
+//-----------------------------------------------------------------------------
+// ジッター
+
+#if 0
+float4 JitterOffsets4[4] =
+{
+	float4(6 / 16.0, 1 / 16.0, 12/ 16.0,  2/ 16.0),
+	float4(9 / 16.0, 14/ 16.0, 5 / 16.0, 11/ 16.0),
+	float4(0 / 16.0, 7 / 16.0, 13/ 16.0, 4 / 16.0),
+	float4(15/ 16.0, 8 / 16.0, 3 / 16.0, 10/ 16.0),
+};
+float4 JitterOffsetsPattern[4] =
+{
+	float4(1,0,0,0),
+	float4(0,1,0,0),
+	float4(1,0,1,0),
+	float4(0,0,0,1),
+};
+#endif
+
+float GetJitterOffset(float2 iuv)
+{
+#if 0
+	int4 mod4 = fmod(floor(iuv.xyxy * float2(1,1/4.0).xxyy), 4);
+	float4 work11 = JitterOffsets4[mod4.x];
+	float4 work12 = JitterOffsets4[mod4.z];
+	float4 work21 = JitterOffsetsPattern[mod4.y];
+	float4 work22 = JitterOffsetsPattern[mod4.w];
+	return dot(work11, work21) + dot(work21, work22) / 16.0;
+#else
+//	return tex2Dlod(NoiseSamp, float4(iuv / 16.0 + 0.5 / 16.0, 0,0)).x;
+	return tex2D(NoiseSamp, iuv).x;
+#endif
+}
+
+
+// マテリアル値の取得
+MaterialParam GetMaterial(float2 uv)
+{
+	return UnpackMaterial(tex2D( MaterialMap, uv));
+}
+
+//-----------------------------------------------------------------------------
+//
+
+VS_OUTPUT VS_Buffer( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex = Tex.xyxy + float4(ViewportOffset, ViewportOffset2);
+	return Out;
+}

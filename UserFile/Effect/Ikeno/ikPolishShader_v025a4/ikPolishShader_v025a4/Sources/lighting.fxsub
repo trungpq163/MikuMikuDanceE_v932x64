@@ -1,0 +1,159 @@
+
+/*
+Based on Sebastien Lagarde and Charles de Rousiers, Electronic Arts Frostbite,
+"Moving Frostbite to Physically Based Rendering 2.0"
+http://www.frostbite.com/wp-content/uploads/2014/11/course_notes_moving_frostbite_to_pbr_v2.pdf
+*/
+
+float FakeGlossyFresnel(float u, float a2)
+{
+	// return pow(1.0 - u, 5.0);
+	return pow(saturate((1.0 - u) * (1.0 - 0.5472 * a2) + 0.1843 * a2), 5.0);
+}
+
+// diffuseóp
+float Schlick(float f90, float u, float a2)
+{
+	float f0 = 1;
+	return f0 + (f90 - f0) * FakeGlossyFresnel(u, a2);
+}
+
+float3 Schlick(float3 f0, float f90, float u, float a2)
+{
+	return f0 + (f90 - f0) * FakeGlossyFresnel(u, a2);
+}
+
+float D_GGX(float NH , float m2)
+{
+	float denom = (NH * m2 - NH) * NH + 1;
+	return m2 / (denom * denom);
+}
+
+// V: GçÄÇ…1/(NL*NV)Çä|ÇØÇΩÇ‡ÇÃ
+float SmithGGXCorrelated(float NL, float NV, float alphaG2)
+{
+	NL = 1.0 / (NL + epsilon);
+	NV = 1.0 / (NV + epsilon);
+	float LambdaGGXV = NL * sqrt((NV * -alphaG2 + NV) * NV + alphaG2);
+	float LambdaGGXL = NV * sqrt((NL * -alphaG2 + NL) * NL + alphaG2);
+	return 0.5f / (LambdaGGXV + LambdaGGXL + epsilon);
+		// NL,NVÇÃÇ«ÇøÇÁÇ©Ç™0Ç…ãﬂÇ¢Ç∆0Ç…Ç»ÇÈÇÕÇ∏Ç™î≠éUÇ∑ÇÈ?
+}
+
+float3 CalcSpecular(float3 L, float3 N, float3 V, float a, float3 f0)
+{
+	float3 H = normalize(L + V);
+	a *= a;
+	a *= a;
+	a = a * 0.9999 + 0.0001;
+
+	float NH = saturate(dot(N, H));
+	float NL = saturate(dot(N, L));
+	float LH = saturate(dot(L, H));
+	float NV = abs(dot(N, V));
+
+	float f90 = 1;
+	float D = D_GGX(NH, a);
+	float3 F = Schlick(f0, f90, NL, a);
+	float Vis = SmithGGXCorrelated(NV, NL, a);
+	return max(D * F * Vis, 0);		// / PI
+}
+
+float CalcDiffuse(float3 L, float3 N, float3 V)
+{
+	return saturate(dot(N,L));
+/*
+	// ó†ñ ëŒâû
+	float d = dot(N,L) * fd;
+	float negD = -d * (material.attribute == MT_LEAF);
+	return max(d.xxx, negD * material.sssValue * material.albedo);
+*/
+}
+
+float3 CalcDiffuse(float3 L, float3 N, float3 V, MaterialParam material)
+{
+	float a = material.roughness;
+	a *= a;
+	float linearRoughness = a * a;
+
+	float3 H = normalize(L + V);
+	float LH = saturate(dot(L, H));
+	float NL = abs(dot(N, L));
+	float NV = abs(dot(N, V));
+
+	float energyBias     = lerp(0, 0.5,  linearRoughness);
+	float energyFactor   = lerp (1.0, 1.0 / 1.51, linearRoughness);
+	float fd90           = energyBias + 2.0 * LH * LH * linearRoughness;
+	float lightScatter   = Schlick(fd90, NL, linearRoughness);
+	float viewScatter    = Schlick(fd90, NV, linearRoughness);
+	float fd = lightScatter * viewScatter * energyFactor;
+//	return NL * fd; // / PI;
+
+	// ó†ñ ëŒâû
+	float d = dot(N,L) * fd;
+	float negD = -d * (material.attribute == MT_LEAF);
+	float3 backfaceColor = (negD * material.sssValue) * material.albedo;
+	return saturate(max(d.xxx, backfaceColor));
+}
+
+float CalcLightFalloff(float dist, float lightRadius)
+{
+	float d = max(dist, 0.1) / lightRadius;
+	float n = saturate(1.0 - pow(d, 4));
+	return n * n / (d * d + 1.0);
+}
+
+float CalcLightFalloffSqrt(float sqrDist, float lightRadius)
+{
+	float d = max(sqrDist, 0.1 * 0.1) / (lightRadius * lightRadius);
+	float d2 = d * d;
+	float n = saturate(1.0 - d2);
+	return n * n / (d2 + 1.0);
+}
+
+float CalcLightFalloff(float3 wpos, float3 lpos, float lightRadius)
+{
+	float3 lv = lpos - wpos;
+	return CalcLightFalloffSqrt(dot(lv,lv), lightRadius);
+}
+
+
+float3 GetDiffuseDominantDir(float3 N, float3 V, float NV, float roughness)
+{
+	float a = 1.02341  * roughness - 1.51174;
+	float b =-0.511705 * roughness + 0.755868;
+	float lerpFactor = saturate (( NV * a + b) * roughness);
+	return normalize(lerp(N, V, lerpFactor));
+}
+
+float3 GetSpecularDominantDir(float3 N, float3 R, float roughness)
+{
+	float smoothness = saturate(1.0 - roughness);
+	float lerpFactor = smoothness * (sqrt(smoothness) + roughness);
+	return normalize(lerp(N, R, lerpFactor));
+}
+
+float3 GetSpecularDominantDirArea(float3 N, float3 R, float NV, float roughness)
+{
+	float lerpFactor = roughness;
+	return normalize(lerp(R, N, lerpFactor));
+}
+
+// dilate highlight radius for sun disk.
+float3 CalcSunSpecular(float3 L, float3 N, float3 V, float a, float3 f0)
+{
+	float3 R = normalize(reflect(-V, N));
+	float sunAngularRadius = 0.53 * PI / 180.0;
+	float dr = dot(L,R);
+	float3 S = R - dr * L;
+	float r = sin(sunAngularRadius);
+	float d = cos(sunAngularRadius);
+	L = dr < d ? normalize(d * L + normalize(S) * r) : R;
+
+	return CalcSpecular( L, N, V, a, f0);
+}
+
+float ComputeSpecOcclusion(float NV, float AO, float roughness)
+{
+	return saturate(pow(NV + AO, exp2(-16.0 * roughness - 1.0)) - 1.0 + AO);
+}

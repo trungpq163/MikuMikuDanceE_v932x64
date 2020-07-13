@@ -1,0 +1,432 @@
+
+//-----------------------------------------------------------------------------
+//
+
+#if FOG_TYPE == 2
+
+DECLARE_PARAM(float3, mFogBasePosition, "フォグベース");
+DECLARE_PARAM(float3, mFogMinHeight, "フォグ高度起点");
+DECLARE_PARAM(float3, mFogMaxHeight, "フォグ高度端点");
+DECLARE_PARAM(float3, mFogWindL, "フォグ風向大");
+DECLARE_PARAM(float3, mFogWindS, "フォグ風向小");
+
+//DECLARE_PARAM(float, mFogDistance, "フォグ距離");
+//DECLARE_PARAM(float, mFogDensity, "フォグ濃度");
+DECLARE_PARAM(float, mFogScatterP, "フォグ散乱度+");
+DECLARE_PARAM(float, mFogScatterM, "フォグ散乱度-");
+DECLARE_PARAM(float, mFogExtinction, "フォグ減衰度");
+DECLARE_PARAM(float, mFogPhase, "フォグ視線依存");			// << 全員に影響する
+DECLARE_PARAM(float, mFogNoiseAmplitude, "フォグノイズ");
+
+// ハイトフォグ
+static float NoiseFogMaxHeight = mFogMaxHeight.y;	// フォグが消失する高さ
+static float NoiseFogMinHeight = mFogMinHeight.y;	// フォグ濃度が最大になる高さ
+// ノイズの流れる方向
+static float3 NoiseFogDirection1 = (mFogWindL - mFogBasePosition) * 0.1;
+static float3 NoiseFogDirection2 = (mFogWindS - mFogBasePosition) * 0.1;
+
+float AvgFogDensity = 0.5625; // (0.25 * 3)^2
+
+//-----------------------------------------------------------------------------
+
+#define FOG_SLICE_NUM	(FOG_SLICE_SQRT * FOG_SLICE_SQRT)
+static float2 FogSlicePixelSize = floor(ViewportSize / FOG_SLICE_SQRT);
+static float2 view4 = floor(ViewportSize / FOG_SLICE_SQRT);
+
+struct VS_OUTPUT_FOG {
+	float4 Pos			: POSITION;
+	float4 Tex			: TEXCOORD0;
+	float4 FogCoef		: TEXCOORD1;
+
+#if ENABLE_FOG_NOISE > 0
+	float3 Wind1		: TEXCOORD2;
+	float3 Wind2		: TEXCOORD3;
+#endif
+
+};
+
+
+// 視線による光の散乱率
+float3 CalcMieCoef(float g)
+{
+	float gSq = g * g;
+	return float3(1 - gSq, 1 + gSq, -2*g);
+}
+
+float CalcMiePhase(float3 coef, float c)
+{
+	return coef.x / pow(coef.y + coef.z * c, 1.5);
+}
+
+float MieScattering(float g, float c, float n)
+{
+	// return n * (1 - g*g) / pow(1 + g*g - 2*g*c, 1.5);
+	float3 coef = CalcMieCoef(g);
+	coef.x *= n;
+	return CalcMiePhase(coef, c);
+}
+
+float3 CalcNormalizedMieCoef()
+{
+	float g = saturate(mFogPhase) * 0.9;
+	float3 coef = CalcMieCoef(g);
+	coef.x *= 1.0 / CalcMiePhase(coef, 1);
+	return coef;
+}
+
+// 光の方向による散乱度
+float GetFogPhase(float3 view, float3 light, float3 coef)
+{
+	return CalcMiePhase(coef, dot(view, light));
+}
+
+// 視線依存度によって、背景の減衰のしやすさを変える
+float GetScenePhase()
+{
+	float g = saturate(mFogPhase) * 0.9;
+	float n = 1.0 / MieScattering(0.9, 1.0, 1.0); // 適当な正規化
+	return MieScattering(g, 1.0, n) * 0.9;
+}
+
+float CalcFogScatterIntensity()
+{
+	return (1.0 + mFogScatterP - mFogScatterM);
+}
+
+float CalcFogExtinctionIntensity()
+{
+	float fogPhaseExtinction = GetScenePhase();
+	float bgExtinction = 1 - (1 - mFogExtinction) * (1 - fogPhaseExtinction);
+	return bgExtinction;
+}
+
+// フォグ濃度
+float CalcFogDensity(float coef)
+{
+	return pow(saturate(coef), 2.0) * 8.0;
+}
+
+// ハイトフォグ
+float CalcHeightFogDensityScale()
+{
+	float denom = (mExistPolish ? NoiseFogMaxHeight : 20.0) - NoiseFogMinHeight;
+	float threshold = 0.1;
+	denom = (abs(denom) < threshold) ? ((denom >= 0.0) ? threshold : -threshold) : denom;
+	return 4.0 / denom;
+}
+
+float HeightFogDensity(float y, float scale, float minH)
+{
+	float t = max(y * scale + minH, 0);
+	return exp2(-t);
+}
+
+float CalcHeightFogDensity(float3 posB, float3 posE, float scale, float minH)
+{
+#if 0
+	// brute-force
+	float density = 0;
+	for(int i = 0; i < MAX_FOG_STEP; i++)
+	{
+		float t = i * 1.0 / MAX_FOG_STEP;
+		float3 p1 = lerp(posB, posE, t);
+		density += HeightFogDensity(p1.y, scale, minH);
+	}
+	return density / MAX_FOG_STEP;
+#else
+	// analytical
+	float3 t = float3(float2(posB.y, posE.y) * scale + minH, 0);
+	t = (t.x <= t.y) ? t.xyz : t.yxz;
+	t.z = saturate(-t.x / (t.y - t.x));	// 境界を超える位置
+	t.xy = max(t.xy, 0.0);
+	float td = max(t.y - t.x, 1e-4);	// 0除算対策
+	float density = exp2(-t.x) * (1.0 - exp2(-td)) / td;
+	return lerp(density, 1, t.z);
+#endif
+}
+
+
+// 画面を分割する
+float3 CalcFogInterleavedTexCoord(float2 Tex)
+{
+	float2 iuv = floor(Tex.xy * ViewportSize);
+	float2 iuv4 = round(iuv % view4);
+	float2 i2 = floor(iuv / view4);
+
+	float2 uv = iuv4 * 1.0 / view4 + ViewportOffset;
+	float zorder = i2.x + i2.y * FOG_SLICE_SQRT;
+
+	float2 jitterUv = (iuv4 + 0.5) / NOISE_TEXTURE_SIZE;
+	float jitter = GetJitterOffset(jitterUv);
+	zorder += jitter;
+	zorder = saturate(zorder / (FOG_SLICE_NUM + 1.0));
+
+	return float3(uv, zorder);
+}
+
+
+//-----------------------------------------------------------------------------
+// メインライトの散乱
+
+VS_SHADOWMAP_OUTPUT_Ex VS_VolumeLight( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_SHADOWMAP_OUTPUT_Ex Out = (VS_SHADOWMAP_OUTPUT_Ex)0; 
+
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+	Out.Tex.zw = 0;
+
+	SetShadowmapVSOutput(Out.LightParam, Out.LightMatrix);
+	Out.Extend.xyz = CalcNormalizedMieCoef();
+
+	return Out;
+}
+
+float4 PS_VolumeLight(VS_SHADOWMAP_OUTPUT_Ex IN) : COLOR
+{
+	float3 fogTexCoord = CalcFogInterleavedTexCoord(IN.Tex.xy);
+	float2 uv = fogTexCoord.xy;
+	float zorder = fogTexCoord.z;
+	float3 V = GetViewDirection(uv);
+	float maxDepth = MAX_FOG_DISTANCE;
+	float startDepth = zorder * maxDepth;
+	float slotLength = maxDepth / (FOG_SLICE_NUM + 1.0);
+
+	float3 PosB = CameraPosition + V * startDepth;
+	float3 PosE = PosB + V * slotLength;
+
+	float4 PPosB = CalcShadowProjectionPosition(PosB, IN.LightMatrix);
+	float4 PPosE = CalcShadowProjectionPosition(PosE, IN.LightMatrix);
+	float depthB = mul(float4(PosB,1), matV).z;
+	float depthE = mul(float4(PosE,1), matV).z;
+
+	float sum = 0;
+	for(int i = 0; i < MAX_FOG_STEP; i++)
+	{
+		float t0 = i * 1.0 / MAX_FOG_STEP;
+		float light = CalcShadowWithPPos(lerp(PPosB, PPosE, t0), IN.LightParam);
+		sum += light;
+	}
+	sum *= (1.0 / MAX_FOG_STEP);
+
+	float3 coef = IN.Extend.xyz; // CalcNormalizedMieCoef();
+	float phase = GetFogPhase(V, -LightDirection, coef);
+	sum.x *= phase;
+
+	float3 col = sum.x * LightColor;
+
+	// 間接光の追加
+	float fog = 1.0 - exp2(-(depthB + depthE) * 0.5 * 0.02);
+	col += GetEnvColor(V, 0.6 + fog * 0.4).rgb * 0.25;
+
+	return float4(col, 0);
+}
+
+
+//-----------------------------------------------------------------------------
+// フォグの濃度
+
+VS_OUTPUT_FOG VS_FogDensity( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_OUTPUT_FOG Out = (VS_OUTPUT_FOG)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+//	Out.Tex.zw = (Tex.xy + ViewportOffset2) * WorkSize / NOISE_TEXTURE_SIZE;
+
+	Out.FogCoef.x = CalcHeightFogDensityScale();
+	Out.FogCoef.y = -NoiseFogMinHeight * Out.FogCoef.x;
+	Out.FogCoef.z = CalcFogDensity(1.0 - mFogDensity);
+
+	#if ENABLE_FOG_NOISE > 0
+	Out.Wind1 = -NoiseFogDirection1;
+	Out.Wind2 = -NoiseFogDirection1;
+	#endif
+
+	return Out;
+}
+
+float4 PS_FogDensity(VS_OUTPUT_FOG IN) : COLOR
+{
+	float4 Tex = IN.Tex;
+	float heightScale = IN.FogCoef.x;
+	float heightMin = IN.FogCoef.y;
+	float densityScale = IN.FogCoef.z;
+
+	float3 fogTexCoord = CalcFogInterleavedTexCoord(Tex.xy);
+	float2 uv = fogTexCoord.xy;
+	float zorder = fogTexCoord.z;
+	float3 V = GetViewDirection(uv);
+	float maxDepth = MAX_FOG_DISTANCE;
+	float startDepth = zorder * maxDepth;
+	float slotLength = maxDepth / (FOG_SLICE_NUM + 1.0);
+
+	float3 PosB = CameraPosition + V * startDepth;
+	float3 PosE = PosB + V * slotLength;
+
+	float fogDensity = 0.0;
+
+#if ENABLE_FOG_NOISE > 0
+
+	float3 windDir1 = IN.Wind1 * 1.0 * time;
+	float3 windDir2 = IN.Wind2 * 0.7 * time + windDir1 * 0.10;
+	float3 windDir3 = IN.Wind2 * 1.0 * time + windDir1 * 0.06;
+
+	const float noiseScale1 = 1.0 / 45.708;
+	const float noiseScale2 = 1.0 / 23.308;
+	const float noiseScale3 = 1.0 / 11.318;
+
+	for(int i = 0; i < MAX_FOG_STEP; i++)
+	{
+		float t = i * 1.0 / MAX_FOG_STEP;
+		float3 p = lerp(PosB, PosE, t);
+		float3 lodScale = float3(1, 2, 4) * 7.0;
+		float3 lod = (zorder + t / FOG_SLICE_NUM) * lodScale;
+
+		#define GetFogNoise(_pos, _lod)	\
+			lerp(tex3Dlod(VolumeSmp, float4(_pos, _lod)).r, 0.25, saturate(_lod/7.0))
+
+		float val1 = GetFogNoise(p * noiseScale1 + windDir1, lod.x);
+		float val2 = GetFogNoise(p * noiseScale2 + windDir2, lod.y);
+		float val3 = GetFogNoise(p * noiseScale3 + windDir3, lod.z);
+		float val = val1 + val2 * val3 * 2.0;
+		// val = (val1 + val3) * val2 * 3.0 / 2.0; << うろこ雲みたいになる
+
+		val = lerp(val * val, AvgFogDensity, mFogNoiseAmplitude);
+		fogDensity += val * HeightFogDensity(p.y, heightScale, heightMin);
+	}
+
+	fogDensity = fogDensity / MAX_FOG_STEP;
+
+#else
+	fogDensity = CalcHeightFogDensity(PosB, PosE, heightScale, heightMin);
+	fogDensity *= AvgFogDensity;
+#endif
+
+	fogDensity *= densityScale;
+
+	float4 fogColor = tex2D(FogMapSamp, IN.Tex.xy);
+	fogColor.a += fogDensity;
+
+	return fogColor;
+}
+
+
+//-----------------------------------------------------------------------------
+// 
+VS_OUTPUT VS_BlurFog( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + 0.5 * SampStep;
+	Out.Tex.zw = SampStep;
+	return Out;
+}
+
+float4 PS_BlurFog( float4 Tex: TEXCOORD0,
+	uniform sampler smp,
+	uniform bool isHorizontal
+	) : COLOR
+{
+	#define FOG_BLUR_STEP	7	// 3 or 7
+	float2 texCoord = Tex.xy;
+
+	float4 offset = (isHorizontal ? float4(1, 0,-1, 0) : float4(0, 1, 0,-1));
+	offset *= Tex.zwzw;
+	float2 ioffset = isHorizontal ? int2(FOG_BLUR_STEP,0) : int2(0, FOG_BLUR_STEP);
+
+	// ブラー範囲が境界を超えないようにする必要がある。
+	float2 iuv = floor(Tex.xy * ViewportSize);
+	float2 iuv4 = round(iuv % view4);
+	float2 i2 = floor(iuv / view4);
+	float4 clipRect = float4(i2, i2 + 1) * view4.xyxy;
+	clipRect = (clipRect + float2(1.0,-1.0).xxyy) * SampStep.xyxy;
+	texCoord.xy = clamp(texCoord.xy, clipRect.xy, clipRect.zw);
+
+	float4 color0 = tex2D( smp, texCoord );
+	float4 Color = color0 * BlurWeight[0];
+	float weight = BlurWeight[0];
+
+	[unroll] for(int i = 1; i <= FOG_BLUR_STEP; i++)
+	{
+		float4 uv = texCoord.xyxy + offset * i;
+		float4 cp = tex2D(smp, uv.xy);
+		float4 cn = tex2D(smp, uv.zw);
+		float w = BlurWeight[i];
+		float wp = all(uv.xy == clamp(uv.xy, clipRect.xy, clipRect.zw));
+		float wn = all(uv.zw == clamp(uv.zw, clipRect.xy, clipRect.zw));
+		Color += cp * (wp * w);
+		Color += cn * (wn * w);
+		weight += (wp * w) + (wn * w);
+	}
+	Color /= weight;
+
+	return Color;
+}
+
+
+//-----------------------------------------------------------------------------
+// フォグ濃度を考慮したライトの明るさと、背景の減衰率。
+float4 AccumulateFog(float2 Tex, float FogExtinction, float FogScatter)
+{
+	float depth = GetNormalDepthRaw(Tex.xy).depth;
+
+	float maxDepth = MAX_FOG_DISTANCE;
+	float slotLength = maxDepth / (FOG_SLICE_NUM + 1.0);
+	float l = slotLength * MMDUNIT_TO_METER;
+	float iDepth = depth / slotLength - 1.0;
+
+	float2 iuv4 = Tex.xy / FOG_SLICE_SQRT;
+	iuv4 = clamp(iuv4, SampStep, (view4 - 1.0) * SampStep);
+
+	#define GetFogDensity(ix, iy)	\
+		tex2D(FullWorkSamp, iuv4 + float2(ix,iy) * view4 * SampStep)
+
+	float4 fog = float4(0,0,0, 1);
+
+	for(int y = 0; y < FOG_SLICE_SQRT; y++) {
+		for(int x = 0; x < FOG_SLICE_SQRT; x++) {
+			int index = y * FOG_SLICE_SQRT + x;
+			float4 nextValue = GetFogDensity(x, y);
+			float Ss = nextValue.a * l;
+			float extinction = saturate(exp(-Ss));
+			float inscatter = (1 - extinction);
+			float outscatter = fog.a * saturate((1 - extinction) / max(Ss, 1e-4));
+			float4 current = fog;
+			current.rgb += nextValue.rgb * (inscatter * outscatter);
+			current.a *= extinction;
+			fog = lerp(fog, current, saturate(iDepth - index));
+		}
+	}
+
+	fog.rgb *= FogScatter;
+	fog.w = lerp(fog.w, 1, FogExtinction);
+
+	return fog;
+}
+
+
+//-----------------------------------------------------------------------------
+// フォグの合成
+VS_OUTPUT VS_DrawFog( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset;
+	Out.Tex.z = CalcFogExtinctionIntensity();
+	Out.Tex.w = CalcFogScatterIntensity();
+
+	return Out;
+}
+
+float4 PS_DrawFog(float4 Tex: TEXCOORD0) : COLOR
+{
+	float3 baseColor = ColorCorrectFromInput(tex2D(ScnSamp, Tex.xy).rgb);
+	float4 fog = AccumulateFog(Tex.xy, Tex.z, Tex.w);
+
+	float3 col = baseColor * fog.a + fog.rgb;
+	col = ColorCorrectToOutput(col);
+
+	return float4(col, 1);
+}
+
+#endif

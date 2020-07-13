@@ -1,0 +1,55 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パーティクル用の設定ファイル
+//
+// これだけ変更しても変更が反映されない場合は、
+// ikLineParticle.fx に適当な改行入れる→戻す→保存とするか、
+// MMEで"全て更新"を選択すれば反映されます。
+
+
+#define UNIT_COUNT	1	// 何回描画するか。PARTICLE_NUM x UNIT_COUNT が最大粒子数になる
+
+#define TEX_FileName  "particle.png"	// 粒子に貼り付けるテクスチャファイル名
+#define TEX_PARTICLE_XNUM	1	// 粒子テクスチャのx方向粒子数
+#define TEX_PARTICLE_YNUM	1	// 粒子テクスチャのy方向粒子数
+
+// Zバッファの書き換え 0:しない, 1:する (テクスチャにα透過がある場合は0にする)
+#define TEX_ZBuffWrite	0
+
+
+//#define BASE_COLOR	float4(1,1,1,1)	// パーティクル全体の色
+#define BASE_COLOR	float4(1,0.8,0.3,1)	// パーティクル全体の色
+
+#define USE_PALLET	0		// パーティクルの色にパレットを使用する
+#define PALLET_FileName "pallet.png"	// 粒子の色を指定するファイル
+#define PALLET_TEX_SIZE 64		// パレットの横幅
+
+#define ADD_MODE	1		// 加算半透明を有効にするか
+
+
+// パーティクルの動きに関する設定
+float ParticleSize = 0.1;		// 粒子大きさ
+float ParticleSpeedMin = 10.0;		// 粒子初速度最小値
+float ParticleSpeedMax = 30.0;		// 粒子初速度最大値
+
+float ParticleLife = 2.0;		// 粒子の寿命(秒)
+float ParticleDecrement = 0.9;		// 粒子が消失を開始する時間(0.0～1.0:ParticleLifeとの比)
+float ParticleOccur = 1.0;		// 粒子発生度(大きくすると粒子が出やすくなる)
+float DiffusionAngle = 10.0;		// 発射拡散角(0.0～180.0)
+// float FloorHeight = 0.0;		// これより下にいったら強制反射
+// 物理パラメータ設定
+float3 GravFactor = {0.0, -20.0, 0.0};	// 重力定数
+
+// 当たり判定
+float BounceFactor = 0.5;		// 衝突時の跳ね返り率。0～1
+float FrictionFactor = 0.98;		// 衝突時の減速率。1で減速しない。
+float IgnoreDpethOffset = 10.0;		// 表面よりこれ以上h背後のパーティクルは衝突を無視する
+#define BOUNCE_CHECK_DIV	4	// 当たり判定の回数。大きい値ほど細かくチェックする
+
+// 編集中もパーティクルを動かすか
+#define	TimeSync	1
+
+
+// .xファイル内のポリゴン分割数と一致している必要がある
+#define TAIL_DIV	8	// 1ラインの分割数
+#define PARTICLE_NUM	512	// 1回に描画できるパーティクル数
+

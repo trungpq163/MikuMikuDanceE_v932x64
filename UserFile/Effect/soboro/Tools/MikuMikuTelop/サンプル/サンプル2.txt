@@ -1,0 +1,30 @@
+
+//‘®İ’è‚Ä‚ñ‚±‚à‚è
+
+:font ‚l‚r –¾’©
+:size 20
+:fontcolor 255,200,230
+:bold
+:italic
+:underline
+:pos 0, 50
+:align_center
+:valign_top
+:edge 12
+:edgecolor 0,30,80
+:edge_round
+:fade 1
+:autotime 0.5
+:margin 25,25
+:backcolor 100,255,0,30
+
+
+@0
+‚È‚É‚±‚ê‚­‚Ç‚¢
+
+:size 10
+:italic_off
+:underline_off
+
+@5
+‘®‚Íš–‹‚²‚Æ‚É•Ï‚¦‚ç‚ê‚Ü‚·

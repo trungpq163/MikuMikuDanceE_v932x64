@@ -1,0 +1,90 @@
+// シャドウマップ用の処理
+
+
+#define SCREENSPACE_FX_OBJECT  "Shadows/Shadow.fxsub"
+#define LIGHTSPACE_FX_OBJECT  "Shadows/LightDepth.fxsub"
+
+
+#if defined(ENABLE_HARD_SHADOW) && ENABLE_HARD_SHADOW > 0
+#define NUM_SHADOW_BLUR		4
+#define SHADOW_WEIGHT		2
+#else
+#define NUM_SHADOW_BLUR		8
+#define SHADOW_WEIGHT		1
+#endif
+
+
+// 画面座標系での奥行きと陰影を出力
+texture ShadowMapRT : OFFSCREENRENDERTARGET <
+	string Description = "Shadow Rendering for ikPolishShader";
+	float2 ViewPortRatio = {WORKSPACE_SCALE, WORKSPACE_SCALE};
+	string Format = "A16B16G16R16F";
+	float4 ClearColor = { 1, 0, 0, 0 };
+	float ClearDepth = 1.0;
+	int MipLevels = 1;
+	string DefaultEffect = 
+		"self = hide;"
+		"*.pmd = " SCREENSPACE_FX_OBJECT ";"
+		"*.pmx = " SCREENSPACE_FX_OBJECT ";"
+		"*.x =   " SCREENSPACE_FX_OBJECT ";"
+		"* = hide;" ;
+>;
+
+sampler ShadowSamp = sampler_state {
+	texture = <ShadowMapRT>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+// ライト座標系での奥行きを出力
+shared texture LightMapRT : OFFSCREENRENDERTARGET <
+	string Description = "Lightspace Depth for ikPolishShader";
+	int Width = SHADOW_TEX_SIZE;
+	int Height = SHADOW_TEX_SIZE;
+	string Format = "R32F";
+	float4 ClearColor = { 1, 1, 0, 0 };
+	float ClearDepth = 1.0;
+	int MipLevels = 1;
+	string DefaultEffect = 
+		"self = hide;"
+		"*.pmd = " LIGHTSPACE_FX_OBJECT ";"
+		"*.pmx = " LIGHTSPACE_FX_OBJECT ";"
+		"*.x =   " LIGHTSPACE_FX_OBJECT ";"
+		"* = hide;" ;
+>;
+
+
+// 各ピクセルの重みを計算
+inline float CalcShadowBlurWeight(float d0, float d1, float depthRate)
+{
+	// 距離の差が近いほどボカす。カメラから遠いほどボカす。
+	float dd = (d0 - d1) * 100.0 * depthRate;
+	return exp(-dd*dd);
+}
+
+
+// シャドウマップをボカしてノイズを減少させる
+float4 PS_BlurShadow( float4 Tex : TEXCOORD0, uniform sampler2D smp, uniform bool bBlurX, uniform bool bFirst) : COLOR
+{
+	float2 texCoord = Tex.xy;
+	float2 offset = (bBlurX) ? float2(SampStep.x, 0) : float2(0, SampStep.y);
+
+	float3 center = tex2D(smp, texCoord).xyz;
+	float centerDepth = center.z;
+	float depthRate = 1.0 / max(centerDepth, 1.0);
+
+	float3 sum = float3(center.xy, 1) * BlurWeight[0];
+
+	[unroll] for(int i = 1; i < NUM_SHADOW_BLUR; i++)
+	{
+		float3 shadowDepthP = tex2D(smp, texCoord + offset * i).xyz;
+		float3 shadowDepthN = tex2D(smp, texCoord - offset * i).xyz;
+		float wp = CalcShadowBlurWeight(shadowDepthP.z, centerDepth, depthRate);
+		float wn = CalcShadowBlurWeight(shadowDepthN.z, centerDepth, depthRate);
+		float w = BlurWeight[i * SHADOW_WEIGHT];
+		sum += float3(shadowDepthP.xy * wp + shadowDepthN.xy * wn, wp + wn) * w;
+	}
+
+	return float4(sum.xy / sum.z, centerDepth, 1);
+}
+

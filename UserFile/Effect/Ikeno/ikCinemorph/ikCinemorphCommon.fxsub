@@ -1,0 +1,409 @@
+//パラメータ
+
+// ライトの強度
+float GlowAmplitude0 : CONTROLOBJECT < string name = "(self)"; string item = "Si"; >;
+float EffectAmplitude : CONTROLOBJECT < string name = "(self)"; string item = "Tr"; >;
+
+static float GlowAmplitude = GlowAmplitude0 * 0.1;
+
+float3 rot : CONTROLOBJECT < string name = "(self)"; string item = "Rxyz"; >;
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// ぼかし処理の重み係数：
+float WT[] = {
+	0.0920246,
+	0.0902024,
+	0.0849494,
+	0.0768654,
+	0.0668236,
+	0.0558158,
+	0.0447932,
+	0.0345379,
+};
+
+
+#define	PI	(3.14159265359)
+
+float Script : STANDARDSGLOBAL <
+	string ScriptOutput = "color";
+	string ScriptClass = "scene";
+	string ScriptOrder = "postprocess";
+> = 0.8;
+
+// スクリーンサイズ
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+static float2 ViewportOffset = (float2(0.5,0.5)/ViewportSize.xy);
+static float2 SampStep = (float2(1, 1) / ViewportSize.xx);
+
+static float StretchSampStep = max(StretchSampStep0 * X_SCALE * 0.5 * (rot.y * (180 / PI * 0.1) + 1.0), 0.0);
+
+
+sampler DefSampler : register(s0);
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+
+// レンダリングターゲットのクリア値
+float4 ClearColor = {0,0,0,1};
+float ClearDepth  = 1.0;
+
+
+//-----------------------------------------------------------------------------
+
+texture GlowMapRT : OFFSCREENRENDERTARGET <
+    string Description = "OffScreen RenderTarget for ikSunshaft";
+    float2 ViewPortRatio = {1, 1};
+    float4 ClearColor = { 0, 0, 0, 0 };
+	string Format = "A16B16G16R16F";
+    float ClearDepth = 1.0;
+	int MipLevels = 1;
+	bool AntiAlias = false;
+    string DefaultEffect = 
+        "self = hide;"
+		"* = ./Diffuse/DiffuseObject.fx;";
+>;
+
+sampler GlowSamp = sampler_state {
+    texture = <GlowMapRT>;
+    Filter = LINEAR;
+	AddressU = BORDER; AddressV = BORDER; BorderColor = float4(0,0,0,0);
+};
+
+// オリジナルの描画結果を記録するためのレンダーターゲット
+texture2D ScnMap : RENDERCOLORTARGET <
+	int MipLevels = 1;
+	string Format = SCREEN_TEXFORMAT;
+>;
+sampler2D ScnSamp = sampler_state {
+	texture = <ScnMap>;
+	MinFilter = LINEAR;
+	MagFilter = LINEAR;
+	MipFilter = LINEAR;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+
+texture2D DepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+>;
+
+
+#define DECL_TEXTURE( _map, _samp, _size) \
+	texture2D _map : RENDERCOLORTARGET < \
+		bool AntiAlias = false; \
+		int MipLevels = 1; \
+		float2 ViewportRatio = {1.0/(_size), 1.0}; \
+		string Format = TEXFORMAT; \
+	>; \
+	sampler2D _samp = sampler_state { \
+		texture = <_map>; \
+		Filter = LINEAR; \
+		AddressU = CLAMP; AddressV = CLAMP; \
+	}; \
+
+DECL_TEXTURE( ScnMap1, ScnSamp1, 2)
+DECL_TEXTURE( ScnMap2, ScnSamp2, 2)
+
+DECL_TEXTURE( DownscaleMap2, DownscaleSamp2, 4)
+DECL_TEXTURE( DownscaleMap3, DownscaleSamp3, 8)
+DECL_TEXTURE( DownscaleMap4, DownscaleSamp4, 8)
+
+
+
+//-----------------------------------------------------------------------------
+// ガンマ補正
+const float gamma = 2.2333;
+const float epsilon = 1.0e-6;
+inline float3 Degamma(float3 col) { return pow(max(col,epsilon), gamma); }
+inline float3 Gamma(float3 col) { return pow(max(col,epsilon), 1.0/gamma); }
+inline float4 Degamma4(float4 col) { return float4(Degamma(col.rgb), col.a); }
+inline float4 Gamma4(float4 col) { return float4(Gamma(col.rgb), col.a); }
+inline float rgb2gray(float3 rgb)
+{
+	return dot(float3(0.299, 0.587, 0.114), max(rgb,0));
+}
+
+inline float3 ColorEmphasize(float3 src)
+{
+	const float e = 1.0e-4;
+	float3 col = pow(src, COLOR_EMPHASIZE_RATE);
+	float gray = saturate(rgb2gray(src));
+	float gray0 = rgb2gray(col);
+	float scale = gray / max(gray0, e);
+
+	col = col * scale;
+	return col;
+}
+
+// 白とび表現関数
+float3 OverExposure(float3 color)
+{
+    float3 newcolor = color;
+
+#if 0
+	// AutoLuminousオリジナル
+
+    //ある色が1を超えると、他の色にあふれる
+    newcolor.gb += max(color.r - 1, 0) * OverExposureRatio * float2(0.65, 0.6);
+    newcolor.rb += max(color.g - 1, 0) * OverExposureRatio * float2(0.5, 0.6);
+    newcolor.rg += max(color.b - 1, 0) * OverExposureRatio * float2(0.5, 0.6);
+#else
+	// return color + rgb2gray(color) * 0.06 * OverExposureRatio;
+
+	newcolor = color + 
+		color.r * (float3(0.0, 0.299/0.587, 0.299/0.114) * 0.06 * OverExposureRatio) + 
+		color.g * (float3(0.587/0.299, 0.0, 0.587/0.114) * 0.06 * OverExposureRatio) + 
+		color.b * (float3(0.114/0.299, 0.114/0.587, 0.0) * 0.06 * OverExposureRatio);
+#endif
+
+    return newcolor;
+}
+
+
+//-----------------------------------------------------------------------------
+// 固定定義
+//
+//-----------------------------------------------------------------------------
+struct VS_OUTPUT {
+	float4 Pos			: POSITION;
+	float4 TexCoord		: TEXCOORD0;
+};
+
+
+//-----------------------------------------------------------------------------
+// 共通のVS
+VS_OUTPUT VS_SetTexCoord( float4 Pos : POSITION, float4 Tex : TEXCOORD0, uniform float level) {
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.TexCoord.xy = Tex.xy + ViewportOffset.xy * float2(level, 1);
+	Out.TexCoord.zw = SampStep.xy * float2(level, 1);
+
+	return Out;
+}
+
+
+//-----------------------------------------------------------------------------
+// 適当な位置に散らす
+float4 PS_Scatter( float4 Tex: TEXCOORD0 ) : COLOR
+{
+	float4 color = tex2D( GlowSamp, Tex.xy );
+	float3 col1 = 0;
+
+	float cx = (Tex.x * 2.0 - 1.0);
+	float cy = (Tex.y * 2.0 - 1.0);
+	float y = cy * 1.00 * 0.5 + 0.5;
+	[unroll] for(int i = 0; i < SampleNum; i++)
+	{
+		float a = sampleCoeffs[i].x;
+		float b = sampleCoeffs[i].y;
+		float x = pow(cx * b, a) * sign(cx * b);
+		col1 += tex2D( GlowSamp, float2(x * 0.5 + 0.5, y)).rgb;
+	}
+
+	color.rgb += col1 * 0.75;
+	#if defined(ENABLE_COLOR_EMPHASIZE) && ENABLE_COLOR_EMPHASIZE > 0
+	color.rgb = ColorEmphasize(color.rgb);
+	#endif
+
+	return color;
+}
+
+//-----------------------------------------------------------------------------
+// 線を細くする
+float4 PS_Squeeze( float4 Tex: TEXCOORD0, uniform sampler2D smp, uniform bool isXBlur) : COLOR
+{
+	float2 offset = (isXBlur) ? float2(Tex.z, 0) : float2(0, Tex.w);
+
+	float3 col0 = tex2D( smp, Tex.xy).rgb;
+	float3 col = col0 * WT[0];
+
+	[unroll] for(int i = 1; i < 8; i ++) {
+		float4 fp = tex2D( smp, Tex.xy + offset * i);
+		float4 fn = tex2D( smp, Tex.xy - offset * i);
+		col += (fp.rgb + fn.rgb) * WT[i];
+	}
+
+// 細くしないほうがよい？
+//	col = col0 * (rgb2gray(col) < rgb2gray(col0) * 0.8) + col * 0.3;
+//	col = min(col0,col);
+
+	return float4(col, 1);
+}
+
+// 縮小
+float4 PS_Downscale( float4 Tex: TEXCOORD0, uniform sampler2D smp) : COLOR
+{
+	float2 offset = float2(Tex.z, 0);
+	float3 color = tex2D( smp, Tex.xy).rgb;
+	color = max(color, tex2D( smp, Tex.xy + offset).rgb * 0.8);
+	color = max(color, tex2D( smp, Tex.xy - offset).rgb * 0.8);
+	return float4(color, 1);
+}
+
+
+// 引き伸ばし
+float4 PS_Stretch( float4 Tex: TEXCOORD0, uniform sampler2D smp) : COLOR
+{
+	float2 offset = float2(StretchSampStep * 8.0, 0);
+	float3 color = tex2D( smp, Tex.xy).rgb;
+
+	[unroll] for(int i = 1; i < 8; i ++) {
+		float w = i * (-1.0 / 8.0) + 1.0;
+		color = max(color, tex2D( smp, Tex.xy + offset * i).rgb * w);
+		color = max(color, tex2D( smp, Tex.xy - offset * i).rgb * w);
+	}
+
+	return float4(color, 1);
+}
+
+// 引き伸ばし2
+float4 PS_Stretch2( float4 Tex: TEXCOORD0, uniform sampler2D smp) : COLOR
+{
+	float2 offset = float2(StretchSampStep, 0);
+	float3 color = tex2D( smp, Tex.xy).rgb;
+
+	[unroll] for(int i = 1; i < 8; i ++) {
+		color = max(color, tex2D( smp, Tex.xy + offset * i).rgb);
+		color = max(color, tex2D( smp, Tex.xy - offset * i).rgb);
+	}
+
+	return float4(color, 1);
+}
+
+
+//-----------------------------------------------------------------------------
+// Blur
+float4 PS_BoxBlur( float4 Tex: TEXCOORD0, uniform sampler2D smp, uniform bool isXBlur) : COLOR
+{
+	float2 offset = (isXBlur) ? float2(Tex.z, 0) : float2(0, Tex.w);
+
+	float2 Tex2 = Tex.xy;
+	if (!isXBlur) Tex2.x = (Tex2.x - 0.5) * X_SCALE + 0.5;
+
+	float3 col = tex2D( smp, Tex2.xy).rgb * WT[0];
+
+	[unroll] for(int i = 1; i < 8; i ++) {
+		float4 colp = tex2D( smp, Tex2.xy + offset * i);
+		float4 coln = tex2D( smp, Tex2.xy - offset * i);
+		col += (colp.rgb + coln.rgb) * WT[i];
+	}
+
+	if (!isXBlur) col += tex2D(DownscaleSamp4, Tex2.xy).rgb;
+
+	return float4(col, 1);
+}
+
+
+//-----------------------------------------------------------------------------
+// 最後に元画面と計算結果を合成する
+float4 PS_Last( float4 Tex : TEXCOORD0 ) : COLOR
+{
+	float4 color = (tex2D( ScnSamp, Tex ));
+	float3 baseColor = color.rgb;
+
+	float3 glow = tex2D( ScnSamp1, Tex.xy).rgb * CoatingColor1 * GlowAmplitude;
+	#if ENABLE_SYMMETRY > 0
+	glow += tex2D( ScnSamp1, 1 - Tex.xy).rgb * CoatingColor2 * GlowAmplitude;
+	#endif
+
+	// 明るい部分を白くする
+	color.rgb += OverExposure(glow);
+
+	// エフェクト適用度を戻す
+	color.rgb = lerp(baseColor.rgb, color.rgb, saturate(EffectAmplitude));
+
+	color.a = 1;
+	return (color);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+technique Gaussian <
+	string Script = 
+		"RenderColorTarget0=ScnMap;"
+		"RenderDepthStencilTarget=DepthBuffer;"
+		"ClearSetColor=ClearColor;"
+		"ClearSetDepth=ClearDepth;"
+		"Clear=Color;"
+		"Clear=Depth;"
+		"ScriptExternal=Color;"
+
+		"RenderColorTarget0=ScnMap1; Pass=Scatter;"
+		"RenderColorTarget0=ScnMap2; Pass=Squeeze;"
+		"RenderColorTarget0=DownscaleMap2; Pass=Downscale2;"
+		"RenderColorTarget0=DownscaleMap3; Pass=Downscale3;"
+		"RenderColorTarget0=DownscaleMap4; Pass=Stretch2;"
+		"RenderColorTarget0=DownscaleMap3; Pass=Stretch3;"
+		"RenderColorTarget0=DownscaleMap4; Pass=Gaussian_X8;"
+
+		"RenderColorTarget0=ScnMap2; Pass=Gaussian_Y;"
+		"RenderColorTarget0=ScnMap1; Pass=Gaussian_X;"
+
+		"RenderColorTarget0=;"
+		"RenderDepthStencilTarget=;"
+		"Pass=LastPass;"
+	;
+> {
+
+	pass Scatter < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(1);
+		PixelShader  = compile ps_3_0 PS_Scatter();
+	}
+
+	pass Squeeze < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(2);
+		PixelShader  = compile ps_3_0 PS_Squeeze(ScnSamp1, false);
+	}
+
+	pass Downscale2 < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(2);
+		PixelShader  = compile ps_3_0 PS_Downscale(ScnSamp2);
+	}
+	pass Downscale3 < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(4);
+		PixelShader  = compile ps_3_0 PS_Downscale(DownscaleSamp2);
+	}
+	pass Stretch2 < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(8);
+		PixelShader  = compile ps_3_0 PS_Stretch(DownscaleSamp3);
+	}
+	pass Stretch3 < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(8);
+		PixelShader  = compile ps_3_0 PS_Stretch2(DownscaleSamp4);
+	}
+	pass Gaussian_X8 < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(8);
+		PixelShader  = compile ps_3_0 PS_BoxBlur(DownscaleSamp3, true);
+	}
+
+	pass Gaussian_Y < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(2);
+		PixelShader  = compile ps_3_0 PS_BoxBlur(GlowSamp, false);
+	}
+	pass Gaussian_X < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(2);
+		PixelShader  = compile ps_3_0 PS_BoxBlur(ScnSamp2, true);
+	}
+
+	pass LastPass < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE; AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord(1);
+		PixelShader  = compile ps_3_0 PS_Last();
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////

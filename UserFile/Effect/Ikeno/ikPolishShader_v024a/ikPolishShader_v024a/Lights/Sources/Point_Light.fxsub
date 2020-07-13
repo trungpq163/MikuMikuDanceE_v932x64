@@ -1,0 +1,201 @@
+//-----------------------------------------------------------------------------
+//
+//
+//-----------------------------------------------------------------------------
+
+
+//-----------------------------------------------------------------------------
+
+#define CTRL_NAME	"(self)"
+
+#if !defined(EnableLighTexture)
+#define	EnableLighTexture	0
+#define	TextureSize			256
+#endif
+
+#include "../ikPolishShader.fxsub"
+#include "../Sources/constants.fxsub"
+#include "./Sources/light.fxsub"
+#include "./Sources/fog.fxsub"
+#include "./Sources/omni_common.fxsub"
+
+static float LightSize = 0.1;
+
+#define SHADOW_FX_FILE	"./Sources/omni_shadow.fx"
+#define	SHADOW_RT_DESCRIPTION	"shadowmap for point light"
+
+//-----------------------------------------------------------------------------
+
+#include "../Sources/structs.fxsub"
+#include "../Sources/colorutil.fxsub"
+#include "../Sources/gbuffer.fxsub"
+#include "../Sources/lighting.fxsub"
+#include "../Sources/octahedron.fxsub"
+
+#include "./Sources/omni_light.fxsub"
+
+//-----------------------------------------------------------------------------
+//
+VS_OUTPUT VS_SetTexCoord( float4 Pos : POSITION, float4 Tex : TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.TexCoord.xy = Tex.xy + ViewportOffset.xy;
+	Out.TexCoord.w = LightRadius + LightSize;
+	return Out;
+}
+
+
+PS_OUT_MRT PS_DrawLight( float4 Tex: TEXCOORD0, uniform bool useShadow )
+{
+	float4 albedo = tex2D(ColorMap, Tex.xy);
+	MaterialParam material = GetMaterial(Tex.xy, albedo);
+	GeometryInfo geom = GetWND(Tex.xy);
+	float3 wpos = geom.wpos;
+	float depth = geom.nd.depth;
+	float range = Tex.w;
+
+	float3 V = normalize(CameraPosition - wpos);
+	float3 N = normalize(geom.nd.normal);
+	float3 lv = LightPosition - wpos;
+	float3 L = normalize(lv);
+
+	float shadow = CalcLightFalloff(wpos, LightPosition, range);
+	clip(shadow - 1e-4);
+	if (useShadow) shadow *= CalcShadow(float4(wpos,1), dot(N, L), Tex);
+
+	//-----------------------------------------------------
+	// デフューズ
+	float3 diffuse = saturate(dot(N, L));
+	diffuse *= LightColor * shadow;
+
+	//-----------------------------------------------------
+	// スペキュラ
+	float3 specular = CalcSpecular(L, N, V, material.roughness, material.f0);
+	specular *= LightColor * shadow;
+
+	PS_OUT_MRT Out;
+	Out.Diffuse = float4(diffuse, 1);
+	Out.Specular = float4(specular, 1);
+
+	return Out;
+}
+
+//-----------------------------------------------------------------------------
+//
+#if FOG_TYPE == 2 && VOLUMETRIC_FOG > 0
+
+VS_OUTPUT_FOG VS_DrawVolumeLight( float4 Pos : POSITION, float4 Tex : TEXCOORD0)
+{
+	VS_OUTPUT_FOG Out = (VS_OUTPUT_FOG)0; 
+
+	Out.Pos = Pos;
+	Out.TexCoord.xy = Tex.xy + ViewportOffset.xy;
+//	Out.TexCoord.z = 0;
+	Out.TexCoord.w = LightRadius + LightSize;
+
+	Out.PhaseCoef.xyz = CalcNormalizedMieCoef();
+	Out.PhaseCoef.w = mFogIntensity;
+
+	return Out;
+}
+
+
+float4 PS_DrawVolumeLight( float4 Tex: TEXCOORD0, float4 PhaseCoef: TEXCOORD2) : COLOR
+{
+	float3 fogTexCoord = CalcFogInterleavedTexCoord(Tex.xy);
+	float2 uv = fogTexCoord.xy;
+	float zorder = fogTexCoord.z;
+	float3 V = GetViewDirection(uv);
+	float maxDepth = MAX_FOG_DISTANCE;
+	float startDepth = zorder * maxDepth;
+	float slotLength = maxDepth / (FOG_SLICE_NUM + 1.0);
+
+	float range = Tex.w;
+
+	// 明らかに離れている場合は即座に終了する
+	float3 lv = LightPosition - CameraPosition;
+	float nearest = clamp(dot(V, lv), startDepth, startDepth + slotLength);
+	float3 PosC = CameraPosition + V * nearest;
+	float lightMax = CalcLightFalloff(PosC, LightPosition, range);
+	clip(lightMax - 1e-4);
+
+	float3 PosB = CameraPosition + V * startDepth;
+	float3 PosE = PosB + V * slotLength;
+
+	float sum = 0;
+	for(int i = 0; i < MAX_FOG_STEP; i++)
+	{
+		float t = i * 1.0 / MAX_FOG_STEP;
+		float3 wpos = lerp(PosB, PosE, t);
+		float3 L = normalize(LightPosition - wpos);
+
+		float light = CalcShadowSimple(float4(wpos,1));
+		light *= CalcLightFalloff(wpos, LightPosition, range);
+		light *= GetFogPhase(V, L, PhaseCoef.xyz);
+		sum += light;
+	}
+
+	sum.x *= PhaseCoef.w / MAX_FOG_STEP;
+	float3 col = sum * LightColor;
+
+	return float4(col, 0.0);
+}
+#endif
+
+
+//-----------------------------------------------------------------------------
+// 
+
+#if EnableShadowMap > 0
+// ポイントライトのシャドウマップは、オクタヘドロンを生成する必要がある。
+#define OBJECT_TEC(name, mmdpass) \
+	technique name < string MMDPass = mmdpass; \
+		string Script =  \
+			"RenderDepthStencilTarget=DepthBuffer;" \
+			"RenderColorTarget0=ShadowMap; Pass=ConstructShadow;" \
+			"RenderDepthStencilTarget=;" \
+			FOG_SCRIPT \
+			"RenderColorTarget1=PPPSpecularMapRT;" \
+			"RenderColorTarget0=; Pass=DrawLight;" \
+			"RenderColorTarget1=;"; \
+	> { \
+		pass ConstructShadow < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			VertexShader = compile vs_3_0 VS_ConstructShadow(); \
+			PixelShader  = compile ps_3_0 PS_ConstructShadow(); \
+		} \
+		FOG_PASS \
+		pass DrawLight < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			SrcBlend = ONE; DestBlend = ONE; \
+			VertexShader = compile vs_3_0 VS_SetTexCoord(); \
+			PixelShader  = compile ps_3_0 PS_DrawLight(true); \
+		} \
+	}
+#else
+#define OBJECT_TEC(name, mmdpass) \
+	technique name < string MMDPass = mmdpass; \
+		string Script =  \
+			FOG_SCRIPT \
+			"RenderColorTarget1=PPPSpecularMapRT;" \
+			"RenderColorTarget0=; Pass=DrawLight;" \
+			"RenderColorTarget1=;"; \
+	> { \
+		FOG_PASS \
+		pass DrawLight < string Script= "Draw=Buffer;"; > { \
+			ZEnable = false;	ZWriteEnable = false; \
+			SrcBlend = ONE; DestBlend = ONE; \
+			VertexShader = compile vs_3_0 VS_SetTexCoord(); \
+			PixelShader  = compile ps_3_0 PS_DrawLight(false); \
+		} \
+	}
+#endif
+
+
+OBJECT_TEC(MainTec0, "object")
+OBJECT_TEC(MainTecBS0, "object_ss")
+
+//-----------------------------------------------------------------------------
+

@@ -1,0 +1,158 @@
+#define NUMS_SAMPLES_CLOUD 8
+#define NUMS_SAMPLES_CLOUD2 8
+
+texture NoiseMap<string ResourceName = "shader/textures/cloud.tga";>; 
+sampler NoiseMapSamp = sampler_state {
+	texture = <NoiseMap>;
+	MINFILTER = LINEAR; MAGFILTER = LINEAR; MIPFILTER = NONE;
+	ADDRESSU = WRAP; ADDRESSV = WRAP;
+};
+
+float ComputeRayPlaneIntersection(float3 position, float3 viewdir, float3 n, float dist)
+{
+	float a = dot(n, viewdir);
+	if (a > 0.0)
+	{
+		return -1;
+	}
+	else
+	{
+		float t = -(dot(position, n) + dist) / a;
+		return t;
+	}
+}
+
+float3 ComputeDensity(ScatteringParams setting, float depth)
+{
+	return exp(-setting.cloudLambda * depth) * (1.0f - exp(-setting.cloudLambda * depth));
+}
+
+float ComputeClound(ScatteringParams setting, float3 P)
+{
+	float atmoHeight = length(P - setting.earthCenter) - setting.earthRadius;
+	float cloudHeight = saturate((atmoHeight - setting.cloudBottom) / (setting.cloudTop - setting.cloudBottom));
+
+	float3 P1 = P + setting.clouddir;
+	float3 P2 = P + setting.clouddir * 0.5;
+
+	float cloud = 0.0;
+	cloud += tex2Dlod(NoiseMapSamp, float4(P1.xz * float2(0.00009 * 2.0, 0.00009), 0, 0)).r;
+	cloud += tex2Dlod(NoiseMapSamp, float4(P2.xz * float2(0.00006 * 2.0, 0.00006), 0, 0)).r;
+	cloud += tex2Dlod(NoiseMapSamp, float4(P2.xz * float2(0.00003 * 2.0, 0.00003), 0, 0)).r;
+	cloud *= smoothstep(0.0, 0.5, cloudHeight) * smoothstep(1.0, 0.5, cloudHeight);
+	cloud *= setting.cloud;
+
+	return cloud;
+}
+
+float HitCloudsTest(ScatteringParams setting, float3 eye, float3 V, float3 L)
+{
+	float2 cloudsOuterIntersections = ComputeRaySphereIntersection(eye, V, setting.earthCenter, setting.earthRadius + setting.cloudTop);
+	float2 cloudsInnerIntersections = ComputeRaySphereIntersection(eye, V, setting.earthCenter, setting.earthRadius + setting.cloudBottom);
+
+	if (cloudsInnerIntersections.y > 0)
+		cloudsOuterIntersections.x = cloudsInnerIntersections.y;
+
+	float3 cloudsStart = eye + V * max(0, cloudsOuterIntersections.x);
+	float3 cloudsEnd = eye + V * cloudsOuterIntersections.y;
+
+	return exp(-0.002 * ComputeClound(setting, cloudsStart));
+}
+
+float ComputeCloudInsctrIntegral(ScatteringParams setting, float3 start, float3 end)
+{
+	float3 sampleStep = (end - start) / float(NUMS_SAMPLES_CLOUD2);
+	float3 samplePos = start + sampleStep;
+
+	float thickness = 0;
+
+	for (int j = 0; j < NUMS_SAMPLES_CLOUD2; ++j, samplePos += sampleStep) 
+	{
+		float stepDepthLight = ComputeClound(setting, samplePos);
+		thickness += stepDepthLight;
+	}
+
+	return thickness * length(sampleStep);
+}
+
+void ComputeCloudsInsctrIntegral(ScatteringParams setting, float3 start, float3 end, float3 V, float3 L, inout float opticalDepth, inout float3 insctrMie)
+{
+	float3 sampleStep = (end - start) / float(NUMS_SAMPLES_CLOUD);
+	float3 samplePos = start + sampleStep;
+
+	float sampleLength = length(sampleStep);
+
+	float3 opticalDepthMie = 0.0;
+
+	for (int i = 0; i < NUMS_SAMPLES_CLOUD; ++i, samplePos += sampleStep)
+	{
+		float stepOpticalDensity = ComputeClound(setting, samplePos);
+		stepOpticalDensity *= sampleLength;
+
+		if (any(stepOpticalDensity))
+		{
+			float2 sampleCloudsIntersections = ComputeRaySphereIntersection(samplePos, L, setting.earthCenter, setting.earthRadius + setting.cloudTop);
+			float3 sampleClouds = samplePos + L * sampleCloudsIntersections.y;
+
+			float stepOpticalLight = ComputeCloudInsctrIntegral(setting, samplePos, sampleClouds);
+
+			opticalDepth += stepOpticalDensity;
+			opticalDepthMie += stepOpticalDensity * ComputeDensity(setting, stepOpticalDensity);
+		}
+	}
+
+	insctrMie = opticalDepthMie;
+}
+
+float4 ComputeCloudsInscattering(ScatteringParams setting, float3 eye, float3 V, float3 L)
+{
+	float3 insctrMie = 0.0;
+	float3 insctrRayleigh = 0.0;
+	float3 insctrOpticalLength = 1.0;
+	bool intersectionTest = ComputeSkyboxChapman(setting, eye, V, L, insctrOpticalLength, insctrMie, insctrRayleigh);
+
+	float phaseTheta = dot(V, -L);
+	float phaseMie = ComputePhaseMie(phaseTheta, setting.mieG);
+	float phaseRayleigh = ComputePhaseRayleigh(phaseTheta);
+	float phaseNight = 1.0 - saturate(insctrOpticalLength.x * EPSILON);
+
+	float3 insctrTotalMie = insctrMie * phaseMie;
+	float3 insctrTotalRayleigh = insctrRayleigh * phaseRayleigh;
+
+	float3 sky = (insctrTotalMie + insctrTotalRayleigh) * setting.sunRadiance;
+
+#if ATM_LIMADARKENING_ENABLE
+	float angle = saturate((1 - phaseTheta) * sqrt(abs(L.y)) * setting.sunRadius);
+	float cosAngle = cos(angle * PI * 0.5);
+
+	float3 limaDarkening = GetTransmittance(setting, -L, V);
+	limaDarkening *= pow(cosAngle, float3(0.420, 0.503, 0.652)) * (1.0 - ((angle >= 0.9) ? smoothstep(0.9, 1.0, angle) : 0.0)) * intersectionTest;
+
+	sky += limaDarkening;
+#endif
+
+#if ATM_CLOUD_ENABLE
+	if (intersectionTest)
+	{
+		float2 cloudsOuterIntersections = ComputeRayPlaneIntersection(eye, V, float3(0,-1,0), setting.cloudTop);
+		float2 cloudsInnerIntersections = ComputeRayPlaneIntersection(eye, V, float3(0,-1,0), setting.cloudBottom);
+
+		if (cloudsInnerIntersections.y > 0)
+			cloudsOuterIntersections.x = cloudsInnerIntersections.y;
+
+		float3 cloudsStart = eye + V * max(0, cloudsOuterIntersections.x);
+		float3 cloudsEnd = eye + V * cloudsOuterIntersections.y;
+
+		float3 cloudsMie = 0.0;
+		float cloudsOpticalLength = 0.0;
+		ComputeCloudsInsctrIntegral(setting, cloudsStart, cloudsEnd, V, -L, cloudsOpticalLength, cloudsMie);
+
+		float3 cloud = cloudsMie * phaseMie * pow2(-L.y) * setting.sunRadiance;
+		float3 scattering = lerp(cloud, sky, exp(-0.000002 * cloudsOpticalLength * insctrMie));
+
+		sky = lerp(sky, scattering, V.y);
+	}
+#endif
+
+	return float4(sky, phaseNight * intersectionTest);
+}

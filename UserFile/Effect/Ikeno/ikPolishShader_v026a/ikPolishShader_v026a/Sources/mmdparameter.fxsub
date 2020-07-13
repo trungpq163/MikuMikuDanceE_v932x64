@@ -1,0 +1,40 @@
+//-----------------------------------------------------------------------------
+// MMD特有のパラメータ
+
+// スクリーンサイズ
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+static float2 ViewportOffset = (float2(0.5,0.5) / ViewportSize);
+static float2 SampStep = float2(1.0,1.0) / ViewportSize;
+
+// マテリアル色
+float4	MaterialDiffuse		: DIFFUSE  < string Object = "Geometry"; >;
+float3	MaterialAmbient		: AMBIENT  < string Object = "Geometry"; >;
+float3	MaterialEmissive	: EMISSIVE < string Object = "Geometry"; >;
+float3	MaterialSpecular	: SPECULAR < string Object = "Geometry"; >;
+float	SpecularPower		: SPECULARPOWER < string Object = "Geometry"; >;
+float3	MaterialToon		: TOONCOLOR;
+
+// アクセサリのスペキュラは1/10されているのでそれを補正する
+//#define SpecularColor	Degamma(MaterialSpecular * (LightDiffuse.r * 9 + 1))
+
+// テクスチャ材質モーフ値
+float4	TextureAddValue	: ADDINGTEXTURE;
+float4	TextureMulValue	: MULTIPLYINGTEXTURE;
+float4	SphereAddValue	: ADDINGSPHERETEXTURE;
+float4	SphereMulValue	: MULTIPLYINGSPHERETEXTURE;
+
+bool	use_texture;		// テクスチャフラグ
+bool	use_spheremap;		// スフィアフラグ
+bool	use_toon;			// トゥーンフラグ
+bool	use_subtexture;		// サブテクスチャフラグ
+
+bool	parthf;	// パースペクティブフラグ
+bool	transp;	// 半透明フラグ
+bool	opadd;		// 加算合成フラグ
+bool	spadd;	// スフィアマップ加算合成フラグ
+
+#define SKII1	1500
+#define SKII2	8000
+
+#define Toon	3
+

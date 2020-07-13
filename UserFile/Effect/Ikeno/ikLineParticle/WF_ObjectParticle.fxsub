@@ -1,0 +1,261 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// 針金P作成のWorkingFloorXを改造したもの。WetFloorから呼ばれる。
+//	WetFloor用にLineParticleの情報を出力する
+//
+//  // WF_Object.fxsub モデルを地面に対して鏡像描画
+//  // ( WorkingFloorX.fx から呼び出されます．オフスクリーン描画用)
+//  // 作成: 針金P( 舞力介入P氏のfull.fx改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// #include "ikWetFloorSettings.fxsub"
+float FrameScale = 0.8;
+// ↑このパラメータがikWetFloorSettings.fxsub内の値と一致している必要がある。
+
+#include "ikParticleSettings.fxsub"
+
+// 座標を共有する時の名前
+#define	COORD_TEX_NAME		LineParticleCoordTex
+
+
+
+float3 MirrorPos = float3( 0.0, 0.0, 0.0 );    // ローカル座標系における鏡面上の任意の座標(アクセ頂点座標の一点)
+float3 MirrorNormal = float3( 0.0, 1.0, 0.0 ); // ローカル座標系における鏡面の法線ベクトル
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 鏡面座標変換パラメータ
+float4x4 MirrorWorldMatrix: CONTROLOBJECT < string Name = "(OffscreenOwner)"; >; // 鏡面アクセのワールド変換行列
+
+// ワールド座標系における鏡像位置への変換
+static float3 WldMirrorPos = mul( float4(MirrorPos, 1.0f), MirrorWorldMatrix ).xyz;
+static float3 WldMirrorNormal = normalize( mul( MirrorNormal, (float3x3)MirrorWorldMatrix ) );
+
+// 座標の鏡像変換
+float4 TransMirrorPos( float4 Pos )
+{
+    Pos.xyz -= WldMirrorNormal * 2.0f * dot(WldMirrorNormal, Pos.xyz - WldMirrorPos);
+    return Pos;
+}
+
+float3 CameraPosition : POSITION  < string Object = "Camera"; >;
+
+// 鏡面表裏判定(座標とカメラが両方鏡面の表側にある時だけ＋)
+float IsFace( float4 Pos )
+{
+    return min( dot(Pos.xyz-WldMirrorPos, WldMirrorNormal),
+                dot(CameraPosition-WldMirrorPos, WldMirrorNormal) );
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+#define TEX_WIDTH	UNIT_COUNT  // 座標情報テクスチャピクセル幅
+#define TEX_HEIGHT	PARTICLE_NUM	// 配置・乱数情報テクスチャピクセル高さ
+#define POS_TEX_WIDTH	(TAIL_DIV * UNIT_COUNT)
+
+// 座標変換行列
+float4x4 matV               : VIEW;
+float4x4 matP               : PROJECTION;
+// float4x4 matVP           : VIEWPROJECTION;
+float4x4 CalcMatVP(float4x4 v, float4x4 p)
+{
+	p._11_22 *= FrameScale;
+	return mul(v, p);
+}
+static float4x4 matVP = CalcMatVP(matV, matP);
+
+float4x4 matVInv	: VIEWINVERSE;
+static float3x3 BillboardMatrix = {
+	normalize(matVInv[0].xyz),
+	normalize(matVInv[1].xyz),
+	normalize(matVInv[2].xyz),
+};
+
+float AcsSi  : CONTROLOBJECT < string name = "(self)"; string item = "Si"; >;
+
+float3 LightDirection : DIRECTION < string Object = "Light"; >;
+
+#if MMD_LIGHT == 1
+float3 LtColor : AMBIENT < string Object = "Light"; >;
+static float3 LightColor = saturate( (LtColor + float3(0.3f, 0.3f, 0.3f)) * 0.833f + float3(0.5f, 0.5f, 0.5f) );
+static float3 ResColor = LightColor;
+#else
+float3 LightColor = float3(1, 1, 1);
+static float3 ResColor = 1;
+#endif
+
+int RepeatCount = UNIT_COUNT;  // シェーダ内描画反復回数
+int RepeatIndex;				// 複製モデルカウンタ
+
+	texture2D ParticleTex <
+		string ResourceName = TEX_FileName;
+		int MipLevels = 1;
+	>;
+	sampler ParticleTexSamp = sampler_state {
+		texture = <ParticleTex>;
+		MinFilter = LINEAR;
+		MagFilter = LINEAR;
+		MipFilter = NONE;
+		AddressU  = CLAMP;
+		AddressV  = CLAMP;
+	};
+
+	#if(USE_SPHERE == 1)
+	texture2D ParticleSphere <
+		string ResourceName = SPHERE_FileName;
+		int MipLevels = 1;
+	>;
+	sampler ParticleSphereSamp = sampler_state {
+		texture = <ParticleSphere>;
+		MinFilter = LINEAR;
+		MagFilter = LINEAR;
+		MipFilter = NONE;
+		AddressU  = CLAMP;
+		AddressV  = CLAMP;
+	};
+	#endif
+
+texture2D ColorPallet <
+	string ResourceName = PALLET_FileName;
+>;
+sampler ColorPalletSmp = sampler_state{
+	texture = <ColorPallet>;
+	MinFilter = POINT;
+	MagFilter = POINT;
+	MipFilter = NONE;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+
+// 粒子座標記録用
+shared texture COORD_TEX_NAME : RENDERCOLORTARGET;
+sampler PosSmpCopy : register(s3) = sampler_state
+{
+   Texture = <COORD_TEX_NAME>;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+    MinFilter = NONE;
+    MagFilter = NONE;
+    MipFilter = NONE;
+};
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+// シャドウバッファのサンプラ。"register(s0)"なのはMMDがs0を使っているから
+sampler DefSampler : register(s0);
+
+struct VS_OUTPUT2
+{
+	float4 Pos	: POSITION;	// 射影変換座標
+	float2 Tex	: TEXCOORD0;	// テクスチャ
+	float  TexIndex	: TEXCOORD1;	// テクスチャ粒子インデクス
+	float4 WPos	: TEXCOORD2;    // 鏡像元モデルのワールド座標
+	float2 SpTex	: TEXCOORD3;	// スフィアマップテクスチャ座標
+	float4 Color	: COLOR0;		// 粒子の乗算色
+};
+
+
+// 頂点シェーダ(床反転)
+VS_OUTPUT2 BufferShadowMirror_VS(float4 Pos : POSITION, float2 Tex : TEXCOORD0, int index: _INDEX)
+{
+	VS_OUTPUT2 Out=(VS_OUTPUT2)0;
+
+	int i = RepeatIndex;
+	int j = index / (TAIL_DIV * 2);
+	int k = index % (TAIL_DIV * 2);
+	int l = k / 2;
+	int Index0 = i * TEX_HEIGHT + j;
+	Out.TexIndex = float(j);
+
+	float2 texCoord = float2((i*TAIL_DIV+l+0.5f)/POS_TEX_WIDTH, (j+0.5f)/TEX_HEIGHT);
+	float4 Pos0 = tex2Dlod(PosSmpCopy, float4(texCoord, 0, 0));
+
+	// 経過時間
+	float etime = Pos0.w - 1.0f;
+
+	Pos.x *= ParticleSize * 10.0f;
+	Pos.yzw = float3(0, 0, 1);
+	Pos.xyz = mul(Pos.xyz, BillboardMatrix) * step(0.001f, etime) + Pos0.xyz;
+
+	Out.WPos = Pos;
+	// 鏡像位置への座標変換
+	Pos = TransMirrorPos( Pos ); // 鏡像変換
+	// カメラ視点のビュー射影変換
+	Out.Pos = mul( Pos, matVP );
+	Out.Pos.x = -Out.Pos.x; // ポリゴンが裏返らないように左右反転にして描画
+
+	float alpha = step(0.001f, etime) * smoothstep(-ParticleLife, -ParticleLife*ParticleDecrement, -etime);
+	Out.Color = BASE_COLOR;
+	Out.Color.a *= alpha;
+
+	// テクスチャ座標
+	int texIndex = Index0 % (TEX_PARTICLE_XNUM * TEX_PARTICLE_YNUM);
+	int tex_i = texIndex % TEX_PARTICLE_XNUM;
+	int tex_j = texIndex / TEX_PARTICLE_XNUM;
+	Out.Tex = float2((Tex.x + tex_i)/TEX_PARTICLE_XNUM, (Tex.y + tex_j)/TEX_PARTICLE_YNUM);
+
+	return Out;
+}
+
+// ピクセルシェーダ
+float4 BufferShadow_PS(VS_OUTPUT2 IN) : COLOR
+{
+	// 鏡面の裏側にある部位は鏡像表示しない
+	clip( IsFace( IN.WPos ) );
+
+	float4 Color = IN.Color;
+	Color *= tex2D( ParticleTexSamp, IN.Tex );
+
+	#if defined(USE_PALLET) && USE_PALLET > 0
+	float4 randColor = tex2D(ColorPalletSmp, float2((IN.TexIndex+0.5f) / PALLET_TEX_SIZE, 0.5));
+	Color *= randColor;
+	#endif
+
+	#if( TEX_ZBuffWrite==1 )
+		clip(Color.a - 0.3);
+	#endif
+
+	return Color;
+}
+
+
+#if TEX_ZBuffWrite==0
+#define ZWriteMode	ZENABLE = TRUE; ZWRITEENABLE = FALSE
+#else
+#define ZWriteMode	ZENABLE = TRUE
+#endif
+
+#if defined(ADD_MODE) && ADD_MODE > 0
+#define AlphaMode	AlphaBlendEnable = TRUE; SRCBLEND = SRCALPHA; DESTBLEND = ONE
+#else
+#define AlphaMode	AlphaBlendEnable = TRUE; SRCBLEND = SRCALPHA; DESTBLEND = INVSRCALPHA
+#endif
+
+#define OBJECT_TEC(name, mmdpass, selfshadow) \
+	technique name < string MMDPass = mmdpass; bool UseSelfShadow = selfshadow;\
+		string Script = \
+		"RenderColorTarget0=;" \
+		"RenderDepthStencilTarget=;" \
+			"LoopByCount=RepeatCount;" \
+			"LoopGetIndex=RepeatIndex;" \
+				"Pass=DrawObject;" \
+			"LoopEnd=;"; \
+	> { \
+		pass DrawObject { \
+			ZWriteMode; \
+			AlphaMode; \
+			CullMode = NONE; \
+			VertexShader = compile vs_3_0 BufferShadowMirror_VS(); \
+			PixelShader  = compile ps_3_0 BufferShadow_PS(); \
+		} \
+	}
+
+
+OBJECT_TEC(MainTec0, "object", false)
+OBJECT_TEC(MainTecBS0, "object_ss", true)
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTec < string MMDPass = "shadow"; > {}
+
+///////////////////////////////////////////////////////////////////////////////////////////////

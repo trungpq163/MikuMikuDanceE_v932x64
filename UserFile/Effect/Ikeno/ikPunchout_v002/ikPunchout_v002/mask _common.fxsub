@@ -1,0 +1,94 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座法変換行列
+float4x4 WorldViewProjMatrix      : WORLDVIEWPROJECTION;
+float4x4 WorldMatrix              : WORLD;
+float4x4 ViewMatrix               : VIEW;
+float4x4 ProjMatrix				  : PROJECTION;
+float4x4 LightWorldViewProjMatrix : WORLDVIEWPROJECTION < string Object = "Light"; >;
+float4x4 matWV	: WORLDVIEW;
+
+// マテリアル色
+float4   MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+// 材質モーフ対応
+float4	TextureAddValue   : ADDINGTEXTURE;
+float4	TextureMulValue   : MULTIPLYINGTEXTURE;
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+inline float4 GetTextureColor(float2 uv)
+{
+	float4 TexColor = tex2D( ObjTexSampler, uv);
+	TexColor.rgb = lerp(1, TexColor * TextureMulValue + TextureAddValue, TextureMulValue.a + TextureAddValue.a).rgb;
+	return TexColor;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+struct BufferShadow_OUTPUT {
+	float4 Pos		: POSITION;		// 射影変換座標
+	float2 Tex		: TEXCOORD1;	// テクスチャ
+	float4 VPos		: TEXCOORD2;	// Position
+};
+
+
+////////////////////////////////////////////////////////////////////////////////
+// 頂点シェーダ
+BufferShadow_OUTPUT BufferShadow_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0)
+{
+	BufferShadow_OUTPUT Out = (BufferShadow_OUTPUT)0;
+
+	Out.Pos = mul(Pos,WorldViewProjMatrix);
+	Out.VPos = mul(Pos,matWV);
+
+	Out.Tex = Tex;
+
+	return Out;
+}
+
+// ピクセルシェーダ
+float4 BufferShadow_PS(BufferShadow_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+	// α値が閾値以下の箇所は描画しない
+	float alpha = MaterialDiffuse.a;
+	if ( useTexture ) {
+		alpha *= GetTextureColor( IN.Tex ).a;
+	}
+
+	clip(alpha - AlphaThroughThreshold);
+
+	return float4(VALUE, 0, 0, 1);
+}
+
+
+
+// オブジェクト描画用テクニック
+#define BASICSHADOW_TEC(name, mmdpass, tex) \
+	technique name < string MMDPass = mmdpass; \
+	> { \
+		pass DrawObject { \
+			VertexShader = compile vs_3_0 BufferShadow_VS(); \
+			PixelShader  = compile ps_3_0 BufferShadow_PS(tex); \
+		} \
+	}
+
+bool	use_texture;		//	テクスチャフラグ
+
+BASICSHADOW_TEC(BTec0, "object", use_texture)
+BASICSHADOW_TEC(BSTec0, "object_ss", use_texture)
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTech < string MMDPass = "shadow";  > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+///////////////////////////////////////////////////////////////////////////////////////////////

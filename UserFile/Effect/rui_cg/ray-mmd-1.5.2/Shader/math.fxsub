@@ -1,0 +1,271 @@
+#define InvLog2 3.32192809489f
+
+#define InvPIE 0.318309886142f
+#define InvPIE8 0.039788735767f
+#define InvPIE4 0.079577471535f
+
+#define PI 3.1415926535f
+#define PI_2 (3.1415926535f * 2.0)
+
+#define ALN2I 1.442695022
+
+#define EPSILON 1e-5f
+
+#define MIDPOINT_8_BIT (127.0f / 255.0f)
+
+float  pow2(float x)  { return x * x; }
+float2 pow2(float2 x) { return x * x; }
+float3 pow2(float3 x) { return x * x; }
+float4 pow2(float4 x) { return x * x; }
+
+float  pow5(float x)  { float  xx = x * x; return xx * xx * x; }
+float2 pow5(float2 x) { float2 xx = x * x; return xx * xx * x; }
+float3 pow5(float3 x) { float3 xx = x * x; return xx * xx * x; }
+float4 pow5(float4 x) { float4 xx = x * x; return xx * xx * x; }
+
+float sum(float2 v) { return dot(v, 1.0); }
+float sum(float3 v) { return dot(v, 1.0); }
+float sum(float4 v) { return dot(v, 1.0); }
+
+float  madd(float v , float t1 , float t2 ) { return v * t1 + t2; }
+float2 madd(float2 v, float2 t1, float2 t2) { return v * t1 + t2; }
+float3 madd(float3 v, float3 t1, float3 t2) { return v * t1 + t2; }
+float4 madd(float4 v, float4 t1, float4 t2) { return v * t1 + t2; }
+
+float length2(float2 v) { return dot(v, v); }
+float length2(float3 v) { return dot(v, v); }
+float length2(float4 v) { return dot(v, v); }
+
+float min2(float2 v) { return min(v.x, v.y); }
+float max3(float3 v) { return max(v.x, max(v.y, v.z)); }
+
+float luminance(float3 rgb)
+{
+	return dot(rgb, float3(0.299f, 0.587f, 0.114f));
+}
+
+float3 srgb2linear(float3 rgb)
+{
+	const float ALPHA = 0.055f;
+	return rgb < 0.04045f ? rgb / 12.92f : pow((max(rgb,1e-5) + ALPHA) / (1 + ALPHA), 2.4f);
+}
+
+float4 srgb2linear(float4 c)
+{
+	return float4(srgb2linear(c.rgb), c.a);
+}
+
+float3 srgb2linear_fast(float3 rgb)
+{
+	return pow(max(rgb, EPSILON), 2.2);
+}
+
+float4 srgb2linear_fast(float4 c)
+{
+	return float4(srgb2linear_fast(c.rgb), c.a);
+}
+
+float3 linear2srgb(float3 srgb)
+{
+	srgb = max(6.10352e-5, srgb);
+	return min(srgb * 12.92, pow(max(srgb, 0.00313067), 1.0/2.4) * 1.055 - 0.055);
+}
+
+float4 linear2srgb(float4 c)
+{
+	return float4(linear2srgb(c.rgb), c.a);
+}
+
+float3 rgb2hsv(float3 c)
+{
+	float4 K = float4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+	float4 p = lerp(float4(c.bg, K.wz), float4(c.gb, K.xy), step(c.b, c.g));
+	float4 q = lerp(float4(p.xyw, c.r), float4(c.r, p.yzx), step(p.x, c.r));
+
+	float d = q.x - min(q.w, q.y);
+	float e = 1.0e-10;
+	return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+float3 hsv2rgb(float3 c)
+{
+	float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+	float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
+	return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
+}
+
+float4 EncodeRGBM(float3 color, float range = 6)
+{
+	color *= (1.0 / range);
+	float4 rgbm;
+	rgbm.a = saturate(max(max(color.r, color.g), max(color.b, 1e-6)));
+	rgbm.a = ceil(rgbm.a * 255.0) / 255.0;
+	rgbm.rgb = color / rgbm.a;
+	return rgbm;
+}
+
+float3 DecodeRGBM(float4 rgbm, float range = 6)
+{
+	return rgbm.rgb * rgbm.a * range;
+}
+
+float4 EncodeRGBT(float3 rgb, float range = 1024)
+{
+	float limits = 0;
+	limits = max(max(rgb.r, rgb.g), max(rgb.b, 1e-6f));
+	limits = min(limits, range);
+
+	float4 encode;
+	encode[3] = (range + 1) / range *  limits / (1 + limits);
+	encode[3] = ceil(encode[3] * 255.0) / 255.0;
+
+	float rcp = 1.0 / (encode[3] / (1.0 + 1.0 / range - encode[3]));
+
+	encode[0] = rgb.r * rcp;
+	encode[1] = rgb.g * rcp;
+	encode[2] = rgb.b * rcp;
+
+	return encode;
+}
+
+float3 DecodeRGBT(float4 rgbt, float range = 1024)
+{
+	rgbt.a = rgbt.a / (1 + 1 / range - rgbt.a);
+	return rgbt.rgb * rgbt.a;
+}
+
+float2 PosToCoord(float2 position)
+{
+	return position * float2(0.5, -0.5) + float2(0.5, 0.5);
+}
+
+float4 PosToCoord(float4 position)
+{
+	return position * float4(0.5, -0.5, 0.5, -0.5) + float4(0.5, 0.5, 0.5, 0.5);
+}
+
+float2 CoordToPos(float2 coord)
+{
+	return coord * float2(2, -2) + float2(-1, 1);
+}
+
+float3x3 CreateRotate(float3 euler)
+{
+	float sj, cj, si, ci, sh, ch;
+
+	sincos(euler.x, si, ci);
+	sincos(euler.y, sj, cj);
+	sincos(euler.z, sh, ch);
+
+	float cc = ci * ch;
+	float cs = ci * sh;
+	float sc = si * ch;
+	float ss = si * sh;
+
+	float a1 = cj * ch;
+	float a2 = sj * sc - cs;
+	float a3 = sj * cc + ss;
+
+	float b1 = cj * sh;
+	float b2 = sj * ss + cc;
+	float b3 = sj * cs - sc;
+
+	float c1 = -sj;
+	float c2 = cj * si;
+	float c3 = cj * ci;
+	
+	float3x3 rotate;
+	rotate[0] = float3(a1, a2, a3);
+	rotate[1] = float3(b1, b2, b3);
+	rotate[2] = float3(c1, c2, c3);
+	
+	return rotate;
+}
+
+float2 ComputeSphereCoord(float3 normal)
+{
+#if IBL_QUALITY > 1
+	normal = clamp(normal, -1.0, 1.0);
+	float2 coord = float2((atan2(normal.x, normal.z) * InvPIE * 0.5f + 0.5f), acos(normal.y) * InvPIE);
+#else
+	normal = clamp(normal, -1.0, 1.0);
+	float2 coord = float2(1 - (atan2(normal.x, normal.z) * InvPIE * 0.5f + 0.5f), acos(normal.y) * InvPIE);
+#endif
+	return coord;
+}
+
+float3 ComputeSphereNormal(float2 coord, float phiStart = 0.0, float phiLength = PI_2, float thetaStart = 0, float thetaLength = PI)
+{
+	float3 normal;
+	normal.x =  sin(thetaStart + coord.y * thetaLength) * sin(phiStart + coord.x * phiLength);
+	normal.y =  cos(thetaStart + coord.y * thetaLength);
+	normal.z = -sin(thetaStart + coord.y * thetaLength) * cos(phiStart + coord.x * phiLength);
+	return normal;
+}
+
+float GetJitterOffset(float2 uv)
+{
+	return dot(frac(uv * 0.25), float2(1.0, 0.25));
+}
+
+float PseudoRandom(float2 xy)
+{
+    float2 pos = frac(xy / 128.0f) * 128.0f + float2(-64.340622f, -72.465622f);
+    return frac(dot(pos.xyx * pos.xyy, float3(20.390625f, 60.703125f, 2.4281209f)));
+}
+
+float BilateralWeight(float r, float depth, float center_d, float sigma, float sharpness)
+{
+	const float blurSigma = sigma * 0.5f;
+	const float blurFalloff = 1.0f / (2.0f * blurSigma * blurSigma);
+	float ddiff = (depth - center_d) * sharpness;
+	return exp(-r * r * blurFalloff - ddiff * ddiff);
+}
+
+float SmoothCurve(float x)
+{
+	return x * x * (3.0 - 2.0 * x);
+}
+
+float3 SmoothCurve(float3 x)
+{
+	return x * x * (3.0 - 2.0 * x);
+}
+
+float TriangleWave(float x)
+{
+	return abs(frac(x + 0.5) * 2.0 - 1.0);
+}
+
+float3 TriangleWave(float3 x)
+{
+	return abs(frac(x + 0.5) * 2.0 - 1.0);
+}
+
+float SmoothTriangleWave(float x)
+{
+	return SmoothCurve(TriangleWave(x));
+}
+
+float3 SmoothTriangleWave(float3 x)
+{
+	return SmoothCurve(TriangleWave(x));
+}
+
+float SmoothnessToRoughness(float smoothness)
+{
+	return (1.0f - smoothness) * (1.0f - smoothness);
+}
+
+float RoughnessToSmoothness(float roughness)
+{
+	return 1.0f - sqrt(roughness);
+}
+
+float3 ColorBalance(float3 color, float4 balance)
+{
+	float3 lum = luminance(color);
+	color = lerp(color, lum, balance.a);
+	color *= float3(1 + balance.rgb);
+	return color;
+}

@@ -1,0 +1,9 @@
+
+
+// ƒpƒ‰ƒ[ƒ^
+float AlphaThroughThreshold = 0.2;
+
+#define PALLET_FILE_NAME	"pallet34.png"
+#define PALLET_WIDTH		64
+#define PALLET_HEIGHT		8
+#define PALLET_SLOT		4

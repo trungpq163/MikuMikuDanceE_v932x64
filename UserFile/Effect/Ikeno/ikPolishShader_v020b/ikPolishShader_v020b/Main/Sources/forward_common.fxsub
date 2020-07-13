@@ -1,0 +1,538 @@
+//-----------------------------------------------------------------------------
+//
+
+#include "../ikPolishShader.fxsub"
+
+#include "../Sources/constants.fxsub"
+#include "../Sources/structs.fxsub"
+#include "../Sources/mmdutil.fxsub"
+#include "../Sources/colorutil.fxsub"
+#include "../Sources/lighting.fxsub"
+#include "../Sources/octahedron.fxsub"
+
+//bool Exist_Polish : CONTROLOBJECT < string name = "ikPolishShader.x"; >;
+
+#define IGNORE_EMISSIVE			// 環境色を無効にする。
+
+
+//-----------------------------------------------------------------------------
+
+float mDirectLightP : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "直接光+"; >;
+float mDirectLightM : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "直接光-"; >;
+
+bool bLinearBegin : CONTROLOBJECT < string name = "ikLinearBegin.x"; >;
+bool bLinearEnd : CONTROLOBJECT < string name = "ikLinearEnd.x"; >;
+static bool bOutputLinear = (bLinearEnd && !bLinearBegin);
+
+// 座法変換行列
+float4x4 WorldViewProjMatrix	: WORLDVIEWPROJECTION;
+float4x4 WorldViewMatrix		: WORLDVIEW;
+float4x4 WorldMatrix			: WORLD;
+float4x4 ViewMatrix				: VIEW;
+float4x4 ViewProjMatrix			: VIEWPROJECTION;
+float4x4 LightWorldViewProjMatrix	: WORLDVIEWPROJECTION < string Object = "Light"; >;
+float3	LightDirection	: DIRECTION < string Object = "Light"; >;
+float3	CameraPosition	: POSITION  < string Object = "Camera"; >;
+
+// ライト色
+float3	LightDiffuse		: DIFFUSE   < string Object = "Light"; >;
+float3	LightSpecular		: SPECULAR  < string Object = "Light"; >;
+
+// マテリアル色
+float4	MaterialDiffuse		: DIFFUSE  < string Object = "Geometry"; >;
+float3	MaterialAmbient		: AMBIENT  < string Object = "Geometry"; >;
+float3	MaterialEmissive	: EMISSIVE < string Object = "Geometry"; >;
+//float3	MaterialSpecular	: SPECULAR < string Object = "Geometry"; >;
+float3	MaterialToon		: TOONCOLOR;
+float    SpecularPower     : SPECULARPOWER < string Object = "Geometry"; >;
+
+// アクセサリのスペキュラは1/10されているのでそれを補正する
+//#define SpecularColor	Degamma(MaterialSpecular * (LightDiffuse.r * 9 + 1))
+
+#if defined(IGNORE_EMISSIVE)
+static float3	BaseAmbient = MaterialAmbient;
+static float3	BaseEmissive = 0;
+#elif defined(EMMISIVE_AS_AMBIENT)
+static float3	BaseAmbient = saturate(MaterialAmbient + MaterialEmissive);
+static float3	BaseEmissive = 0;
+#else
+static float3	BaseAmbient = MaterialAmbient;
+static float3	BaseEmissive = MaterialEmissive;
+#endif
+
+// ライトの強度
+static float3 LightColor = LightSpecular * CalcLightValue(mDirectLightP, mDirectLightM, DefaultLightScale);
+
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+static float2 ViewportOffset = (float2(0.5,0.5)/ViewportSize);
+
+bool use_texture;
+bool use_subtexture;	// サブテクスチャフラグ
+bool use_spheremap;
+bool use_toon;
+
+bool	transp;   // 半透明フラグ
+#define Toon	3
+
+#if !defined(BACKFACE_AWARE)
+#define BACKFACE_AWARE 0
+#endif
+
+#if DISABLE_REFRACTION == 1
+	#define REFRACTION_TYPE		0
+		// 0: 屈折関連の処理を何もしない
+		// 1: 屈折マップを使う
+		// 2: 環境マップを使う
+		// 3: マップを使用しない。
+	#undef BACKFACE_AWARE
+	#define BACKFACE_AWARE		0
+#else
+#if ENABLE_REFRACTION > 0
+	// 屈折マップを使う
+	#define REFRACTION_TYPE		1
+	shared texture2D PPPRefractionMap : RENDERCOLORTARGET;
+	sampler RefractionMapSamp = sampler_state {
+		texture = <PPPRefractionMap>;
+		MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+		AddressU  = CLAMP;	AddressV = CLAMP;
+	};
+#else
+	#define REFRACTION_TYPE		2
+#endif
+#endif
+
+
+#if BACKFACE_AWARE > 0
+texture2D BackfaceTex : RenderColorTarget
+<
+	bool AntiAlias = false;
+	int Miplevels = 1;
+//	string Format = "A16B16G16R16F" ; // 法線と深度
+	string Format = "R16F" ; // 深度のみ
+>;
+sampler BackfaceSmp = sampler_state {
+	texture = <BackfaceTex>;
+	AddressU  = CLAMP; AddressV = CLAMP;
+};
+texture2D DepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+>;
+#endif
+
+float ConvertToRoughness(float val) { return (1 - val); }
+
+
+#if ENABLE_AUTO_SMOOTHNESS > 0
+// 謎の係数スペキュラーパワーを適当にスムースネスに置き換える。(0:マット。1:ツルツル)
+float GetSmoothness(float2 uv) { return saturate((log2(SpecularPower+1)-1)/8.0); }
+static float CustomRoughness = ConvertToRoughness(GetSmoothness(0));
+#else
+static float CustomRoughness = ConvertToRoughness(saturate(Smoothness) * 0.98 + 0.01);
+#endif
+
+
+shared texture PPPEnvMap2: RENDERCOLORTARGET;
+sampler EnvMapSamp0 = sampler_state {
+	texture = <PPPEnvMap2>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = LINEAR;
+	AddressU  = WRAP;	AddressV = WRAP;
+};
+
+texture2D EnvironmentBRDFTex <
+	string ResourceName = "../Sources/Assets/EnvironmentBRDF.dds";
+	// string Format = "A16B16G16R16F";
+	int MipLevels = 1;
+>;
+sampler EnvironmentBRDF = sampler_state {
+	texture = <EnvironmentBRDFTex>;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = NONE;
+	AddressU  = CLAMP;	AddressV  = CLAMP;
+};
+
+static float MAX_MIP_LEVEL = log2(ENV_WIDTH) - 1.0;
+
+float4 GetEnvColor(float3 vec, float roughness)
+{
+	float s = 1 - roughness;
+	roughness = (1 - s * s);
+
+	float lod = roughness * MAX_MIP_LEVEL;
+	float2 uv = EncodeOctahedron(vec);
+	return tex2Dlod(EnvMapSamp0, float4(uv,0,lod));
+}
+
+
+#define	ENABLE_CLEARCOAT	0
+
+#if ENABLE_CLEARCOAT > 0
+static float ClearcoatRoughness = ConvertToRoughness(ClearcoatSmoothness);
+
+float3 ApplyClearCoat(float3 N, float3 NPoly, float3 L, float3 V, 
+	float shadow, float3 bodyColor, inout float3 specular)
+{
+	float3 clearcoatN = N; // normalize(lerp(N, NPoly, USE_POLYGON_NORMAL));
+	float3 clearcoatR = reflect(-V, clearcoatN);
+	float clearcoatNV = abs(dot(clearcoatN, V));
+
+	float3 brdf = tex2D(EnvironmentBRDF, float2(ClearcoatRoughness, clearcoatNV)).xyz;
+	float3 reflectance = (ClearcoatF0 * brdf.x + brdf.y);
+
+	float3 diffuse = CalcDiffuse(L, clearcoatN, V) * shadow * LightColor;
+	diffuse += GetEnvColor(clearcoatN, 1.0) * brdf.z;
+
+	float coatThickness = (1 - clearcoatNV) * (1 - ClearcoatColor.a) + ClearcoatColor.a;
+	coatThickness *= ClearcoatColor.a;
+	bodyColor = lerp(bodyColor, ClearcoatColor.rgb * diffuse, coatThickness);
+	specular *= lerp(1, ClearcoatColor.rgb, coatThickness);
+
+	float3 ccSpecular;
+	ccSpecular = CalcSpecular(L, clearcoatN, V, ClearcoatRoughness, ClearcoatF0);
+	ccSpecular *= LightColor * shadow;
+	ccSpecular += GetEnvColor(clearcoatR, ClearcoatRoughness) * reflectance;
+	specular = lerp(specular, ccSpecular, ClearcoatIntensity);
+
+	return bodyColor;
+}
+#endif
+
+
+float3 GetRefractiveColor(float4 WPos, float3 V, float3 R, float thick, float roughness)
+{
+#if REFRACTION_TYPE == 1
+	WPos.xyz += R * thick;
+	float4 refractPPos = mul( WPos, ViewProjMatrix );
+	refractPPos.xy = refractPPos.xy / refractPPos.w * float2(0.5, -0.5) + 0.5 + ViewportOffset;
+	float lod = roughness * 6.0;
+	return tex2Dlod(RefractionMapSamp, float4(refractPPos.xy, 0, lod)).rgb;
+
+#elif REFRACTION_TYPE == 2
+	// 環境マップから適当に背景色を得る
+	return GetEnvColor(normalize(-V + R * thick), roughness).rgb;
+#else
+	return 0;
+#endif
+}
+
+
+//-----------------------------------------------------------------------------
+//
+
+float3 CalcNormalizedToon()
+{
+	float3 result = 1;
+	if (use_toon)
+	{
+		float3 linearColor = Degamma(MaterialToon);
+		float g = Luminance(linearColor);
+		result = lerp(1, linearColor / max(g, 0.01), saturate(ToonColor_Scale));
+	}
+
+	return result;
+}
+
+static float3 NormalizedToon = CalcNormalizedToon();
+
+float3 CalcToonColor(float3 c)
+{
+	float3 c0 = saturate(c);
+	return (NormalizedToon * (c0 * c0 - c0) + c);
+}
+
+float3 CalcToonLight(float3 c, float3 toonColor)
+{
+	float g = saturate(Luminance(c) * 2.0 - 0.5);
+	return c * lerp(toonColor, 1, g);
+}
+
+static float3 MaterialBaseColor = Degamma((!use_toon) ? MaterialDiffuse.rgb : BaseAmbient);
+
+
+
+//-----------------------------------------------------------------------------
+// セルフシャドウ用Z値プロット
+
+struct VS_ZValuePlot_OUTPUT {
+	float4 Pos : POSITION;				// 射影変換座標
+	float4 ShadowMapTex : TEXCOORD0;	// Zバッファテクスチャ
+};
+
+VS_ZValuePlot_OUTPUT ZValuePlot_VS( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_ZValuePlot_OUTPUT Out = (VS_ZValuePlot_OUTPUT)0;
+	Out.Pos = mul( Pos, LightWorldViewProjMatrix );
+	Out.ShadowMapTex = Out.Pos;
+	return Out;
+}
+
+float4 ZValuePlot_PS( float4 ShadowMapTex : TEXCOORD0, float2 Tex : TEXCOORD1 ) : COLOR
+{
+	return float4(ShadowMapTex.z/ShadowMapTex.w,0,0,1);
+}
+
+technique ZplotTec < string MMDPass = "zplot"; > {
+	pass ZValuePlot {
+		AlphaBlendEnable = FALSE;
+		VertexShader = compile vs_3_0 ZValuePlot_VS();
+		PixelShader  = compile ps_3_0 ZValuePlot_PS();
+	}
+}
+
+
+//-----------------------------------------------------------------------------
+// オブジェクト描画
+
+struct BufferShadow_OUTPUT {
+	float4 Pos		: POSITION;		// 射影変換座標
+	float4 ZCalcTex	: TEXCOORD0;	// Z値
+	float4 Tex		: TEXCOORD1;	// テクスチャ
+	float3 Normal	: TEXCOORD2;	// 法線
+	float3 Eye		: TEXCOORD3;	// カメラとの相対位置
+	float4 PPos		: TEXCOORD4;	// スクリーン座標
+	#if IGNORE_SPHERE == 0
+	float2 SpTex	: TEXCOORD5;	// スフィアマップテクスチャ座標
+	#endif
+	float4 ToonColor	: TEXCOORD6;
+	#if REFRACTION_TYPE > 0
+	float4 WPos		: TEXCOORD7;
+	#endif
+};
+
+BufferShadow_OUTPUT DrawObject_VS(
+	VS_AL_INPUT IN, uniform bool useSelfShadow)
+{
+	BufferShadow_OUTPUT Out = (BufferShadow_OUTPUT)0;
+
+	float4 Pos = IN.Pos;
+	float3 Normal = IN.Normal.xyz;
+
+	Out.Pos = mul( Pos, WorldViewProjMatrix );
+
+	float4 WPos = mul( Pos, WorldMatrix );
+	Out.Eye = CameraPosition - WPos.xyz;
+
+	Out.Normal = normalize( mul( Normal, (float3x3)WorldMatrix ) );
+
+	if (useSelfShadow)
+	{
+		Out.ZCalcTex = mul( Pos, LightWorldViewProjMatrix );
+	}
+
+	Out.PPos = Out.Pos;
+	Out.Tex.xy = IN.Tex;
+
+	#if IGNORE_SPHERE == 0
+	if ( use_spheremap && use_subtexture) Out.SpTex = IN.AddUV1.xy;
+	#endif
+
+	#if REFRACTION_TYPE > 0
+	Out.WPos = WPos;
+	#endif
+
+	Out.ToonColor.rgb = CalcNormalizedToon();
+
+	return Out;
+}
+
+
+float CalcShadow(float4 zcalc, float shadowVal)
+{
+	#if USE_MMD_SHADOW > 0
+	return CalcMMDShadow(zcalc);
+	#else
+	return 1;
+	#endif
+}
+
+
+float4 DrawObject_PS(BufferShadow_OUTPUT IN, uniform bool useSelfShadow) : COLOR
+{
+	float3 L = -LightDirection;
+	float3 V = normalize(IN.Eye);
+	float3 N = normalize(IN.Normal);
+	float3 NPoly = N;
+
+	float2 texCoord = IN.PPos.xy / IN.PPos.w * float2(0.5, -0.5) + 0.5;
+	texCoord += ViewportOffset;
+
+	// 素材自体の色
+	float4 albedo = float4(MaterialBaseColor,1);
+	float3 SpSpecular = 0;
+
+	if ( use_texture )
+	{
+		albedo *= Degamma(GetTextureColor(IN.Tex.xy));
+	}
+
+	#if IGNORE_SPHERE == 0
+	if ( use_spheremap ) {
+		float2 SpTex = mul( N, (float3x3)ViewMatrix ).xy * float2(0.5, -0.5) + 0.5;
+		float4 TexColor = GetSphereColor(use_subtexture ? IN.SpTex : SpTex);
+		if(spadd) {
+			SpSpecular = TexColor.rgb * LightSpecular * SphereScale;
+		} else {
+			albedo.rgb *= (Degamma(TexColor.rgb) * SphereScale + (1.0 - SphereScale));
+		}
+	}
+	#endif
+
+	MaterialParam mat = {
+		Metalness,
+		CustomRoughness,
+		1, // intensity
+		0, // sssvalue
+		0, // emissive
+		lerp(Metalness * (1.0 - 0.05) + 0.05, albedo.rgb, Metalness),
+		1,
+		albedo.rgb
+	};
+
+	albedo.a *= MaterialDiffuse.a * ForceAlphaScale;
+	// if (albedo.a <= CutoutThreshold) return float4(1,0,1,1);
+	clip(albedo.a - CutoutThreshold);
+
+	// ライトの計算
+	float3 f0 = mat.f0;
+
+	// 拡散反射(直接光+環境光)
+	float diffuse = CalcDiffuse(L, N, V);
+	float shadow = (useSelfShadow) ? CalcShadow(IN.ZCalcTex, 1) : 1;
+	float3 light = (diffuse * shadow) * LightColor;
+	light *= (1.0 - mat.metalness);
+
+	// 鏡面反射
+	float3 reflectance = 0;
+	float3 specular = CalcSpecular(L, N, V, mat.roughness, f0);
+	{
+		float3 R = reflect(-V, N);
+		float NV = abs(dot(N, V));
+		float2 brdf = tex2D(EnvironmentBRDF, float2(mat.roughness, NV)).xy;
+		reflectance = (f0 * brdf.x + brdf.y);
+		SpSpecular += GetEnvColor(R, mat.roughness).rgb * reflectance;
+	}
+	specular = specular * LightSpecular * shadow + SpSpecular;
+
+	// 最終的な色の計算
+	light = CalcToonLight(light, IN.ToonColor.rgb);
+	float4 result = float4(light, 1.0) * albedo;
+
+	// 屈折
+	#if REFRACTION_TYPE > 0
+	float IoR = 1.0 / (mat.metalness / 0.25 + 1.0); // 適当
+	float3 Refraction = normalize(refract(-V, N, IoR));
+	#if BACKFACE_AWARE > 0
+		float backDist = tex2D(BackfaceSmp, texCoord).x;
+		float frontDist = length(IN.Eye);
+		float thickness = max(backDist - frontDist, 0);
+	#else
+		float thickness = 0.5 / max(abs(dot(N,V)), 0.3); // 仮の厚み
+	#endif
+	float3 background = GetRefractiveColor(IN.WPos, V, Refraction, thickness, mat.roughness);
+	float3 absorption = lerp(1, albedo.rgb, ABSORPTION_RATE);
+//	float3 absorption = exp2(-thickness * (1 - albedo.rgb) * ABSORPTION_RATE * 1.44 * 10.0);
+	result.rgb = lerp(background * absorption * (1.0 - reflectance), result.rgb, result.a);
+	result.a = 1; // 不透明扱い
+	#endif
+
+	// 自己発光
+	result.rgb += BaseEmissive;
+
+	// クリアコート層
+	#if ENABLE_CLEARCOAT > 0
+	result.rgb = ApplyClearCoat(N, NPoly, L, V, shadow, result.rgb, specular);
+	#endif
+
+	#if ENABLE_SPECULAR_ALPHA > 0
+	// スペキュラに応じて不透明度を上げる。
+	result.rgb = result.rgb * result.a + specular;
+	float2 luminnance = max(result.rg, result.ba);
+	float alpha = saturate(max(luminnance.x, luminnance.y));
+	result.rgb /= max(alpha, 1.0/1024);
+	result.a = alpha;
+	#else
+	result.rgb += specular;
+	#endif
+
+	result = bOutputLinear ? result : Gamma(result);
+
+	return result;
+}
+
+
+#if BACKFACE_AWARE > 0
+struct Backface_OUTPUT {
+	float4 Pos		: POSITION;		// 射影変換座標
+	float4 Tex		: TEXCOORD0;	// テクスチャ
+//	float3 Normal	: TEXCOORD1;	// 法線
+	float Distance	: TEXCOORD2;
+};
+
+Backface_OUTPUT DrawBackface_VS(VS_AL_INPUT IN)
+{
+	Backface_OUTPUT Out = (Backface_OUTPUT)0;
+
+	float4 Pos = IN.Pos;
+	float3 Normal = IN.Normal.xyz;
+	Out.Pos = mul( Pos, WorldViewProjMatrix );
+
+	float4 WPos = mul( Pos, WorldMatrix );
+	Out.Distance = distance(CameraPosition, WPos.xyz);
+//	Out.Normal = normalize( mul( Normal, (float3x3)WorldMatrix ) );
+	return Out;
+}
+
+float4 DrawBackface_PS(Backface_OUTPUT IN) : COLOR
+{
+	// テクスチャを見て透明なら破棄?
+//	float3 N = normalize(IN.Normal);
+	return float4(IN.Distance, 0,0,1);
+}
+#endif
+
+#if BACKFACE_AWARE > 0
+float4 ClearColor = {0,0,0,0};
+float ClearDepth  = 1.0;
+
+#define OBJECT_TEC(name, mmdpass, selfshadow) \
+	technique name < string MMDPass = mmdpass; bool UseSelfShadow = selfshadow;\
+	string Script = \
+		"RenderColorTarget0=BackfaceTex;" \
+		"RenderDepthStencilTarget=DepthBuffer;" \
+		"ClearSetColor=ClearColor; ClearSetDepth=ClearDepth; Clear=Color; Clear=Depth;" \
+		"Pass=DrawBackface;" \
+	\
+		"RenderColorTarget0=;" \
+		"RenderDepthStencilTarget=;" \
+		"Pass=DrawObject;" \
+	; > { \
+		pass DrawBackface { \
+			CullMode = CW; AlphaBlendEnable = false; AlphaTestEnable = false; \
+			VertexShader = compile vs_3_0 DrawBackface_VS(); \
+			PixelShader  = compile ps_3_0 DrawBackface_PS(); \
+		} \
+		pass DrawObject { \
+			VertexShader = compile vs_3_0 DrawObject_VS(selfshadow); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(selfshadow); \
+		} \
+	}
+
+#else
+#define OBJECT_TEC(name, mmdpass, selfshadow) \
+	technique name < string MMDPass = mmdpass; bool UseSelfShadow = selfshadow;\
+	> { \
+		pass DrawObject { \
+			VertexShader = compile vs_3_0 DrawObject_VS(selfshadow); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(selfshadow); \
+		} \
+	}
+
+#endif
+
+
+OBJECT_TEC(MainTec0, "object", false)
+OBJECT_TEC(MainTecBS0, "object_ss", true)
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTec < string MMDPass = "shadow"; > {}
+
+//-----------------------------------------------------------------------------
+

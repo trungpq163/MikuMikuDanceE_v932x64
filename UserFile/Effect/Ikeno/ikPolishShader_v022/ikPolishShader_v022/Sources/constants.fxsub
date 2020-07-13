@@ -1,0 +1,24 @@
+
+
+#define	PI		(3.14159265359)
+#define DEG_TO_RAD (PI / 180.0)
+#define	GOLDEN_ANGLE	(137.50776405 * DEG_TO_RAD)
+
+#define LOG2_E	(1.44269504089)		// log(e)/log(2)
+
+#define MMDUNIT_TO_METER	(1.0 / 12.5)
+
+
+// Material Type
+#define TO_MATERIAL_TYPE(x)	((x)/255.0)
+
+#define MT_MASK		TO_MATERIAL_TYPE(0)
+#define MT_NORMAL	TO_MATERIAL_TYPE(1)
+#define MT_METAL	TO_MATERIAL_TYPE(1)
+#define MT_SKIN		TO_MATERIAL_TYPE(1)
+#define MT_FACE		TO_MATERIAL_TYPE(2)
+#define MT_LEAF		TO_MATERIAL_TYPE(3)
+#define MT_EMISSIVE	TO_MATERIAL_TYPE(4)
+
+#define MT_AO		TO_MATERIAL_TYPE(8)
+#define MT_CAVITY	TO_MATERIAL_TYPE(16)

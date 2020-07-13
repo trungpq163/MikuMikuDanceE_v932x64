@@ -1,0 +1,381 @@
+
+
+//-----------------------------------------------------------------------------
+// RLR
+// 金属やガラスの映り込み用
+
+#define RLRSamp		HalfWorkSamp2
+//#define RLRSamp		FullWorkSampPoint
+
+// 画面端に近いか?
+float CalcEdgeFalloff(float2 texCoord)
+{
+	const float Margin = 64.0;
+	float2 EdgeWidth = Margin * 2.0 / (ViewportSize.xy * WORKSPACE_SCALE);
+	float2 falloff = (EdgeWidth + abs(texCoord) - 1.0) / EdgeWidth;
+	return 1.0 - saturate(max(falloff.x, falloff.y));
+}
+
+float4 CalcReflectionVector(float3 TargetPos, float3 N)
+{
+	float3 V = normalize(CameraPosition - TargetPos);
+	return float4(normalize(reflect(-V, N)), 0);
+}
+
+
+#if RLRRayCount > 0
+
+float4 GetReflectionBaseColor(float2 uv, float lod)
+{
+	#if RLR_QUALITY >= 2
+	return tex2Dlod(FullWorkSampLod, float4(uv.xy, 0, lod));
+	#else
+	return tex2Dlod(ScnSamp, float4(uv.xy, 0,0));
+	#endif
+}
+
+
+// 面の向きを元に画面内から映り込みそうなものを探す。
+// ここではヒットした位置だけを出力する。
+
+VS_OUTPUT VS_RLR( float4 Pos : POSITION, float2 Tex : TEXCOORD0)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset2;
+	Out.Tex.zw = Out.Tex.xy * WorkSize / 16.0; // for jitter
+	return Out;
+}
+
+float4 PS_RLR( float4 Tex: TEXCOORD0 ) : COLOR
+{
+	const float maxDistance = 4000;
+	const float nearZ = 1.0;
+	#define	zThicknessScale		1.01		// 距離に応じた厚みの増加量。1以上にする
+	#define	zMinThickness		0.5			// 最低限の厚み
+
+	float2 texCoord = Tex.xy;
+/*
+	float intensity = tex2D( MaterialMap, texCoord).z;
+	clip(intensity - 1.0/1024.0); // early out; ステンシルに切り替える?
+*/
+
+	GeometryInfo geom = GetWND(texCoord);
+	float3 N = geom.nd.normal;
+	float4 R = CalcReflectionVector(geom.wpos, N);
+
+	float4 BeginPos = float4(geom.wpos, 1);
+	float Vz = geom.nd.depth;
+	float VRz = mul(R.xyz, (float3x3)matV).z;
+	float rayLength = (VRz >= 0.0) ? maxDistance : min((nearZ - Vz) / VRz, maxDistance);
+	float4 EndPos = BeginPos + R * rayLength;
+
+//	float4 PPos0 = mul(BeginPos, matVP);
+//	float k0 = 1.0 / PPos0.w;
+//	float2 P0 = PPos0.xy * k0 * float2(0.5, -0.5) + 0.5;
+	float k0 = 1.0 / mul(BeginPos, matVP).w;
+	float2 P0 = texCoord.xy;
+
+	float4 PPos1 = mul(EndPos, matVP);
+	float k1 = 1.0 / PPos1.w;
+	float2 P1 = PPos1.xy * k1 * float2(0.5, -0.5) + 0.5;
+
+	// 画面外に出るのが確定なら、画面端までで走査を打ち切る
+	float2 dP0 = abs(saturate(P1) - P0) / max(abs(P1 - P0), 1e-5);
+	dP0 = max(dP0, (saturate(P1) == P1)); // P1 == P0 の場合、d = 0にならないようにする。
+	float d = min(dP0.x, dP0.y) * (1.0 / (RLRRayCount + 1.0));
+
+	float Q0 = Vz * k0;
+	float Q1 = mul(EndPos, matV).z * k1;
+
+	float4 PQK0 = float4(P0, Q0, k0);
+	float4 PQK1 = float4(P1, Q1, k1);
+	float4 vPQK = (PQK1 - PQK0) * d;
+
+	float offset = GetJitterOffset(Tex.zw);
+	float prevZMaxEstimate = Vz;
+
+	float4 hitDepth = 0;
+	for(int i = 0; i < RLRRayCount && hitDepth.z < 0.5; i++)
+	{
+		float4 PQK = vPQK * float4(i.xx, i.xx + 0.5) + PQK0;
+
+		float2 TgtTexCoord = PQK.xy;
+		GeometryInfo rGeom = GetWNDLod(TgtTexCoord);
+
+		float z = PQK.z / PQK.w;
+		float2 rayZ = float2(prevZMaxEstimate, z);
+		prevZMaxEstimate = z;
+		rayZ = (rayZ.x <= rayZ.y) ? rayZ.xy : rayZ.yx;
+		float lowerBound = rayZ.x;
+		float upperBound = rayZ.y * zThicknessScale + zMinThickness;
+
+		// 同一平面なら無視する
+		float3 v = rGeom.wpos - geom.wpos;
+		float NN = dot(rGeom.nd.normal, N);
+		bool NNl = (NN < 0.7 * (abs(dot(v, N)) + 1.0));
+		// ヒットしたか?
+		bool inRange = (lowerBound <= rGeom.nd.depth) * (rGeom.nd.depth <= upperBound);
+		float bHit = NNl * inRange;
+		// 近い → 自分自身とヒット判定? ただし法線の向きによっては助ける
+		bHit *= saturate(dot(v,v) * 0.25 + (NN < 0.7) >= 1.0);
+		if (bHit > hitDepth.z)
+		{
+			hitDepth = float4(TgtTexCoord, bHit, rGeom.nd.depth);
+		}
+	}
+
+	//画面外?
+	hitDepth.z *= CalcEdgeFalloff(hitDepth.xy);
+
+	return hitDepth;
+}
+
+
+
+
+//-----------------------------------------------------------------------------
+// Fake Stochastic SSR
+
+static float2 RlrKernelSizeScale = abs(1.0 * matP._11 * (0.5/8.0)) / matP._34 / RLRRayCount2 * ViewportAspect;
+
+struct VS_RLR2_OUTPUT {
+	float4 Pos		: POSITION;
+	float4 Tex		: TEXCOORD0;
+	float4 Tex2		: TEXCOORD1;
+};
+
+VS_RLR2_OUTPUT VS_RLR2( float4 Pos : POSITION, float2 Tex : TEXCOORD0)
+{
+	VS_RLR2_OUTPUT Out = (VS_RLR2_OUTPUT)0; 
+	Out.Pos = Pos;
+
+	Out.Tex.xy = Tex.xy + ViewportOffset * WORKSPACE_RES;
+	Out.Tex.zw = SampStep * WORKSPACE_RES; // 元はhalf resで生成している。
+
+	Out.Tex2.xy = RlrKernelSizeScale;
+	Out.Tex2.zw = Out.Tex.xy * ViewportSize / 16.0;
+
+	return Out;
+}
+
+float4 PS_RLR2( VS_RLR2_OUTPUT IN ) : COLOR
+{
+	float2 CenterTexCoord = IN.Tex.xy;
+	float4 hitInfo0 = tex2D(RLRSamp, CenterTexCoord);
+	float2 uv0 = hitInfo0.xy;
+	float weight0 = hitInfo0.z;
+	float hitDepth0 = hitInfo0.w;
+
+	float3 col = GetReflectionBaseColor(uv0, 0).rgb;
+	float4 RefColor = float4(col, 1) * weight0;
+	float weightSum = weight0;
+
+#if RLRRayCount2 > 0
+	MaterialParam material = GetMaterial(CenterTexCoord, 1);
+
+	GeometryInfo geom = GetWND(CenterTexCoord);
+	float3 N = geom.nd.normal;
+	float3 R = CalcReflectionVector(geom.wpos, N).xyz;
+	float depth = geom.nd.depth;
+
+	// 探索半径
+	#define MAX_RADIUS	10.0
+	#define MIN_RADIUS	0.1
+	float smoothness = (1 - material.roughness) * (1 - material.roughness);
+	float searchRadius = exp2(-smoothness * 10.0 - 1e-4) * (MAX_RADIUS - MIN_RADIUS) + MIN_RADIUS;
+	float2 radiusMul = IN.Tex2.xy * searchRadius / max(depth, 1.0);
+	float2 radiusAdd = IN.Tex.zw;
+	float radiusWeight = searchRadius / MAX_RADIUS;	// 距離による重み係数
+
+	float angleMul = 7.0 / RLRRayCount2 * (PI * 2.0);
+	float angleAdd = GetJitterOffset(IN.Tex2.zw) * (PI * 2.0);
+	float specPower = exp2(smoothness * 10.0 + 1) + 0.1;
+
+	for(int i = 0; i < RLRRayCount2; i++)
+	{
+		float2 sc;
+		sincos(i * angleMul + angleAdd, sc.x, sc.y);
+		float2 uv = sc * (i * radiusMul + radiusAdd) + CenterTexCoord;
+		float4 hitInfo = tex2Dlod(RLRSamp, float4(uv,0,0));
+		float2 uv1 = hitInfo.xy;
+		float w1 = hitInfo.z;		// proximity
+		float hitDepth = hitInfo.w;
+
+		float3 hitPos = ReconstructWPos(uv1, hitDepth);
+		float3 lv = hitPos - geom.wpos;
+		float3 L = normalize(lv);
+		float w0 = pow(saturate(dot(R, L)), specPower);
+/*
+		float3 V = normalize(CameraPosition - geom.wpos);
+		float3 H = normalize(L + V);
+		float NH = saturate(dot(N, H));
+		w0 = D_GGX(NH, material.roughness * material.roughness);
+*/
+		float lod = 0;
+/*
+		// 距離とラフネスに応じてmipレベルを変更する。適当
+		float maxLod = log2(ViewportSize.x * WORKSPACE_SCALE) - 4;
+		float lodScale = ViewportSize.x * WORKSPACE_SCALE * material.roughness / (100.0 * 100.0);
+		float dist = dot(lv, lv);
+		lod = clamp(log2(dist * lodScale), 0, maxLod);
+*/
+		float w2 = (i * radiusWeight + 1.0);	// ad-hoc: ラフなほど中心の重みを下げる
+		float4 col1 = GetReflectionBaseColor(uv1, lod);
+		RefColor += col1 * w0 * w1 * w2;
+		weightSum += w1;
+	}
+
+	RefColor.rgb /= max(RefColor.w, 1e-5);
+	float proximity = weightSum * (1.0 / (RLRRayCount2 + 1));
+
+#else
+	RefColor.rgb = col;
+	float proximity = weightSum;
+#endif
+
+	#if RLR_QUALITY >= 2
+	// チラツキ対策
+	RefColor.rgb = RefColor.rgb / max(1.0 - Luminance(RefColor.rgb), 1e-5);
+	#else
+	// ガンマ補正
+	RefColor.rgb = ColorCorrectFromInput(RefColor.rgb);
+	#endif
+
+	return float4(RefColor.rgb, proximity);
+}
+
+
+//-----------------------------------------------------------------------------
+// RLR用のボカし
+VS_OUTPUT VS_BlurRLR( float4 Pos : POSITION, float2 Tex : TEXCOORD0, uniform bool bBlurX)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.Tex.xy = Tex.xy + ViewportOffset * WORKSPACE_RES;
+
+	float2 offset = (bBlurX) ? float2(SampStep.x, 0) : float2(0, SampStep.y);
+	Out.Tex.zw = offset * WORKSPACE_RES;
+
+	return Out;
+}
+
+float4 PS_BlurRLR( float4 Tex: TEXCOORD0, uniform sampler smp) : COLOR
+{
+	float2 texCoord = Tex.xy;
+	float2 offset = Tex.zw;
+	float4 Color = tex2D( smp, texCoord);
+
+	#if RLRBlurCount > 0
+
+	NormalDepth nd0 = GetNormalDepthRaw(texCoord);
+	float depthRate = 100.0 / max(nd0.depth, 1.0);
+	//nd0.depth *= depthRate;
+	nd0.depth = 100.0;
+
+	MaterialParam material = GetMaterial(texCoord, 1);
+	float blurDenom = (1 + material.roughness * (RLRBlurCount-1));
+	blurDenom = -0.5 * LOG2_E / (blurDenom * blurDenom);
+
+	float weightSum = 1.0;
+	[unroll] for(int i = 1; i < RLRBlurCount; i++)
+	{
+		float4 uv = offset.xyxy * float4(i,i, -i,-i) + texCoord.xyxy;
+		float t2 = (i * i) * blurDenom;
+		NormalDepth ndp = GetNormalDepthRaw(uv.xy);
+		NormalDepth ndn = GetNormalDepthRaw(uv.zw);
+		float4 cp = tex2D(smp, uv.xy);
+		float4 cn = tex2D(smp, uv.zw);
+		float2 w = CalcBlurWeightOpt(ndp, ndn, nd0, t2, depthRate);
+		Color += cp * w.x;
+		Color += cn * w.y;
+		weightSum += w.x;
+		weightSum += w.y;
+	}
+
+	Color = Color / weightSum;
+	#endif
+
+	return Color;
+}
+
+
+//-----------------------------------------------------------------------------
+// 元画像に仮の映り込み色を追加する。
+// ディフューズ+平行光源のスペキュラだけでは金属が暗くなるため
+float4 PS_CreateRefBase( float2 texCoord: TEXCOORD0) : COLOR
+{
+	float4 baseColor = tex2D(ScnSamp, texCoord);
+	baseColor.rgb = ColorCorrectFromInput(baseColor.rgb);
+
+	float3 albedo = tex2D(ColorMap, texCoord).rgb;
+	MaterialParam material = GetMaterial(texCoord, albedo);
+	GeometryInfo geom = GetWND(texCoord);
+
+	float3 V = normalize(CameraPosition - geom.wpos);
+	float3 N = geom.nd.normal;
+	float3 R = normalize(reflect(-V, N));
+	float NV = abs(dot(N, V)) + 1e-5;
+	float4 EnvColor = GetEnvColor(R, material.roughness);
+	float3 f0 = material.f0;
+	float2 brdf = tex2D(EnvironmentBRDF, float2(material.roughness, NV)).xy;
+	float3 refrectance = (f0 * brdf.x + brdf.y);
+	EnvColor.rgb *= refrectance;
+	EnvColor.rgb *= ReflectionScale * material.intensity;
+
+	baseColor.rgb += EnvColor.rgb;
+
+	// チラツキ対策
+	baseColor.rgb = baseColor.rgb / (1.0 + Luminance(baseColor.rgb));
+
+	return baseColor;
+}
+#endif
+
+
+//-----------------------------------------------------------------------------
+// gather indirect specular
+float4 PS_CalcSpecular( float2 texCoord: TEXCOORD0) : COLOR
+{
+	float3 albedo = tex2D(ColorMap, texCoord).rgb;
+	MaterialParam material = GetMaterial(texCoord, albedo);
+	GeometryInfo geom = GetWND(texCoord);
+
+	float3 V = normalize(CameraPosition - geom.wpos);
+	float3 N = geom.nd.normal;
+	float3 R = normalize(reflect(-V, N));
+	float NV = abs(dot(N, V)) + 1e-5;
+
+	// float4 EnvColor = GetEnvColor(R, material.roughness);
+	float3 dominantN = GetSpecularDominantDir(N, R, material.roughness);
+	float4 EnvColor = GetEnvColor(dominantN, material.roughness);
+
+	#if RLRRayCount > 0
+		#if RLR_QUALITY >= 2
+		// まじめにアップサンプリングした結果を使う
+		float4 RefColor = tex2D(FullWorkSamp, texCoord);
+		#else
+		float4 RefColor = tex2D(HalfWorkSampLinear, texCoord);
+		#endif
+		RefColor.rgb = lerp(EnvColor.rgb, RefColor.rgb, RefColor.w);
+	#else
+		float4 RefColor = EnvColor;
+	#endif
+
+	float3 f0 = material.f0;
+	float ao = GetSSAO(texCoord);
+	float specAO = ComputeSpecOcclusion(NV, ao, material.roughness);
+
+	float2 brdf = tex2D(EnvironmentBRDF, float2(material.roughness, NV)).xy;
+	float3 refrectance = (f0 * brdf.x + brdf.y);
+	RefColor.rgb *= refrectance;
+
+	#if EXTRA_LIGHTS > 0
+	RefColor.rgb += tex2D(SpecularMapSamp, texCoord).rgb / PI;
+	#endif
+
+	RefColor.rgb *= specAO * ReflectionScale * material.intensity;
+
+	return RefColor;
+}
+

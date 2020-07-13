@@ -1,0 +1,80 @@
+[Info]
+Version = 3
+
+[Object]
+Acs1 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\ray.x
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\Skybox\Time of day\Time of day.pmx
+Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\ray_controller.pmx
+
+[Effect]
+Default = none
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\Skybox\Time of day\Time of day.fx
+Pmd3 = none
+
+[Effect@EnvLightMap]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\Skybox\Time of day\Time of lighting.fx
+Pmd2.show = true
+Pmd3 = none
+Pmd3.show = false
+
+[Effect@FogMap]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\Skybox\Time of day\Time of fog with godray with cloud caster.fx
+Pmd2.show = true
+Pmd3 = none
+Pmd3.show = false
+
+[Effect@LightMap]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = none
+Pmd2.show = false
+Pmd3 = none
+Pmd3.show = false
+
+[Effect@MaterialMap]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\Materials\material_skybox.fx
+Pmd2.show = true
+Pmd3 = none
+Pmd3.show = false
+
+[Effect@PSSM1]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\shadow\PSSM1.fx
+Pmd3 = none
+Pmd3.show = false
+
+[Effect@PSSM2]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\shadow\PSSM2.fx
+Pmd3 = none
+Pmd3.show = false
+
+[Effect@PSSM3]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\shadow\PSSM3.fx
+Pmd3 = none
+Pmd3.show = false
+
+[Effect@PSSM4]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\shadow\PSSM4.fx
+Pmd3 = none
+Pmd3.show = false
+
+[Effect@SSAOMap]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2-day\ray-mmd-1.5.2\shadow\SSAO visibility 1.0.fx
+Pmd3 = none
+Pmd3.show = false
+

@@ -1,0 +1,96 @@
+//-----------------------------------------------------------------------------
+//
+
+#if FOG_TYPE == 2 && VOLUMETRIC_FOG > 0
+#define	FOG_SCRIPT	\
+	"RenderColorTarget0=PPPFogMapRT; Pass=VolumeLightPass;"
+
+#define	FOG_PASS	\
+		pass VolumeLightPass < string Script= "Draw=Buffer;"; > { \
+			AlphaBlendEnable = true;	AlphaTestEnable = false; \
+			SrcBlendAlpha = ONE; DestBlendAlpha = ONE; \
+			SrcBlend = ONE; DestBlend = ONE; \
+			ZEnable = false; ZWriteEnable = false; \
+			VertexShader = compile vs_3_0 VS_DrawVolumeLight(); \
+			PixelShader  = compile ps_3_0 PS_DrawVolumeLight(); \
+		}
+#else
+#define	FOG_SCRIPT	
+#define	FOG_PASS	
+#endif
+
+
+#if FOG_TYPE == 2 && VOLUMETRIC_FOG > 0
+
+DECLARE_PARAM(float, mFogIntensityP, "フォグ強度+");
+DECLARE_PARAM(float, mFogIntensityN, "フォグ強度-");
+static float mFogIntensity = exp2((mFogIntensityP - mFogIntensityN) * 4.0 * LOG2_E);
+
+_DECLARE_PARAM(float, mFogPhase, "フォグ視線依存", CONTROLLER_NAME);
+
+
+// フォグ
+shared texture PPPFogMapRT: RENDERCOLORTARGET;
+
+// fog用の共通領域に押し込むべき?
+#define FOG_SLICE_NUM	(FOG_SLICE_SQRT * FOG_SLICE_SQRT)
+static float2 FogSlicePixelSize = floor(ViewportSize / FOG_SLICE_SQRT);
+static int2 view4 = floor(ViewportSize / FOG_SLICE_SQRT);
+
+
+struct VS_OUTPUT_FOG
+{
+	float4 Pos			: POSITION;
+	float4 TexCoord		: TEXCOORD0;
+	float4 TexCoef		: TEXCOORD1;
+	float4 PhaseCoef	: TEXCOORD2;
+};
+
+// 視線による光の散乱率
+float3 CalcMieCoef(float g)
+{
+	float gSq = g * g;
+	return float3(1 - gSq, 1 + gSq, -2*g);
+}
+
+float CalcMiePhase(float3 coef, float c)
+{
+	return coef.x / pow(coef.y + coef.z * c, 1.5);
+}
+
+float3 CalcNormalizedMieCoef()
+{
+	float g = saturate(mFogPhase) * 0.9;
+	float3 coef = CalcMieCoef(g);
+	coef.x *= 1.0 / CalcMiePhase(coef, 1);
+	return coef;
+}
+
+// 光の方向による散乱度
+float GetFogPhase(float3 view, float3 light, float3 coef)
+{
+	return CalcMiePhase(coef, dot(view, light));
+}
+
+
+
+float GetJitterOffset(float2 uv);
+
+// 画面を分割する
+float3 CalcFogInterleavedTexCoord(float2 Tex)
+{
+	float2 iuv = floor(Tex.xy * ViewportSize);
+	float2 iuv4 = round(iuv % view4);
+	float2 i2 = floor(iuv / view4);
+
+	float2 uv = iuv4 * 1.0 / view4 + ViewportOffset;
+	float zorder = i2.x + i2.y * FOG_SLICE_SQRT;
+
+	float2 jitterUv = (iuv4 + 0.5) / NOISE_TEXTURE_SIZE;
+	float jitter = GetJitterOffset(jitterUv);
+	zorder += jitter;
+	zorder = saturate(zorder / (FOG_SLICE_NUM + 1.0));
+
+	return float3(uv, zorder);
+}
+#endif

@@ -1,0 +1,178 @@
+
+
+// 多光源
+#define	DECL_LIGHT(_ctrlName, _name)	\
+	bool _name##_exist		: CONTROLOBJECT < string name = _ctrlName;>; \
+	float4x4 _name##_matW	: CONTROLOBJECT < string name = _ctrlName;>; \
+	float _name##_r : CONTROLOBJECT < string name = _ctrlName; string item = "Rx"; >; \
+	float _name##_g : CONTROLOBJECT < string name = _ctrlName; string item = "Ry"; >; \
+	float _name##_b : CONTROLOBJECT < string name = _ctrlName; string item = "Rz"; >; \
+	float _name##_si : CONTROLOBJECT < string name = _ctrlName; string item = "Si"; >; \
+	float _name##_tr : CONTROLOBJECT < string name = _ctrlName; string item = "Tr"; >; \
+	static float _name##_range = 10.0 / _name##_si; \
+	static float3 _name##_color = float3(_name##_r, _name##_g, _name##_b) * _name##_exist * _name##_tr * 16.0;
+
+DECL_LIGHT("PPointLight1.x", PointLight1)
+DECL_LIGHT("PPointLight2.x", PointLight2)
+DECL_LIGHT("PPointLight3.x", PointLight3)
+
+
+inline float3 CalcFresnel(float NV, float3 F0)
+{
+	float fc = pow(max(1 - NV, 1e-5), 5);
+	return (1.0 - F0) * fc + F0;
+}
+
+inline float CalcLightFalloff(float distance, float invRadius)
+{
+	// 適当なフォールオフ
+	float d = distance * invRadius;
+	float n = max(1.0 - pow(d, 4), 0);
+	return n / (d * d + 1.0);
+}
+
+inline float CalcPointLight(float3 pos, float3 N, float4x4 mat, float range)
+{
+	float3 l = mat._41_42_43 - pos;
+	float falloff = CalcLightFalloff(length(l), range);
+	return max(dot(N, normalize(l)), 0) * falloff;
+}
+
+inline float3 CalcMultiLight(float3 pos, float3 N)
+{
+	float d1 = CalcPointLight(pos, N, PointLight1_matW, PointLight1_range);
+	float d2 = CalcPointLight(pos, N, PointLight2_matW, PointLight2_range);
+	float d3 = CalcPointLight(pos, N, PointLight3_matW, PointLight3_range);
+	return PointLight1_color * d1 + PointLight2_color * d2 + PointLight3_color * d3;
+}
+
+
+float3 CalcPointLightSpecular(float3 pos, float4x4 mat, float range, float3 N, float3 V, float a, float3 f0)
+{
+	float3 l = mat._41_42_43 - pos;
+	float falloff = CalcLightFalloff(length(l), range);
+
+	// TODO: 距離に応じて、smoothnessを弄る
+
+	float3 L = normalize(l);
+	float3 H = normalize(L + V);
+
+	float NH = saturate(dot(N, H));
+	float NL = saturate(dot(N, L));
+	float LH = saturate(dot(L, H));
+
+	float CosSq = (NH * NH) * (a - 1) + 1;
+	float D = a / (CosSq * CosSq); // MEMO: 正規化項の1.0/PIを削っている。
+
+	float3 F = CalcFresnel(LH, f0);
+
+	float k2 = a * a * 0.25;	// = (a * 0.5)^2
+	float vis = (1.0/4.0) / (LH * LH * (1 - k2) + k2);
+	return saturate(NL * D * F * vis) * falloff;
+}
+
+inline float3 CalcMultiLightSpecular(float3 pos, float3 N, float3 V, float smoothness, float3 f0)
+{
+	float a = max(1 - smoothness, 1e-3);
+	a *= a;
+
+	float3 d1 = CalcPointLightSpecular(pos, PointLight1_matW, PointLight1_range, N, V, a, f0);
+	float3 d2 = CalcPointLightSpecular(pos, PointLight2_matW, PointLight2_range, N, V, a, f0);
+	float3 d3 = CalcPointLightSpecular(pos, PointLight3_matW, PointLight3_range, N, V, a, f0);
+	return PointLight1_color * d1 + PointLight2_color * d2 + PointLight3_color * d3;
+}
+
+// 反射度を計算する (AmbientBRDFの代わり)
+inline float3 CalcReflectance(MaterialParam mat, float3 N, float3 V, float3 f0)
+{
+	float NV = abs(dot(N,V));
+	float3 f = CalcFresnel(NV, f0);
+	float roughness = max(1.0 - mat.smoothness, 1.0e-4);
+	float g = 1.0 / pow(2, roughness * 4.0); // ラフなほど暗くなる
+	return saturate(f) * g * mat.intensity;
+}
+
+inline float CalcDiffuse(float3 L, float3 N, float3 V, float smoothness)
+{
+	float roughness = (1 - smoothness);
+	float sigma2 = roughness * roughness;
+
+	// A tiny improvement of Oren-Nayar reflectance model
+	float NL = saturate(dot(N ,L));
+	float NV = abs(dot(N, V)+1e-5);
+	float s = max(dot(L,V),0) - NL * NV;
+	float st = (s <= 0.0) ? s : (s / (max(NL,NV)+1e-6));
+//	float A = 1.0 / ((PI * 0.5 - 2.0/3.0) * sigma2 + PI);
+	float A = 1 / ((0.5 - 2.0/3.0/PI) * sigma2 + 1);  // MEMO: 正規化分を戻す。
+	float B = sigma2 * A;
+	float result = NL * (A + B * st);
+
+	return saturate(result);
+}
+
+// 逆光による光の透過
+inline float CalcBackLight(float3 L, float3 N, float3 V)
+{
+	const float Distortion = 0.2;
+	float3 bentL = N * Distortion + -L; // 法線方向に向ける
+	float backlight = dot(V, bentL) * 0.5 + 0.5;
+	return saturate(backlight);
+}
+
+// 環境マップから環境光を取得
+float3 CalcIndirectlight(float3 L, float3 N, float3 V, float2 texCoord, MaterialParam mat, float shadow)
+{
+	float3 ambient = GetEnvColor(N, 0.1);
+
+	// 反射色を環境光として扱う (SSR前に金属の色を確定させるため)
+	float3 R = normalize(reflect(-V, N));
+	float3 refcol = GetEnvColor(R, mat.smoothness);
+	float3 speccol = tex2D( ColorMap, texCoord).rgb;
+	refcol *= speccol;
+		// 光の方向と一致しているならシャドウマップの影響を受ける?
+	ambient = lerp(ambient, refcol, mat.metalness);
+
+	// 遮蔽項を考慮
+	float4 ambientOccu = GetSSAOFull(texCoord);
+	ambient = ambient * ambientOccu.w + ambientOccu.rgb;
+
+	return ambient * lerp(AmbientScale, ReflectionScale, mat.metalness);
+}
+
+// 拡散反射項の計算
+float4 PS_CalcDiffuse( float4 Tex: TEXCOORD0 ) : COLOR
+{
+	float2 texCoord = Tex.xy;
+
+	MaterialParam mat = GetMaterial(texCoord);
+	GeometryInfo geom = GetWND(texCoord);
+
+	float3 V = normalize(CameraPosition - geom.wpos);
+	float3 L = -LightDirection;
+	float3 N = geom.nd.normal;
+
+	float2 shadowInfo = tex2D(ShadowmapSamp, texCoord).xy;
+	float shadow = shadowInfo.x;
+	float translucence = shadowInfo.y * mat.sssValue;
+
+	float diffuse = CalcDiffuse(L, N, V, mat.smoothness);
+	float backlightintensity = CalcBackLight(L, N, V);
+	backlightintensity *= (translucence * (1 - diffuse));
+	float3 sssColor = tex2D(AlbedoSamp, texCoord).rgb;
+	float3 backlight = backlightintensity * sssColor;
+	float3 directlight = (diffuse * shadow + backlight) * LightColor;
+	directlight += CalcMultiLight(geom.wpos, N);
+
+	float3 indirectlight = CalcIndirectlight(L, N, V, texCoord, mat, shadow);
+	float3 light = directlight * (1.0 - mat.metalness) + indirectlight;
+
+	#if SSSBlurCount > 0
+	// SSS用の重み：距離と画面サイズの影響を受ける
+	float weight = mat.sssValue * saturate(ViewportSize.y * 0.05 / geom.nd.depth);
+	return float4(light, saturate(weight * SSSScale));
+	#else
+	return float4(light, shadow);
+	#endif
+}
+
+

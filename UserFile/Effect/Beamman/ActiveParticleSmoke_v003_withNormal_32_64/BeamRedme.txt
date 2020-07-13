@@ -1,0 +1,13 @@
+ActiveParticleSmoke_withNormal,ActiveParticleSmokeHG_withNormal
+ベース：針金P
+改変：ビームマンP
+
+-概要-
+何かちょっとリッチなアクティブパーティクル
+基本操作は針金さんのReadme参照
+
+
+-注意事項-
+1:AutoLuminous系エフェクトとの併用を前提にしています
+2:物凄く重いです。PCが爆発しても責任は取れません。
+3:HG版はさらに重いです。覚悟してからご使用ください。

@@ -1,0 +1,271 @@
+// ikPolish用の設定ファイル
+
+// ※ MMD起動中にこのファイルを変更後、更新内容を反映させるには
+// MMEffectメニューから「全て更新」を選択する必要があります。
+
+
+// 品質レベル
+#define	QUALITY_LEVEL	1
+// 0: 低い (高速)
+// 1: 普通
+// 2: 高い (低速)
+// 3: カスタマイズ用
+
+//-------------------------------------------------------------
+#if QUALITY_LEVEL == 0
+// ※ 各パラメータの意味はカスタムレベルの項で説明しています。
+
+#define SHADOW_QUALITY	1
+#define ENABLE_LSM		0
+#define	RLRRayCount		16
+#define	RLRRayCount2	0
+#define PLANAR_REFLECTION	0
+#define	SSSBlurCount	16
+#define SSAO_QUALITY	1
+#define	SSAORayCount	16
+#define	ENABLE_SSGI		0
+#define RSMCount		0
+#define ENV_MIPMAP		0
+#define EXTRA_LIGHTS	0
+#define	FOG_TYPE		0
+#define	FOG_QUALITY		1
+#define	REFRACTION_TYPE	0
+
+//-------------------------------------------------------------
+#elif QUALITY_LEVEL == 1
+
+#define SHADOW_QUALITY	2
+#define ENABLE_LSM		0
+#define	RLRRayCount		24
+#define	RLRRayCount2	16
+#define PLANAR_REFLECTION	0
+#define	SSSBlurCount	16
+#define SSAO_QUALITY	1
+#define	SSAORayCount	16
+#define	ENABLE_SSGI		0
+#define RSMCount		0
+#define ENV_MIPMAP		1
+#define EXTRA_LIGHTS	1
+#define	FOG_TYPE		1
+#define	FOG_QUALITY		2
+#define	REFRACTION_TYPE	1
+
+//-------------------------------------------------------------
+#elif QUALITY_LEVEL == 2
+
+#define SHADOW_QUALITY	3
+#define ENABLE_LSM		1
+#define	RLRRayCount		32
+#define	RLRRayCount2	32
+#define PLANAR_REFLECTION	0
+#define	SSSBlurCount	32
+#define SSAO_QUALITY	2
+#define	SSAORayCount	24
+#define	ENABLE_SSGI		1
+#define RSMCount		16
+#define ENV_MIPMAP		1
+#define EXTRA_LIGHTS	1
+#define	FOG_TYPE		1
+#define	FOG_QUALITY		3
+#define	REFRACTION_TYPE	1
+
+//-------------------------------------------------------------
+#else
+// カスタマイズ用
+
+// シャドウマップのクオリティ：数字を高くするほどメモリを食う
+#define SHADOW_QUALITY	3
+// 1: 低品質：MMD標準相当
+// 2: 標準：MMD美影モード相当
+// 3: 高品質
+// シャドウの細かい設定は shadows/shadow_commons.fxsub 内にもあります。
+
+// ローカルシャドウ。小さな影がより正確になる
+#define ENABLE_LSM		1	// 0:無効、1:有効。
+
+// 映り込み
+#define	RLRRayCount		32	// 飛ばすレイの本数 (0:無効, 8～64程度)
+#define	RLRRayCount2	32	// 飛ばすレイの本数 (0:無効, 8～64程度)
+#define PLANAR_REFLECTION	1	// 床の反射で専用の描画を行う 0:無効、1:有効
+
+#define	SSSBlurCount	32	// 0:SSSのブラー無効。8～32:有効。
+
+// 遮蔽度
+// SSAOのクオリティ：数字を高くするほどメモリを食う
+#define SSAO_QUALITY	3
+// 1: 低品質	(マテリアル用の深度でAOを計算)
+// 2: 標準		(AO専用の深度を追加)
+// 3: 高品質	(AO専用の深度(高精度)を追加)
+
+#define	SSAORayCount	16	// 飛ばすレイの本数 (0:無効, 8～64程度。多いほど重くなる。)
+
+// 間接光1 (Screen Space Global Illumination)
+#define	ENABLE_SSGI		1	// GIモドキを有効にする。(0:無効、1:有効)
+
+// 間接光2 (Reflective Shadow Map)
+#define RSMCount		16	// 飛ばすレイの本数 (0:無効, 16～64程度)
+
+// 環境マップ用のミップマップを作成する
+#define ENV_MIPMAP		1
+
+// 追加のライトを有効にする
+#define EXTRA_LIGHTS	1
+
+// フォグのタイプを設定。
+// 0: フォグ無効
+// 1: 簡易深度フォグ(空気遠近)
+// 2: ボリュームフォグ
+#define	FOG_TYPE		2
+
+// ボリュームフォグの品質
+#define	FOG_QUALITY		3
+// 1: 低品質
+// 2: 標準
+// 3: 高品質
+
+
+// 屈折表現用のマップの種類
+#define	REFRACTION_TYPE	2
+// 0: 生成しない
+// 1: mipmapによる簡易版
+// 2: 高品質
+
+#endif
+
+
+//-----------------------------------------------------------------------------
+// 
+
+// コントローラ名
+#define CONTROLLER_NAME		"ikPolishController.pmx"
+
+// コントローラがない場合のデフォルト値
+float DefaultLightScale = 1.0;		// 直接光(=ライトの強さ)のデフォルト値
+float DefaultAmbientScale = 1.0;	// 間接光(=周囲の明るさ)のデフォルト値
+float DefaultAmbientPower = 1.0;	// SSAOの強さのデフォルト値
+float DefaultReflectionScale = 1.0;	// 映り込み(の強さ)のデフォルト値
+float DefaultSSSScale = 1.0;		// 皮下散乱のボカし強度
+float DefaultGIScale = 1.0;			// デフューズ反射のデフォルト強度
+float DefaultShadowScale = 0.1;		// 影のボカし度合いのデフォルト強度
+
+// ALのスケール値を参照する場合のアクセサリの名前
+// 参照しない場合は、AL_NAMEごとコメントアウトする
+//#define AL_NAME		"AutoLuminous.x"
+#define AL_NAME		"AL4Polish.x"
+
+
+//-------------------------------------------------------------
+// 外部ライト用の設定
+
+// ライトの角度 (degree)
+#define LightAngleMin	10
+#define LightAngleMax	60		// 90度未満にすること
+
+// ライトの最大距離
+// コントローラから仮想光源までの距離。(1.0 MMD unit ≒ 0.1m)
+#define LightShadowDistance	(500.0)
+
+// ライトの最大強度
+#define MaxLightIntensity	8
+
+
+//-------------------------------------------------------------
+// その他の設定
+
+// マテリアル用の半透明の閾値。
+// この値以下の半透明度ならマテリアル的には透明扱いにする。
+#define AlphaThreshold	0.5
+
+// 半透明素材の光の吸収度合い。(1.0～10.0。小さいと肌に落ちる影が薄くなる)
+const float ThicknessScale = 10.0;
+
+
+#define	ENABLE_DOUBLE_SIDE_SHADOW	0	// 片面ポリゴンの裏面も影とみなす
+
+// シャドウバッファのサイズ
+#if SHADOW_QUALITY < 2
+#define SHADOW_TEX_SIZE 2048
+#elif SHADOW_QUALITY == 2
+#define SHADOW_TEX_SIZE 4096
+#else
+#define SHADOW_TEX_SIZE 8192
+#endif
+
+#define LSMCount		16			// ローカルシャドウの探索ステップ数。8-24程度。
+const float DepthLength = 20.0;	// SSAOの影響を与える距離。(1MMD単位は約8cm?)
+
+// SSAOの深度の描画スケール。
+const float GIFrameScale = 1.0 / 1.25;
+
+
+//-------------------------------------
+// 間接光
+#define RSM_TEX_SIZE	256	// テクスチャサイズ
+#define RSMRadius		20	// チェック距離。MMD単位。10≒1m
+
+
+//-------------------------------------
+// 反射
+// ボカしのサンプル数(0～最大8)。0でボカしオフ
+#define RLRBlurCount	8
+
+// 平面反射でシャドウマップを考慮する
+#define ENABLE_REFLECTION_SHADOW	0
+// 鏡面の起点はコントローラの"平面反射"ボーンか、
+// コントローラが無い場合は原点になる。
+
+
+//-------------------------------------
+// 環境マップ
+
+// 環境マップの解像度(256～1024程度。2のべき乗がよい。)
+// 大きいほど映り込み画像のディテールがはっきりする
+#define ENV_WIDTH		512
+
+// 環境マップのMIPMAPを作る場合のサンプル数。多いほど正確で重い。(16～32程度)
+#define	ENV_BLUR_STEP	16
+
+
+//-------------------------------------
+// フォグ
+
+// 簡易深度フォグ
+#define	FOG_DISTANCE_MIN	100.0
+#define	FOG_DISTANCE_MAX	5000.0
+
+// ボリュームフォグ
+// (開始と終了の距離が離れるほど精度が落ちる)
+//#define MIN_FOG_DISTANCE	0.0		// ボリュームフォグの開始深度。
+#define MAX_FOG_DISTANCE	500.0	// ボリュームフォグの終了深度。
+#define ENABLE_FOG_NOISE	0		// フォグにノイズを付加するか? 0:無効、1:有効
+#define ENABLE_MAIN_LIGHT_FOG	1	// メインライトがフォグの影響を受ける 0:無効、1:有効
+
+
+// フォグの品質
+#if FOG_QUALITY < 2
+#define FOG_SLICE_SQRT		4		// フォグレイヤーの分割数の平方根 (4 or 8)
+#define MAX_FOG_STEP		1		// フォグ探索のためのレイの本数。1～8程度。
+#elif FOG_QUALITY == 2
+#define FOG_SLICE_SQRT		4
+#define MAX_FOG_STEP		4
+#else
+#define FOG_SLICE_SQRT		8
+#define MAX_FOG_STEP		4
+#endif
+
+
+//-------------------------------------------------------------
+// 
+
+float CalcMorphValue(float plusValue, float minusValue, float defaultValue)
+{
+	float v = plusValue - minusValue + 1.0;
+	return ((v <= 1.0) ? v : ((v - 1.0) * 4.0 + 1.0)) * defaultValue;
+}
+
+float CalcLightValue(float plusValue, float minusValue, float defaultValue)
+{
+	return CalcMorphValue(plusValue, minusValue, defaultValue) * (255.0 / 154.0);
+}
+
+

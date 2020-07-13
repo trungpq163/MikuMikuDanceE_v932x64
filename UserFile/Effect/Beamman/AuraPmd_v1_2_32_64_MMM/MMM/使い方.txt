@@ -1,0 +1,29 @@
+PMD版オーラ for MMM
+ビームマンP
+
+使い方
+AuraPmd1.pmd を先に読み込む　次に AuraPmd1.fxを読み込む AuraPmd1.xは放置で
+AuraPmd1.pmdの表情、座標で操作
+
+AuraPmd1.fxのエフェクトコントロール部でも一部操作可
+
+
+複数読み込みたい場合の操作
+
+AuraPmd2.pmd と AuraPmd2.fxを読み込むことで複数操作可能
+
+AuraPmd"x" の数字分増やせる!!
+
+とりあえず3個入れときますね！
+
+
+---さらに増やしたい場合---
+
+1:AuraPmd1.pmdをコピーして、AuraPmd"好きな数字".pmdにリネーム
+2:AuraPmd1.fxをコピーして、上で決めた名前.fxにリネーム
+3:AuraPmd1.xもコピーして、上で決めた名前.xにリネーム
+3:コピー、リネームしたfxファイルを開いて、上の方にある
+
+#define CONTROLLERNAME "AuraPmd1.pmd"←ここを決めた名前.pmdに編集
+
+4:後は普通の使い方通り

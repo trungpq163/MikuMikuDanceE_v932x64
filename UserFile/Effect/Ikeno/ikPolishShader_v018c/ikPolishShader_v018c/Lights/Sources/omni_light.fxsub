@@ -1,0 +1,151 @@
+//-----------------------------------------------------------------------------
+// ポイントライト・スフィアライトでの共通処理
+
+//-----------------------------------------------------------------------------
+
+// オクタヘドロンの描画範囲を調整
+// mipmapを使わないなら中央部分だけを生成すればよい
+// PCFで少しはみ出す分をマージンとして考慮
+#define ShadowOctahedronScale 	((SHADOW_BUFSIZE + (3 * 2.0 + 2) * 2.0) / (SHADOW_BUFSIZE * 2))
+
+//-----------------------------------------------------------------------------
+
+#if EnableShadowMap > 0
+// 4面体
+texture LightSpaceDepth: OFFSCREENRENDERTARGET <
+	string Description = SHADOW_RT_DESCRIPTION;
+	string Format = "R32F";
+	int Width = SHADOW_BUFSIZE;
+	int Height = SHADOW_BUFSIZE;
+	int Miplevels = 1;
+	bool AntiAlias = false;
+	float4 ClearColor = { 1.0, 0, 0, 0 };
+	float ClearDepth = 1.0;
+	string DefaultEffect = 
+		"self = hide;"
+		"*.pmx = " SHADOW_FX_FILE ";"
+		"*.pmd = " SHADOW_FX_FILE ";"
+		"*.x = " SHADOW_FX_FILE ";"
+		"* = hide;" 
+	;
+>;
+sampler LightDepthSamp = sampler_state {
+	texture = <LightSpaceDepth>;
+	AddressU = WRAP; AddressV = CLAMP;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+};
+
+// 8面体
+texture ShadowMap: RENDERCOLORTARGET <
+	int Width = SHADOW_BUFSIZE;
+	int Height = SHADOW_BUFSIZE;
+	string Format = "R32F";
+	int MipLevels = 1;
+>;
+sampler ShadowMapSamp = sampler_state {
+	texture = <ShadowMap>;
+	AddressU = CLAMP; AddressV = CLAMP;
+	MinFilter = LINEAR;	MagFilter = LINEAR;	MipFilter = NONE;
+};
+
+#if ShadowSampleCount > 0
+texture2D NoiseTex <
+	string ResourceName = "../Sources/Assets/noise.png";
+	int MipLevels = 1;
+>;
+sampler NoiseSamp = sampler_state {
+	texture = <NoiseTex>;
+	MinFilter = POINT;	MagFilter = POINT;	MipFilter = NONE;
+	AddressU  = WRAP;	AddressV  = WRAP;
+};
+#endif
+#endif
+
+
+#if EnableShadowMap > 0 || EnableLighTexture > 0
+texture DepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+#if EnableShadowMap > 0 && EnableLighTexture > 0
+	#if SHADOW_BUFSIZE > TextureSize * 2
+		int Width = SHADOW_BUFSIZE;
+		int Height = SHADOW_BUFSIZE;
+	#else
+		int Width = TextureSize * 2;
+		int Height = TextureSize * 2;
+	#endif
+#elif EnableShadowMap > 0
+	int Width = SHADOW_BUFSIZE;
+	int Height = SHADOW_BUFSIZE;
+#else
+	int Width = TextureSize * 2;
+	int Height = TextureSize * 2;
+#endif
+>;
+#endif
+
+//-----------------------------------------------------------------------------
+//
+#if EnableShadowMap > 0
+VS_OUTPUT VS_ConstructShadow( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.TexCoord.xy = Tex.xy + 0.5 / (SHADOW_BUFSIZE);
+	return Out;
+}
+
+float4 PS_ConstructShadow( float2 Tex: TEXCOORD0 ) : COLOR
+{
+	// Octahedronの作成エリアを調整
+	Tex = (Tex * 2 - 1) * ShadowOctahedronScale * 0.5 + 0.5;
+
+	float3 N = DecodeOctahedron( Tex );
+	float4 uv = GetTetrahedronUV(N);
+	float z = tex2Dlod(LightDepthSamp, uv).x;
+	return float4(z, 0, 0, 1);
+}
+#endif
+
+
+float CalcShadow(float4 WPos, float nl, float2 ppos)
+{
+#if EnableShadowMap > 0
+	float bias = -0.5 - (1.0 - abs(nl));
+	float receiver = distance(WPos.xyz, LightPosition);
+
+	float3 v = normalize(WPos.xyz - LightPosition);
+	float4 coord = float4(EncodeOctahedron(v), 0,0);
+	coord.xy = (coord.xy * 2 - 1) / ShadowOctahedronScale * 0.5 + 0.5;
+
+#if ShadowSampleCount == 0
+	float blocker = tex2Dlod(ShadowMapSamp, coord).x * PROJ_FAR;
+	float comp = CalcShadowRate(blocker, receiver, bias);
+#else
+
+	float ang = tex2D(NoiseSamp, ppos.xy * ViewportSize / 16.0).x;
+	float2 sc;
+	sincos(ang * PI * 0.5, sc.x, sc.y);
+	sc *= 2.0 / SHADOW_BUFSIZE;
+	#if ShadowSampleCount > 3
+	sc *= (3 / ShadowSampleCount);
+	#endif
+	float2x2 mat = {sc.y,-sc.x, sc.xy};
+
+	float sum = 0;
+	for(int x = -ShadowSampleCount; x <= ShadowSampleCount; x++){
+		for(int y = -ShadowSampleCount; y <= ShadowSampleCount; y++){
+			float4 coord1 = coord;
+			coord1.xy += mul(float2(x,y), mat);
+			float biasOffset = length(float2(x,y)) + 1.0;
+			float blocker = tex2Dlod(ShadowMapSamp, coord1).x * PROJ_FAR;
+			sum += CalcShadowRate(blocker, receiver, bias * biasOffset);
+		}
+	}
+	float comp = sum / ((ShadowSampleCount*2+1) * (ShadowSampleCount*2+1));
+
+#endif
+	return comp;
+#else
+	return 1;
+#endif
+}

@@ -1,0 +1,681 @@
+//パラメータ
+
+// 光源側のフォグの色の設定
+// 0: MMMのライト色
+// 1: カスタム色1を使用
+// 2: カスタム色2を使用
+// 3: カスタム色3を使用
+// 4: カスタム色4を使用
+// 5: 透明 (黒透明。float(0,0,0,0))
+// 6: 透明 (白透明。float(1,1,1,0))
+int TOP_COLOR_MODE1
+<
+   string UIHelp = "光源側のフォグの色の設定";
+   string UIName = "TOP_COLOR_MODE1";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   int UIMin = 0;
+   int UIMax = 6;
+> = 0;
+
+int TOP_COLOR_MODE2
+<
+   string UIHelp = "光源側のフォグの色の設定";
+   string UIName = "TOP_COLOR_MODE2";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   int UIMin = 0;
+   int UIMax = 6;
+> = 0;
+
+int TOP_COLOR_MODE3
+<
+   string UIHelp = "光源側のフォグの色の設定";
+   string UIName = "TOP_COLOR_MODE3";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   int UIMin = 0;
+   int UIMax = 6;
+> = 0;
+
+int BOTTOM_COLOR_MODE
+<
+   string UIHelp = "光源と反対側のフォグの色の設定";
+   string UIName = "BOTTOM_COLOR_MODE";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   int UIMin = 0;
+   int UIMax = 6;
+> = 5;
+
+
+// カスタム色
+float4 CUSTOM_COLOR1
+<
+   string UIName = "CustomColor1";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+> = float4(1.0, 1.0, 1.0, 1.0);
+
+float4 CUSTOM_COLOR2
+<
+   string UIName = "CustomColor2";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+> = float4(1.0, 1.0, 1.0, 1.0);
+
+float4 CUSTOM_COLOR3
+<
+   string UIName = "CustomColor3";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+> = float4(1.0, 1.0, 1.0, 1.0);
+
+float4 CUSTOM_COLOR4
+<
+   string UIName = "CustomColor4";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+> = float4(1.0, 1.0, 1.0, 1.0);
+
+
+// フォグと元画面の合成方法
+// 0: 加算：光を足しこむ(色がマイナス値だと引くことになる)
+// 1: 乗算：暗くなる
+// 2: オーバーレイ：明るいときは足し、暗いときは乗算
+// 3: 塗りつぶし：微妙
+int COLOR_MODE
+<
+   string UIHelp = "フォグと元画面の合成方法";
+   string UIName = "COLOR_MODE";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   int UIMin = 0;
+   int UIMax = 3;
+> = 0;
+
+
+// 調査する奥行きの最大距離
+// 遠くまでチェックするほど精度が悪くなります。
+float MaxDistance
+<
+   string UIHelp = "調査する奥行きの最大距離";
+   string UIName = "MaxDistance";
+   string UIWidget = "Slider";
+   bool UIVisible =  true;
+   float UIMin = 10.0;
+   float UIMax = 500.0;
+> = 200.0;
+
+// 1ピクセルあたりの調査回数。多いほど正確になりますが、重くなります。
+int MaxDiv
+<
+   string UIHelp = "1ピクセルあたりの調査回数";
+   string UIName = "MaxDiv";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   int UIMin = 4;
+   int UIMax = 64;
+> = 16;
+
+// 手前の調査を無視する数。
+// カメラ付近はチェックするだけ無駄なので。
+// (画面奥までの距離 / (MaxDiv + StepOffset) ずつ、光が当たるかチェックする)
+int StepOffset
+<
+   string UIHelp = "手前の調査を無視する数";
+   string UIName = "StepOffset";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   int UIMin = 0;
+   int UIMax = 64;
+> = 2;
+
+float ShadowEmphasis
+<
+   string UIHelp = "影を強調する度合い";
+   string UIName = "ShadowEmphasis";
+   string UIWidget = "Slider";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = 0.01;
+
+
+// 光源の角度を考慮するとき、直線的(true)なグラデにするか、円形グラデ(false)にするか
+// アクセサリのZを1にすると違いが判る。
+bool USE_FLAT_DIRECTION
+<
+   string UIHelp = "光源の角度を考慮するとき、直線的なグラデにするか?";
+   string UIName = "USE_FLAT_DIRECTION";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+> = false;
+
+// ボカす量。0:ボカしなし(ボカし処理自体は常に行うので、0でも軽くはならない)
+float BlurSize
+<
+   string UIName = "BlurSize";
+   string UIWidget = "Slider";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 2.0;
+> = 1.0;
+
+// テスト用
+bool TestMode1
+<
+   string UIHelp = "ライト1の途中結果を表示する";
+   string UIName = "Test1";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+> = false;
+
+bool TestMode2
+<
+   string UIHelp = "ライト2の途中結果を表示する";
+   string UIName = "Test2";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+> = false;
+
+bool TestMode3
+<
+   string UIHelp = "ライト3の途中結果を表示する";
+   string UIName = "Test3";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+> = false;
+
+// 複数ライトを使用するか?
+#define ENABLE_MULTILIGHT	1
+
+// バッファサイズ。2のべき乗(1,2,4など)にする。
+// 大きい数値ほどボケる。画質を犠牲に計算が速くなる。
+#define BUFFER_SCALE	2
+
+
+//#define SHADOWMAP_SIZE		1024
+#define SHADOWMAP_SIZE		4096
+
+
+//******************設定はここまで
+
+// ライトの強度：0.1～10程度。大きいと白とびする
+float LightScale : CONTROLOBJECT < string name = "(self)"; string item = "Si"; >;
+
+// エフェクト全体の強度
+// 0: エフェクトオフ、1：標準
+float EffectScale : CONTROLOBJECT < string name = "(self)"; string item = "Tr"; >;
+
+// ライトの減衰率(フォールオフの強さ)
+// -1:減らない。 1:かなり減る
+float LightScale2 : CONTROLOBJECT < string name = "(self)"; string item = "X"; >;
+
+// 光源の角度に対する影響度(-1～1)
+float AngleRate : CONTROLOBJECT < string name = "(self)"; string item = "Y"; >;
+
+//テクスチャフォーマット
+#define TEXFORMAT "D3DFMT_A16B16G16R16F"
+
+// 何も描画しないときの奥行き。
+#define FAR_Z	1000
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define TEXBUFFRATE {1.0/BUFFER_SCALE, 1.0/BUFFER_SCALE}
+
+// ぼかし処理の重み係数：
+//	ガウス関数 exp( -x^2/(2*d^2) ) を d=5, x=0～7 について計算したのち、
+//	(WT_7 + WT_6 + … + WT_1 + WT_0 + WT_1 + … + WT_7) が 1 になるように正規化したもの
+#define  WT_0  0.0920246
+#define  WT_1  0.0902024
+#define  WT_2  0.0849494
+#define  WT_3  0.0768654
+#define  WT_4  0.0668236
+#define  WT_5  0.0558158
+#define  WT_6  0.0447932
+#define  WT_7  0.0345379
+
+#define	PI	(3.14159265359)
+
+float Script : STANDARDSGLOBAL <
+	string ScriptOutput = "color";
+	string ScriptClass = "scene";
+	string ScriptOrder = "postprocess";
+> = 0.8;
+
+// スクリーンサイズ
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+static float2 ViewportOffset = (float2(0.5,0.5)/ViewportSize.xy);
+
+float4x4 matP		: PROJECTION;
+float4x4 matV		: VIEW;
+float4x4 matVP		: VIEWPROJECTION;
+float4x4 matVPInv	: VIEWPROJECTIONINVERSE;
+float4x4 matLightWVP	: WORLDVIEWPROJECTION < string Object = "Light"; >;
+
+float3	CameraPosition	: POSITION  < string Object = "Camera"; >;
+float3	CameraDirection : DIRECTION < string Object = "Camera"; >;
+
+float4x4 LightWVPMatrices[MMM_LightCount]	: LIGHTWVPMATRICES;	// 座標変換行列
+float3   LightPositions[MMM_LightCount]		: LIGHTPOSITIONS;	// ライト位置
+float3   LightDirections[MMM_LightCount]	: LIGHTDIRECTIONS;
+float    LightZFars[MMM_LightCount]		: LIGHTZFARS;		// ライトzFar値
+//float3	LightDiffuses[MMM_LightCount]		: LIGHTDIFFUSECOLORS;
+float3	LightAmbients[MMM_LightCount]		: LIGHTAMBIENTCOLORS;
+
+bool	 parthf;   // パースペクティブフラグ
+bool	 transp;   // 半透明フラグ
+bool	 spadd;	// スフィアマップ加算合成フラグ
+#define SKII1	1500
+#define SKII2	8000
+
+static float2 SampStep = (float2(BlurSize, BlurSize) / (ViewportSize.xx / BUFFER_SCALE));
+
+float2 Calc2DDirection(float3 dir, float dist)
+{
+	float4 ProjPos = mul( dir * dist, matVP);
+	float2 Pos = ProjPos.xy / ProjPos.w;
+	Pos.x *= (ViewportSize.x / ViewportSize.y);
+	return normalize(Pos.xy) * sign(ProjPos.z);
+}
+
+static const float FakeLightDistance = 100;
+static float2 Light2DDirs[MMM_LightCount] = {
+	Calc2DDirection(-LightDirections[0], FakeLightDistance),
+	Calc2DDirection(-LightDirections[1], FakeLightDistance),
+	Calc2DDirection(-LightDirections[2], FakeLightDistance)
+};
+
+static float3 LightAngles2 = float3(
+	abs(dot(CameraDirection, LightDirections[0])) * 2.0,
+	abs(dot(CameraDirection, LightDirections[1])) * 2.0,
+	abs(dot(CameraDirection, LightDirections[2])) * 2.0);
+
+static float4 ColorList[6] = {
+	CUSTOM_COLOR1,
+	CUSTOM_COLOR2,
+	CUSTOM_COLOR3,
+	CUSTOM_COLOR4,
+	float4(0,0,0,0),
+	float4(1,1,1,0),
+};
+
+inline float4 GetColor(int mode, int index)
+{
+	return (mode <= 0)
+		? float4(LightAmbients[index].rgb, 1)
+		: ColorList[mode - 1];
+}
+
+
+// レンダリングターゲットのクリア値
+float4 ClearColor = {1,1,1,1};
+float ClearDepth  = 1.0;
+
+
+// オリジナルの描画結果を記録するためのレンダーターゲット
+texture2D ScnMap : RENDERCOLORTARGET <
+	int MipLevels = 1;
+	string Format = "D3DFMT_A16B16G16R16F";
+>;
+sampler2D ScnSamp = sampler_state {
+	texture = <ScnMap>;
+	MinFilter = LINEAR;
+	MagFilter = LINEAR;
+	MipFilter = LINEAR;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+
+texture2D DepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+>;
+
+//
+texture2D ScnMap1 : RENDERCOLORTARGET <
+	int MipLevels = 1;
+	float2 ViewportRatio = TEXBUFFRATE;
+	string Format = TEXFORMAT;
+>;
+sampler2D ScnSamp1 = sampler_state {
+	texture = <ScnMap1>;
+	MinFilter = LINEAR;
+	MagFilter = LINEAR;
+	MipFilter = LINEAR;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+
+texture2D ScnMap2 : RENDERCOLORTARGET <
+	int MipLevels = 1;
+	float2 ViewportRatio = TEXBUFFRATE;
+	string Format = TEXFORMAT;
+>;
+sampler2D ScnSamp2 = sampler_state {
+	texture = <ScnMap2>;
+	MinFilter = LINEAR;
+	MagFilter = LINEAR;
+	MipFilter = LINEAR;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+
+
+//-----------------------------------------------------------------------------
+// 深度マップ
+//
+//-----------------------------------------------------------------------------
+texture LinearDepthMapRT: OFFSCREENRENDERTARGET <
+	string Description = "OffScreen RenderTarget for ikSunshaft";
+	float4 ClearColor = { 1, 0, 0, 1 };
+	float2 ViewportRatio = TEXBUFFRATE;
+	float ClearDepth = 1.0;
+	string Format = TEXFORMAT;
+	bool AntiAlias = true;
+	string DefaultEffect = 
+		"self = hide;"
+		"* = ikLinearDepth.fx";
+>;
+
+sampler DepthMap = sampler_state {
+	texture = <LinearDepthMapRT>;
+	AddressU = CLAMP;
+	AddressV = CLAMP;
+	MinFilter = LINEAR;
+	MagFilter = LINEAR;
+	MipFilter = LINEAR;
+};
+
+//-----------------------------------------------------------------------------
+// 固定定義
+//
+//-----------------------------------------------------------------------------
+struct VS_OUTPUT {
+	float4 Pos			: POSITION;
+	float2 TexCoord		: TEXCOORD0;
+	float2 TexCoord2	: TEXCOORD1;
+};
+
+
+//-----------------------------------------------------------------------------
+// 共通のVS
+VS_OUTPUT VS_SetTexCoord( float4 Pos : POSITION, float4 Tex : TEXCOORD0 ) {
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.TexCoord = Tex + ViewportOffset.xy;
+	Out.TexCoord2 = Tex + BUFFER_SCALE * ViewportOffset.xy;
+
+	return Out;
+}
+
+VS_OUTPUT VS_SetTexCoordHalf( float4 Pos : POSITION, float4 Tex : TEXCOORD0 ) {
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+	Out.Pos = Pos;
+	Out.TexCoord = Tex + BUFFER_SCALE * ViewportOffset.xy;
+	return Out;
+}
+
+
+VS_OUTPUT VS_SetLightPos( float4 Pos : POSITION, float4 Tex : TEXCOORD0 ) {
+	VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+	Out.Pos = Pos;
+	Out.TexCoord = Tex + BUFFER_SCALE * ViewportOffset.xy;
+	Out.TexCoord2 = Tex + BUFFER_SCALE * ViewportOffset.xy;
+	return Out;
+}
+
+
+//-----------------------------------------------------------------------------
+//
+//-----------------------------------------------------------------------------
+inline float4 Blur(sampler2D Samp, float2 TexCoord, float2 Offset)
+{
+	float4 Color;
+	float4 Color0 = tex2D( Samp, TexCoord );
+	Color  = WT_0 * Color0;
+	Color += WT_1 * ( tex2D( Samp, TexCoord+Offset  ) + tex2D( Samp, TexCoord-Offset  ) );
+	Color += WT_2 * ( tex2D( Samp, TexCoord+Offset*2) + tex2D( Samp, TexCoord-Offset*2) );
+	Color += WT_3 * ( tex2D( Samp, TexCoord+Offset*3) + tex2D( Samp, TexCoord-Offset*3) );
+	Color += WT_4 * ( tex2D( Samp, TexCoord+Offset*4) + tex2D( Samp, TexCoord-Offset*4) );
+	Color += WT_5 * ( tex2D( Samp, TexCoord+Offset*5) + tex2D( Samp, TexCoord-Offset*5) );
+	Color += WT_6 * ( tex2D( Samp, TexCoord+Offset*6) + tex2D( Samp, TexCoord-Offset*6) );
+	Color += WT_7 * ( tex2D( Samp, TexCoord+Offset*7) + tex2D( Samp, TexCoord-Offset*7) );
+
+	return float4(Color.rgb, 1);
+}
+
+
+//-----------------------------------------------------------------------------
+//
+
+inline float CalcShadow(float4 pos, int index)
+{
+	float4 zcalc = mul(pos, LightWVPMatrices[index]);
+	zcalc /= zcalc.w;
+	float depth = (length(LightPositions[index] - pos) / LightZFars[index]);
+	float2 TexCoord = float2(1.0f + zcalc.x, 1.0f - zcalc.y) * 0.5;
+
+	float z = tex2D(MMM_SelfShadowSampler[index], TexCoord).r;
+	// float z = tex2Dlod(MMM_SelfShadowSampler[index], float4(TexCoord,0,0)).r;
+	// z = MMM_UnpackDepth(z) + 0.0001;
+	float comp = 1 - saturate(max(depth - z, 0) * SKII2 - 0.3);
+
+	// シャドウバッファ外?
+	comp *= ( saturate(TexCoord) == TexCoord );
+
+	return comp;
+}
+
+
+float4 PS_DrawFog( VS_OUTPUT IN ) : COLOR
+{
+	float depth = tex2D( DepthMap, IN.TexCoord2).r * FAR_Z;
+	float2 PPos = (IN.TexCoord - 0.5) / float2(0.5, -0.5);
+	float3 v = normalize(mul(float4(PPos.xy, 1, 1), matVPInv));
+	depth = min(depth, MaxDistance);
+
+	float div = MaxDiv + StepOffset + 2;
+			// ジッターで+1、奥行きそのものも見る意味がないので+1
+	float sampleStep = depth / div;
+	v *= sampleStep;
+
+	float2 pos = floor(IN.TexCoord.xy * (ViewportSize / BUFFER_SCALE));
+	float offset = (fmod(pos.x,2)*2 + fmod(pos.y,2))/4.0 + StepOffset;
+	float4 p = float4(CameraPosition + v * offset, 1);
+
+	float3 sum = 0;
+	float3 minsum = 0;
+	[loop]	// コンパイル速度が高速になる?
+	for(int i = 0; i < MaxDiv; i++) {
+		#if defined(ENABLE_MULTILIGHT) && ENABLE_MULTILIGHT > 0
+		float3 shadow = float3(CalcShadow(p, 0), CalcShadow(p, 1), CalcShadow(p, 2));
+			// MEMO: 最後に、 sum *= (sampleStep * MaxDiv) すればいい。
+			// MEMO: 3つのループに分割したほうがテクスチャキャッシュにやさしい?
+		#else
+		float3 shadow = float3(CalcShadow(p, 0), 0, 0);
+		#endif
+		sum += shadow * sampleStep;
+		minsum += saturate(1 - shadow) * sampleStep;
+
+		p.xyz += v;
+	}
+
+	sum = sum * saturate(1.0 - minsum * ShadowEmphasis);
+	float r = LightScale2 * 0.5 + 0.5;
+	float3 density = sum * ((LightScale * 0.1) / MaxDistance);
+
+	density = (density * 2 - 1.0) * r + (1 - r);
+
+	float3 d = 0;
+	if (USE_FLAT_DIRECTION)
+	{
+		// 太陽の方向(平行グラデ)
+		PPos.x *= (ViewportSize.x / ViewportSize.y);
+		float d0 = (PPos.x * Light2DDirs[0].x + PPos.y * Light2DDirs[0].y);
+		float d1 = (PPos.x * Light2DDirs[1].x + PPos.y * Light2DDirs[1].y);
+		float d2 = (PPos.x * Light2DDirs[2].x + PPos.y * Light2DDirs[2].y);
+		d = float3(d0,d1,d2) * r + (1 - r);
+	} else {
+		// 太陽の方向(角度)
+		float3 v0 = normalize(float3(PPos.xy, 0.5));
+		float d0 = dot(v0, mul(-LightDirections[0],matV));
+		float d1 = dot(v0, mul(-LightDirections[1],matV));
+		float d2 = dot(v0, mul(-LightDirections[2],matV));
+			// << mul(-LightDirection,matV)は定数化できる
+		d = float3(d0,d1,d2) * r + (1 - r);
+		d = max(LightAngles2 - 1.0, d);
+	}
+
+	float ang = saturate(AngleRate * 0.5 + 0.5);
+
+	#if defined(ENABLE_MULTILIGHT) && ENABLE_MULTILIGHT > 0
+	return float4(lerp(density, d, ang), 1);
+	#else
+	return float4(lerp(density, d, ang).r, 0, 0, 1);
+	#endif
+}
+
+//-----------------------------------------------------------------------------
+// X Blur
+//-----------------------------------------------------------------------------
+float4 PS_passX( VS_OUTPUT IN ) : COLOR
+{
+	return Blur(ScnSamp1, IN.TexCoord, float2(SampStep.x  ,0));
+}
+
+//-----------------------------------------------------------------------------
+// Y Blur
+//-----------------------------------------------------------------------------
+float4 PS_passY( VS_OUTPUT IN ) : COLOR
+{
+	return Blur(ScnSamp2, IN.TexCoord, float2(0 , SampStep.y));
+}
+
+//-----------------------------------------------------------------------------
+inline float3 Overray(float3 ColorA, float3 ColorB, float s, float t)
+{
+	return (t < 0.5)
+		? lerp(ColorA * ColorB, ColorA, t * 2.0 * s)
+		: (ColorA + ColorB * ((t - 0.5) * 2.0) * s);
+}
+
+//-----------------------------------------------------------------------------
+// 最後に元画面と計算結果を合成する
+float4 PS_Last( VS_OUTPUT IN ) : COLOR
+{
+	float4 Color = tex2D( ScnSamp, IN.TexCoord );
+	float3 fog = tex2D( ScnSamp1, IN.TexCoord2).rgb;
+	float3 fog0 = saturate(fog);
+	float3 fog1 = saturate(fog * 0.5 + 0.5);
+
+	float4 LightColorT0 = GetColor(TOP_COLOR_MODE1, 0);
+	float4 LightColorT1 = GetColor(TOP_COLOR_MODE2, 1);
+	float4 LightColorT2 = GetColor(TOP_COLOR_MODE3, 2);
+	float4 LightColorB0 = GetColor(BOTTOM_COLOR_MODE, 0);
+	float4 LightColorB1 = GetColor(BOTTOM_COLOR_MODE, 1);
+	float4 LightColorB2 = GetColor(BOTTOM_COLOR_MODE, 2);
+
+	float4 lightColor0 = lerp(LightColorB0, LightColorT0, fog1.x);
+	float4 lightColor1 = lerp(LightColorB1, LightColorT1, fog1.y);
+	float4 lightColor2 = lerp(LightColorB2, LightColorT2, fog1.z);
+
+	fog = saturate(abs(fog));
+	float3 scale = float3(lightColor0.a, lightColor1.a, lightColor2.a) * EffectScale;
+
+	if (COLOR_MODE == 0) {
+		// 加算
+		Color.rgb = Color.rgb
+			+ lightColor0.rgb * (scale.x * fog.x)
+			+ lightColor1.rgb * (scale.y * fog.y)
+			+ lightColor2.rgb * (scale.z * fog.z);
+	} else if (COLOR_MODE == 1) {
+		// 乗算
+		Color.rgb = lerp(Color.rgb, Color.rgb * lightColor0.rgb, (1.0 - fog.x) * scale.x);
+		Color.rgb = lerp(Color.rgb, Color.rgb * lightColor1.rgb, (1.0 - fog.y) * scale.y);
+		Color.rgb = lerp(Color.rgb, Color.rgb * lightColor2.rgb, (1.0 - fog.z) * scale.z);
+	} else if (COLOR_MODE == 2) {
+		// オーバーレイ
+		Color.rgb = Overray(Color.rgb, lightColor0.rgb, scale.x, fog.x);
+		Color.rgb = Overray(Color.rgb, lightColor1.rgb, scale.y, fog.y);
+		Color.rgb = Overray(Color.rgb, lightColor2.rgb, scale.z, fog.z);
+	} else {
+		// 塗りつぶし
+		Color.rgb = lerp(Color.rgb, lightColor0.rgb, fog.x * scale.x);
+		Color.rgb = lerp(Color.rgb, lightColor1.rgb, fog.y * scale.y);
+		Color.rgb = lerp(Color.rgb, lightColor2.rgb, fog.z * scale.z);
+	}
+
+	// テストモード
+	if (TestMode1) Color.rgb = float3(fog.xx, fog0.x);
+	else if (TestMode2) Color.rgb = float3(fog.yy, fog0.y);
+	else if (TestMode3) Color.rgb = float3(fog.zz, fog0.z);
+
+	Color.a = 1;
+
+	return Color;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+technique Gaussian <
+	string Script = 
+		"RenderColorTarget0=ScnMap;"
+		"RenderDepthStencilTarget=DepthBuffer;"
+		"ClearSetColor=ClearColor;"
+		"ClearSetDepth=ClearDepth;"
+		"Clear=Color;"
+		"Clear=Depth;"
+		"ScriptExternal=Color;"
+
+		"RenderColorTarget0=ScnMap1;"
+		"RenderDepthStencilTarget=DepthBuffer;"
+		"Clear=Color;"
+		"Clear=Depth;"
+		"Pass=DrawFog;"
+
+		"RenderColorTarget0=ScnMap2;"
+		"ClearSetColor=ClearColor;"
+		"Clear=Color;"
+		"Pass=Gaussian_X;"
+
+		"RenderColorTarget0=ScnMap1;"
+		"ClearSetColor=ClearColor;"
+		"Clear=Color;"
+		"Clear=Depth;"
+		"Pass=Gaussian_Y;"
+
+		"RenderColorTarget0=;"
+		"RenderDepthStencilTarget=;"
+		"Pass=LastPass;"
+	;
+> {
+	pass DrawFog < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE;
+		AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetLightPos();
+		PixelShader  = compile ps_3_0 PS_DrawFog();
+	}
+
+	pass Gaussian_X < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoordHalf();
+		PixelShader  = compile ps_3_0 PS_passX();
+	}
+	pass Gaussian_Y < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoordHalf();
+		PixelShader  = compile ps_3_0 PS_passY();
+	}
+	pass LastPass < string Script= "Draw=Buffer;"; > {
+		AlphaBlendEnable = FALSE;
+		AlphaTestEnable = FALSE;
+		VertexShader = compile vs_3_0 VS_SetTexCoord();
+		PixelShader  = compile ps_3_0 PS_Last();
+	}
+}
+////////////////////////////////////////////////////////////////////////////////////////////////

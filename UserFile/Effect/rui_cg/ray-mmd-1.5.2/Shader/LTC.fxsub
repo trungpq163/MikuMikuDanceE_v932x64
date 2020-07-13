@@ -1,0 +1,498 @@
+#define LUT_SIZE  64.0
+#define LUT_SCALE (LUT_SIZE - 1.0)/LUT_SIZE
+#define LUT_BIAS  0.5/LUT_SIZE
+
+texture LTC1<string ResourceName = "../../../shader/textures/ltc_1.dds"; int Miplevels = 1;>;
+sampler LTC1Samp = sampler_state {
+	texture = <LTC1>;
+	MINFILTER = LINEAR; MAGFILTER = LINEAR; MIPFILTER = NONE;
+	ADDRESSU = CLAMP; ADDRESSV = CLAMP; SRGBTexture = TRUE;
+};
+texture LTC2<string ResourceName = "../../../shader/textures/ltc_2.dds"; int Miplevels = 1;>;
+sampler LTC2Samp = sampler_state {
+	texture = <LTC2>;
+	MINFILTER = LINEAR; MAGFILTER = LINEAR; MIPFILTER = NONE;
+	ADDRESSU = CLAMP; ADDRESSV = CLAMP; SRGBTexture = TRUE;
+};
+
+float3 IntegrateEdgeVec(float3 v1, float3 v2)
+{
+	float x = dot(v1, v2);
+	float y = abs(x);
+
+	float a = 0.8543985 + (0.4965155 + 0.0145206*y)*y;
+	float b = 3.4175940 + (4.1616724 + y)*y;
+	float v = a / b;
+
+	float theta_sintheta = (x > 0.0) ? v : 0.5 * rsqrt(1.0 - x * x) - v;
+
+	return cross(v1, v2) * theta_sintheta;
+}
+
+float IntegrateEdge(float3 v1, float3 v2)
+{
+	return IntegrateEdgeVec(v1, v2).z;
+}
+
+float determinant(float3x3 m)
+{
+	return + m[0][0]*(m[1][1]*m[2][2] - m[2][1]*m[1][2])
+		   - m[1][0]*(m[0][1]*m[2][2] - m[2][1]*m[0][2])
+		   + m[2][0]*(m[0][1]*m[1][2] - m[1][1]*m[0][2]);
+}
+
+float3 LTC_SolveCubic(float4 coeff)
+{
+	coeff.xyz /= coeff.w;
+	coeff.yz /= 3.0;
+
+	float A = coeff.w;
+	float B = coeff.z;
+	float C = coeff.y;
+	float D = coeff.x;
+
+	// Compute the Hessian and the discriminant
+	float3 Delta = float3(
+		-coeff.z*coeff.z + coeff.y,
+		-coeff.y*coeff.z + coeff.x,
+		dot(float2(coeff.z, -coeff.y), coeff.xy)
+	);
+
+	float discriminant = dot(float2(4.0*Delta.x, -Delta.y), Delta.zy);
+
+	float2 xlc, xsc;
+
+	// Algorithm A
+	{
+		float A_a = 1.0;
+		float C_a = Delta.x;
+		float D_a = -2.0*B*Delta.x + Delta.y;
+
+		// Take the cubic root of a normalized complex number
+		float theta = atan2(sqrt(discriminant), -D_a)/3.0;
+
+		float x_1a = 2.0*sqrt(-C_a)*cos(theta);
+		float x_3a = 2.0*sqrt(-C_a)*cos(theta + (2.0/3.0) * PI);
+
+		float xl;
+		if ((x_1a + x_3a) > 2.0*B)
+			xl = x_1a;
+		else
+			xl = x_3a;
+
+		xlc = float2(xl - B, A);
+	}
+
+	// Algorithm D
+	{
+		float A_d = D;
+		float C_d = Delta.z;
+		float D_d = -D*Delta.y + 2.0*C*Delta.z;
+
+		// Take the cubic root of a normalized complex number
+		float theta = atan2(D*sqrt(discriminant), -D_d)/3.0;
+
+		float x_1d = 2.0*sqrt(-C_d)*cos(theta);
+		float x_3d = 2.0*sqrt(-C_d)*cos(theta + (2.0/3.0) * PI);
+
+		float xs;
+		if (x_1d + x_3d < 2.0*C)
+			xs = x_1d;
+		else
+			xs = x_3d;
+
+		xsc = float2(-D, xs + C);
+	}
+
+	float E =  xlc.y*xsc.y;
+	float F = -xlc.x*xsc.y - xlc.y*xsc.x;
+	float G =  xlc.x*xsc.x;
+
+	float2 xmc = float2(C*F - B*G, -B*F + C*E);
+
+	float3 root = float3(xsc.x/xsc.y, xmc.x/xmc.y, xlc.x/xlc.y);
+
+	if (root.x < root.y && root.x < root.z)
+		root.xyz = root.yxz;
+	else if (root.z < root.x && root.z < root.y)
+		root.xyz = root.xzy;
+
+	return root;
+}
+
+float LTC_EvaluatePoint(float3 N, float3 V, float3 P, float3x3 invM, float3 lightPos)
+{
+	// construct orthonormal basis around N
+	float3 T1, T2;
+	T1 = normalize(V - N * dot(V, N));
+	T2 = cross(N, T1);
+
+	// rotate area light
+	float3 L = mul(float3x3(T1, T2, N), lightPos - P);
+
+	// project onto sphere
+	float3 P1 = mul(invM, normalize(L));
+
+	float len = length(P1);
+	float z = max(0.0, P1.z / len);
+
+#if 1
+	float res = abs(determinant(invM)) / (len * len * len) * z;
+	return res / dot(L, L);
+#else
+	float2 uv = float2(z * 0.5 + 0.5, len);
+	uv = uv * LUT_SCALE + LUT_BIAS;
+
+	float scale = tex2Dlod(LTC2Samp, float4(uv, 0, 0)).w;
+	float sum = len * scale;
+
+	return sum;
+#endif
+}
+
+float LTC_EvaluateRectangle(float3 N, float3 V, float3 P, float3x3 invM, float3 lightDirection, inout float3 points[4], bool face)
+{
+	// construct orthonormal basis around N
+	float3 T1, T2;
+	T1 = normalize(V - N * dot(V, N));
+	T2 = cross(N, T1);
+
+	// rotate area light in (T1, T2, N) basis
+	float3x3 tbn = mul(invM, float3x3(T1, T2, N));
+
+	// polygon (allocate 4 vertices for clipping)
+	float3 L[4];
+	L[0] = mul(tbn, points[0] - P);
+	L[1] = mul(tbn, points[1] - P);
+	L[2] = mul(tbn, points[2] - P);
+	L[3] = mul(tbn, points[3] - P);
+
+	points = L;
+
+	// project onto sphere
+	L[0] = normalize(L[0]);
+	L[1] = normalize(L[1]);
+	L[2] = normalize(L[2]);
+	L[3] = normalize(L[3]);
+
+	float3 vsum = 0.0;
+	vsum += IntegrateEdgeVec(L[0], L[1]);
+	vsum += IntegrateEdgeVec(L[1], L[2]);
+	vsum += IntegrateEdgeVec(L[2], L[3]);
+	vsum += IntegrateEdgeVec(L[3], L[0]);
+
+	float len = length(vsum);
+	float z = vsum.z/len;
+
+	if (face) z = -z;
+
+	float2 uv = float2(z * 0.5 + 0.5, len);
+	uv = uv * LUT_SCALE + LUT_BIAS;
+
+	float scale = tex2Dlod(LTC2Samp, float4(uv, 0, 0)).w;
+	float spec = len * scale;
+
+	return spec;
+}
+
+float LTC_EvaluateDisk(float3 N, float3 V, float3 P, float3x3 invM, float3 points[4], bool twoSided)
+{
+	// construct orthonormal basis around N
+	float3 T1, T2;
+	T1 = normalize(V - N * dot(V, N));
+	T2 = cross(N, T1);
+
+	// rotate area light in (T1, T2, N) basis
+	float3x3 tbn = mul(invM, float3x3(T1, T2, N));
+
+	// polygon (allocate 5 vertices for clipping)
+	float3 L_[3];
+	L_[0] = mul(tbn, points[0] - P);
+	L_[1] = mul(tbn, points[1] - P);
+	L_[2] = mul(tbn, points[2] - P);
+
+	// init ellipse
+	float3 C  = 0.5 * (L_[0] + L_[2]);
+	float3 V1 = 0.5 * (L_[1] - L_[2]);
+	float3 V2 = 0.5 * (L_[1] - L_[0]);
+
+	float d11 = dot(V1, V1);
+	float d22 = dot(V2, V2);
+	float d12 = dot(V1, V2);
+	
+	float a, b;
+
+	if (abs(d12) / sqrt(d11 * d22) > 0.0001)
+	{
+		float tr = d11 + d22;
+		float det = -d12 * d12 + d11 * d22;
+
+		// use sqrt matrix to solve for eigenvalues
+		det = sqrt(det);
+		float u = 0.5*sqrt(tr - 2.0*det);
+		float v = 0.5*sqrt(tr + 2.0*det);
+		float e_max = pow2(u + v);
+		float e_min = pow2(u - v);
+
+		float3 V1_, V2_;
+
+		if (d11 > d22)
+		{
+			V1_ = d12 * V1 + (e_max - d11) * V2;
+			V2_ = d12 * V1 + (e_min - d11) * V2;
+		}
+		else
+		{
+			V1_ = d12 * V2 + (e_max - d22) * V1;
+			V2_ = d12 * V2 + (e_min - d22) * V1;
+		}
+
+		a = 1.0 / e_max;
+		b = 1.0 / e_min;
+		V1 = normalize(V1_);
+		V2 = normalize(V2_);
+	}
+	else
+	{
+		a = 1.0 / dot(V1, V1);
+		b = 1.0 / dot(V2, V2);
+
+		V1 *= sqrt(a);
+		V2 *= sqrt(b);
+	}
+
+	float3 V3 = cross(V1, V2);
+	if (dot(C, V3) < 0.0)
+		V3 *= -1.0;
+
+	float L  = dot(V3, C);
+	float x0 = dot(V1, C) / L;
+	float y0 = dot(V2, C) / L;
+
+	a *= L * L;
+	b *= L * L;
+
+	float c0 = a*b;
+	float c1 = a*b*(1.0 + x0*x0 + y0*y0) - a - b;
+	float c2 = 1.0 - a*(1.0 + x0*x0) - b*(1.0 + y0*y0);
+	float c3 = 1.0;
+
+	float3 roots = LTC_SolveCubic(float4(c0, c1, c2, c3));
+	float e1 = roots.x;
+	float e2 = roots.y;
+	float e3 = roots.z;
+
+	float3x3 rotate = float3x3(V1, V2, V3);
+
+	float3 avgDir = float3(a*x0/(a - e2), b*y0 / (b - e2), 1.0);
+	avgDir = mul(avgDir, rotate);
+	avgDir = normalize(avgDir);
+
+	float L1 = sqrt(-e2 / e3);
+	float L2 = sqrt(-e2 / e1);
+
+	float formFactor = L1 * L2 * rsqrt((1.0 + L1 * L1) * (1.0 + L2 * L2));
+
+	float2 uv = float2(avgDir.z * 0.5 + 0.5, formFactor);
+	uv = uv * LUT_SCALE + LUT_BIAS;
+
+	float scale = tex2Dlod(LTC2Samp, float4(uv, 0, 0)).w;
+	float spec = formFactor * scale;
+
+	return spec;
+}
+
+void LTC_InitTrianglePoints(float3 P, float3 Right, float3 Up, float LightWidth, float LightHeight, out float3 points[3])
+{
+	float3 ex = Right * LightWidth;
+	float3 ey = Up * LightHeight;
+
+	points[0] = P - ex - ey;
+	points[1] = P + ey;
+	points[2] = P + ex - ey;
+}
+
+void LTC_InitRectPoints(float3 P, float3 Right, float3 Up, float LightWidth, float LightHeight, out float3 points[4])
+{
+	float3 ex = Right * LightWidth;
+	float3 ey = Up * LightHeight;
+
+	points[0] = P - ex - ey;
+	points[1] = P - ex + ey;
+	points[2] = P + ex + ey;
+	points[3] = P + ex - ey;
+}
+
+void LTC_InitPentagonPoints(float3 P, float3 Right, float3 Up, float LightWidth, float LightHeight, out float3 points[5])
+{
+	float3 ex = Right;
+	float3 ey = Up;
+	float3 ez = cross(ex, ey);
+
+	float3x3 tbn = float3x3(ex * LightWidth, ey * LightHeight, ez);
+
+	float3 polygon[5];
+
+	for (int i = 0; i < 5; i++)
+		polygon[i] = float3(float2(cos((90 + i * 72) * PI / 180), -sin((90 + i * 72) * PI / 180)), 0);
+
+	for (int j = 0; j < 5; j++)
+		points[j] = P + mul(polygon[j], tbn);
+}
+
+float3 LTC_FetchTexture(sampler2D source, float3 points[4])
+{
+	float3 V1 = points[1] - points[0];
+	float3 V2 = points[3] - points[0];
+
+	float3 planeOrtho = cross(V1, V2);
+
+	float planeAreaSquared = dot(planeOrtho, planeOrtho);
+	float planeDistxPlaneArea = dot(planeOrtho, points[0]);
+	float3 P = planeDistxPlaneArea * planeOrtho / planeAreaSquared - points[0];
+
+	float dot_V1_V2 = dot(V1, V2);
+	float inv_dot_V1_V1 = 1.0 / dot(V1, V1);
+	float3 V2_ = V2 - V1 * dot_V1_V2 * inv_dot_V1_V1;
+
+	float2 uv;
+	uv.y = dot(V2_, P) / dot(V2_, V2_);
+	uv.x = dot(V1, P) * inv_dot_V1_V1 - dot_V1_V2 * inv_dot_V1_V1 * uv.y;
+	uv = uv * 0.75 + 0.125;
+
+	float d = abs(planeDistxPlaneArea) / pow(planeAreaSquared, 0.75);
+	float lod = log(2048.0 * d) / log(3.0);
+
+	return tex2Dlod(source, float4(uv.yx, 0, lod)).rgb;
+}
+
+float LTC_EvaluateRectangle(float3 N, float3 V, float3 P, float3 L, float3 points[4], bool twoSided = false)
+{
+	bool face = step(0, dot(points[0] - P, L));
+	if (face && !twoSided)
+		return 0;
+	else
+	{
+		float3x3 invM = float3x3(
+			float3(1, 0, 0),
+			float3(0, 1, 0),
+			float3(0, 0, 1)
+		);
+
+		return LTC_EvaluateRectangle(N, V, P, invM, L, points, face);
+	}
+}
+
+float3 LTC_EvaluateRectangle(float3 N, float3 V, float3 P, float3 L, float3 points[4], float smoothness, float3 specular, bool twoSided = false)
+{
+	bool face = step(0, dot(points[0] - P, L));
+	if (face && !twoSided)
+		return 0;
+	else
+	{
+		float2 uv = float2(1 - smoothness, sqrt(1.0 - saturate(dot(N, V))));
+		uv = uv * LUT_SCALE + LUT_BIAS;
+
+		float4 t1 = tex2Dlod(LTC1Samp, float4(uv, 0, 0));
+		float4 t2 = tex2Dlod(LTC2Samp, float4(uv, 0, 0));
+
+		float3x3 invM = float3x3(
+			float3(t1.x, 0, t1.z),
+			float3(  0,  1,    0),
+			float3(t1.y, 0, t1.w)
+		);
+
+		float3 f0 = specular;
+		float3 fresnel = f0 * t2.x + (1.0 - f0) * t2.y;
+
+		return LTC_EvaluateRectangle(N, V, P, invM, L, points, face) * fresnel;
+	}
+}
+
+float3 LTC_EvaluateRectangle(sampler source, float3 N, float3 V, float3 P, float3 L, float3 points[4], bool twoSided = false)
+{
+	bool face = step(0, dot(points[0] - P, L));
+	if (face && !twoSided)
+		return 0;
+	else
+	{
+		float3x3 invM = float3x3(
+			float3(1, 0, 0),
+			float3(0, 1, 0),
+			float3(0, 0, 1)
+		);
+
+		float3 lighting = LTC_EvaluateRectangle(N, V, P, invM, L, points, face);
+		return lighting * LTC_FetchTexture(source, points);
+	}
+}
+
+float3 LTC_EvaluateRectangle(sampler source, float3 N, float3 V, float3 P, float3 L, float3 points[4], float smoothness, float3 specular, bool twoSided = false)
+{
+	bool face = step(0, dot(points[0] - P, L));
+	if (face && !twoSided)
+		return 0;
+	else
+	{
+		float2 uv = float2(1 - smoothness, sqrt(1.0 - saturate(dot(N, V))));
+		uv = uv * LUT_SCALE + LUT_BIAS;
+
+		float4 t1 = tex2Dlod(LTC1Samp, float4(uv, 0, 0));
+		float4 t2 = tex2Dlod(LTC2Samp, float4(uv, 0, 0));
+
+		float3x3 invM = float3x3(
+			float3(t1.x, 0, t1.z),
+			float3(  0,  1,    0),
+			float3(t1.y, 0, t1.w)
+		);
+
+		float3 f0 = specular;
+		float3 fresnel = f0 * t2.x + (1.0 - f0) * t2.y;
+
+		float3 lighting = LTC_EvaluateRectangle(N, V, P, invM, L, points, face) * fresnel;
+		return lighting * LTC_FetchTexture(source, points);
+	}
+}
+
+float LTC_EvaluateDisk(float3 N, float3 V, float3 P, float3 L, float3 points[4], bool twoSided = false)
+{
+	bool face = step(0, dot(points[0] - P, L));
+	if (face && !twoSided)
+		return 0;
+	else
+	{
+		float3x3 invM = float3x3(
+			float3(1, 0, 0),
+			float3(0, 1, 0),
+			float3(0, 0, 1)
+		);
+
+		return LTC_EvaluateDisk(N, V, P, invM, points, face);	
+	}
+}
+
+float3 LTC_EvaluateDisk(float3 N, float3 V, float3 P, float3 L, float3 points[4], float smoothness, float3 specular, bool twoSided = false)
+{
+	bool face = step(0, dot(points[0] - P, L));
+	if (face && !twoSided)
+		return 0;
+	else
+	{
+		float2 uv = float2(1 - smoothness, sqrt(1.0 - saturate(dot(N, V))));
+		uv = uv * LUT_SCALE + LUT_BIAS;
+
+		float4 t1 = tex2Dlod(LTC1Samp, float4(uv, 0, 0));
+		float4 t2 = tex2Dlod(LTC2Samp, float4(uv, 0, 0));
+
+		float3x3 invM = float3x3(
+			float3(t1.x, 0, t1.z),
+			float3(  0,  1,    0),
+			float3(t1.y, 0, t1.w)
+		);
+
+		float3 f0 = specular;
+		float3 fresnel = f0 * t2.x + (1.0 - f0) * t2.y;
+
+		return LTC_EvaluateDisk(N, V, P, invM, points, face) * fresnel;
+	}
+}

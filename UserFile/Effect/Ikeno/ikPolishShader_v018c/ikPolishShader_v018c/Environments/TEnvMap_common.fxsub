@@ -1,0 +1,282 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 4面体環境マップを描画する
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+#include "../ikPolishShader.fxsub"
+#include "../Sources/structs.fxsub"
+#include "../Sources/mmdutil.fxsub"
+#include "../Sources/colorutil.fxsub"
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+float3 CameraPosition : CONTROLOBJECT < string name = "(OffscreenOwner)"; >;
+float3 CameraPositionOffset = float3(0,15,0); // 自動的に位置を調整する量
+
+// 座法変換行列
+float4x4 WorldMatrix	: WORLD;
+float4x4 matPOrig		: PROJECTION;
+
+#define	PI	(3.14159265359)
+
+float4x4 CalcWorldViewMat(float3 vz, float3 vy, float3 pos)
+{
+	float3 vx = normalize(cross(vy, vz));
+	vy = normalize(cross(vz, vx));
+	float4x4 matV = float4x4(
+		float4(vx.x, vy.x, vz.x, 0),
+		float4(vx.y, vy.y, vz.y, 0),
+		float4(vx.z, vy.z, vz.z, 0),
+		float4(
+			-dot(vx, pos),
+			-dot(vy, pos),
+			-dot(vz, pos),
+			1
+		));
+
+	return mul(WorldMatrix, matV);
+}
+
+float4x4 CalcProjMat(float4x4 mat)
+{
+//	mat._11 = mat._22 = 1 / tan(acos(1/3));	// 1.2828
+//	mat._11 = mat._22 = 1 / 2.6;
+	mat._11 = mat._22 = 1 / 2.8;
+	return mat;
+}
+
+float3 Vec0 = normalize(float3( 1, 1, 1));
+float3 Vec1 = normalize(float3(-1, 1,-1));
+float3 Vec2 = normalize(float3( 1,-1,-1));
+float3 Vec3 = normalize(float3(-1,-1, 1));
+
+float2 offsets[] = {
+	float2(-1, 1) / 2.0,
+	float2( 1, 1) / 2.0,
+	float2(-1,-1) / 2.0,
+	float2( 1,-1) / 2.0
+};
+
+static float4x4 matP = CalcProjMat(matPOrig);
+
+
+float4x4 LightWorldViewProjMatrix : WORLDVIEWPROJECTION < string Object = "Light"; >;
+
+float3   LightDirection    : DIRECTION < string Object = "Light"; >;
+
+// マテリアル色
+float4	MaterialDiffuse		: DIFFUSE  < string Object = "Geometry"; >;
+float3	MaterialEmissive	: EMISSIVE < string Object = "Geometry"; >;
+float3	MaterialSpecular	: SPECULAR < string Object = "Geometry"; >;
+float	SpecularPower		: SPECULARPOWER < string Object = "Geometry"; >;
+float3	MaterialToon		: TOONCOLOR;
+
+#if defined(IGNORE_EMISSIVE)
+static float3	BaseAmbient = MaterialDiffuse.rgb;
+static float3	BaseEmissive = 0;
+#elif defined(EMMISIVE_AS_AMBIENT)
+static float3	BaseAmbient = saturate(MaterialDiffuse.rgb + MaterialEmissive);
+static float3	BaseEmissive = 0;
+#else
+static float3	BaseAmbient = MaterialDiffuse.rgb;
+static float3	BaseEmissive = MaterialEmissive;
+#endif
+
+float3   LightSpecular     : SPECULAR  < string Object = "Light"; >;
+
+float mIndirectLightP : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "間接光+"; >;
+float mIndirectLightM : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "間接光-"; >;
+
+static float3  LightAmbient = LightSpecular * CalcLightValue(mIndirectLightP, mIndirectLightM, DefaultAmbientScale) * 0.25;
+
+static float4 DiffuseColor  = MaterialDiffuse  * float4(LightSpecular, 1.0f);
+static float3 AmbientColor  = BaseAmbient  * LightAmbient + BaseEmissive;
+static float3 SpecularColor = MaterialSpecular * LightSpecular;
+
+
+bool use_texture;
+bool use_spheremap;
+bool use_toon;
+bool transp;   // 半透明フラグ
+#define Toon     3
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// AL対応ここから
+
+#ifdef ENABLE_AL
+#include "../Sources/autoLuminous.fxsub"
+#endif
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウON）
+
+struct BufferShadow_OUTPUT {
+	float4 Pos		: POSITION;		// 射影変換座標
+	float4 ZCalcTex : TEXCOORD0;	// Z値
+	float4 Tex		: TEXCOORD1;	// テクスチャ
+	float3 Normal	: TEXCOORD2;	// 法線
+	float4 PPos		: TEXCOORD3;	// 射影変換座標
+	#if !defined(IGNORE_SPHERE)
+	float2 SpTex	: TEXCOORD4;	// スフィアマップテクスチャ座標
+	#endif
+	#if defined(ENABLE_AL)
+	float4 ColorAL	: COLOR1;		// ディフューズ色
+	#endif
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 頂点シェーダ
+BufferShadow_OUTPUT DrawObject_VS(VS_AL_INPUT IN, 
+	uniform float2 offset, uniform float3 v0, uniform float3 v1)
+{
+	BufferShadow_OUTPUT Out = (BufferShadow_OUTPUT)0;
+	float4 Pos = IN.Pos;
+	float3 Normal = IN.Normal.xyz;
+
+	float4x4 matWV = CalcWorldViewMat(v0, v1, CameraPosition + CameraPositionOffset);
+
+	Out.Pos = mul(mul(Pos, matWV), matP);
+	float w = Out.Pos.w;
+	Out.Pos.xy = (Out.Pos.xy / w * 0.5 + offset) * w;
+	Out.PPos = Out.Pos;
+
+	Out.Normal = normalize( mul( Normal, (float3x3)WorldMatrix ) );
+	Out.ZCalcTex = mul( Pos, LightWorldViewProjMatrix );
+
+	Out.Tex.xy = IN.Tex;
+
+	#if defined(ENABLE_AL)
+	float2 ALTex;
+	Out.ColorAL = DecodeALInfo(IN.AddUV1, IN.AddUV2, IN.AddUV3, ALTex);
+	Out.Tex.zw = ALTex;
+	#endif
+
+	#if !defined(IGNORE_SPHERE)
+	if ( use_spheremap ) {
+		// スフィアマップテクスチャ座標
+		float2 NormalWV = normalize(mul( Normal, (float3x3)matWV )).xy;
+		Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+		Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+	}
+	#endif
+
+	return Out;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ピクセルシェーダ
+float4 DrawObject_PS(BufferShadow_OUTPUT IN, uniform float2 offset, uniform bool useSelfShadow) : COLOR
+{
+	float2 ppos = IN.PPos.xy / IN.PPos.w;
+	float2 clipUV = ppos * offset;
+	clip( clipUV.x);
+	clip( clipUV.y);
+
+/*
+	// 不要な場所は描画しない(この処理自体が不要?)
+	float x = abs(frac(ppos.x + 1.0) * 2.0 - 1.0);
+	float y = frac(ppos.y + 1.0);
+	if (x - 0.2 > y) discard;	// 100/512程度
+*/
+
+#if !defined(USE_TEXTURE_AS_RGBM)
+
+	float3 L = -LightDirection;
+	float3 N = normalize(IN.Normal);
+	float diffuse = saturate(dot(N,L));
+
+	float4 albedo = float4(1,1,1,1);
+	if ( use_texture ) albedo *= GetTextureColor(IN.Tex.xy);
+
+	#if !defined(IGNORE_SPHERE)
+	float3 SpSpecular = 0;
+	if ( use_spheremap ) {
+		float4 TexColor = GetSphereColor(IN.SpTex);
+		if(spadd) {
+			SpSpecular = TexColor.rgb;
+		} else {
+			albedo.rgb *= TexColor.rgb;
+		}
+	}
+	#endif
+
+	float shadow = (useSelfShadow) ? CalcMMDShadow(IN.ZCalcTex) : 1;
+	float comp = min(diffuse, shadow);
+	float3 light = saturate(MaterialDiffuse.rgb * LightSpecular * comp + AmbientColor);
+
+	#if !defined(IS_LINEAR_TEXTURE)
+	// 線形空間にする
+	albedo = Degamma(saturate(albedo));
+	#endif
+
+	float4 result = float4(light, MaterialDiffuse.a) * albedo;
+	#if !defined(IGNORE_SPHERE)
+	result.rgb += SpSpecular * light;
+	#endif
+
+	#ifdef ENABLE_AL
+	result.rgb += GetEmissiveColor(IN.ColorAL, IN.Tex).rgb;
+	#endif
+
+#else
+	// RGBM形式として扱う
+	float4 result = GetTextureColor(IN.Tex.xy);
+	result.rgb = result.rgb * result.a * RGBM_SCALE_FACTOR;
+	result.a = 1;
+
+	#if !defined(IS_LINEAR_TEXTURE)
+	result = Degamma(result);
+	#endif
+
+#endif
+
+	return result;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#if defined(BLENDMODE_ADDITIVE)
+#define	BLENDMODE	ALPHABLENDENABLE = TRUE; SRCBLEND = SRCALPHA; DESTBLEND = ONE;
+#else
+#define	BLENDMODE
+#endif
+
+#define OBJECT_TEC(name, mmdpass, selfshadow) \
+	technique name < string MMDPass = mmdpass; bool UseSelfShadow = selfshadow; \
+	>\
+	{ \
+		pass DrawObject1 { BLENDMODE \
+			VertexShader = compile vs_3_0 DrawObject_VS(offsets[0], Vec0, Vec1); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(float2(-1, 1), selfshadow); \
+		} \
+		pass DrawObject2 { BLENDMODE \
+			VertexShader = compile vs_3_0 DrawObject_VS(offsets[1], Vec1, Vec2); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(float2( 1, 1), selfshadow); \
+		} \
+		pass DrawObject3 { BLENDMODE \
+			VertexShader = compile vs_3_0 DrawObject_VS(offsets[2], Vec2, Vec3); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(float2(-1,-1), selfshadow); \
+		} \
+		pass DrawObject4 { BLENDMODE \
+			VertexShader = compile vs_3_0 DrawObject_VS(offsets[3], Vec3, Vec0); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(float2( 1,-1), selfshadow); \
+		} \
+	}
+
+
+OBJECT_TEC(MainTec0, "object", false)
+OBJECT_TEC(MainTecBS0, "object_ss", true)
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTech < string MMDPass = "shadow";  > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////

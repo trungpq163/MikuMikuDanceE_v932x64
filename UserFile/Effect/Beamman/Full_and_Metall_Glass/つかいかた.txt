@@ -1,0 +1,4 @@
+MME標準サンプルのfull.fxとMetallicDP.fx,GlassDP.fxをただくっつけただけの物です。
+Full_and_MetallicDP.fx、Full_and_GlassDP.fxを好きなモデルに割り当てて下さい。
+
+ロベリア（ビームマンP）

@@ -1,0 +1,50 @@
+// "Seascape" by Alexander Alekseev aka TDM - 2014
+// License Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
+// https://www.shadertoy.com/view/Ms2SD1
+
+// sea
+#define ITER_GEOMETRY	3
+
+const float SEA_HEIGHT = 0.785 * 0.5;
+const float SEA_CHOPPY = 4.0;
+
+float2x2 octave_m = {1.6,1.2,-1.2,1.6};
+
+inline float hash( float2 p ) { return frac(sin(dot(p,float2(127.1,311.7)))*43758.5453123); }
+
+float noise( float2 p ) {
+	float2 i = floor(p);
+	float2 f = frac(p);
+	float2 u = f*f*(3.0-2.0*f);
+	return -1.0+2.0*lerp(
+						lerp(	hash(i + float2(0.0,0.0) ), 
+								hash(i + float2(1.0,0.0) ), u.x),
+						lerp(	hash(i + float2(0.0,1.0) ), 
+								hash(i + float2(1.0,1.0) ), u.x), u.y);
+}
+
+float sea_octave(float2 uv, float choppy) {
+	uv += noise(uv);		
+	float2 wv = 1.0-abs(sin(uv));
+	float2 swv = abs(cos(uv));	
+	wv = lerp(wv,swv,wv);
+	return pow(1.0-pow(wv.x * wv.y,0.65),choppy);
+}
+
+float map(float3 p) {
+	float freq = WaveFreq;
+	float amp = SEA_HEIGHT;
+	float choppy = SEA_CHOPPY;
+	float2 uv = p.xz;
+	
+	float d, h = 0.0;	
+	[unroll] for(int i = 0; i < ITER_GEOMETRY; i++) {
+		d = sea_octave((uv+WaveSpeed)*freq,choppy);
+		d += sea_octave((uv-WaveSpeed)*freq,choppy);
+		h += d * amp;		
+		uv = mul(uv, octave_m); freq *= 1.9; amp *= 0.22;
+		choppy = lerp(choppy,1.0,0.2);
+	}
+
+	return h;
+}

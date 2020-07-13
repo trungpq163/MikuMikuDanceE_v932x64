@@ -1,0 +1,304 @@
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+    float Script : STANDARDSGLOBAL <
+        string ScriptOutput = "color";
+        string ScriptClass = "sceneorobject";
+        string ScriptOrder = "standard";
+    > = 0.8;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+#ifdef TARGET_BONE_NAME
+float3 TargetPosition : CONTROLOBJECT < string name = TARGET_MODEL_NAME; string item = TARGET_BONE_NAME; >;
+#else
+float3 TargetPosition : CONTROLOBJECT < string name = TARGET_MODEL_NAME; >;
+#endif
+
+float AcsTr  : CONTROLOBJECT < string name = "(self)"; string item = "Tr"; >;
+float AcsSi  : CONTROLOBJECT < string name = "(self)"; string item = "Si"; >;
+float time : TIME < bool SyncInEditMode = true; >;
+
+// 座標変換行列
+float4x4 matVP		: VIEWPROJECTION;
+float4x4 matVPInv	: VIEWPROJECTIONINVERSE;
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+
+
+float4x4 matVInv	: VIEWINVERSE;
+static float3x3 BillboardMatrix = {
+	normalize(matVInv[0].xyz),
+	normalize(matVInv[1].xyz),
+	normalize(matVInv[2].xyz),
+};
+
+	texture2D ParticleTex <
+		string ResourceName = DOT_TEXTURE_NAME;
+		int MipLevels = 1;
+	>;
+	sampler ParticleTexSamp = sampler_state {
+		texture = <ParticleTex>;
+		MinFilter = LINEAR;
+		MagFilter = LINEAR;
+		MipFilter = NONE;
+		AddressU  = CLAMP;
+		AddressV  = CLAMP;
+	};
+
+
+texture CoordTex : RENDERCOLORTARGET
+<
+	int Width=TEX_WIDTH;
+	int Height=TEX_HEIGHT;
+	int MipLevels = 1;
+	string Format="A32B32G32R32F";
+>;
+sampler CoordSmp = sampler_state
+{
+	Texture = <CoordTex>;
+	AddressU = CLAMP;	AddressV = CLAMP;
+	MinFilter = NONE;	MagFilter = NONE;	MipFilter = NONE;
+};
+
+texture CoordWorkTex : RENDERCOLORTARGET
+<
+	int Width=TEX_WIDTH;
+	int Height=TEX_HEIGHT;
+	int MipLevels = 1;
+	string Format="A32B32G32R32F";
+>;
+sampler CoordWorkSmp = sampler_state
+{
+	Texture = <CoordWorkTex>;
+	AddressU = CLAMP;	AddressV = CLAMP;
+	MinFilter = NONE;	MagFilter = NONE;	MipFilter = NONE;
+};
+
+texture CoordDepthBuffer : RenderDepthStencilTarget <
+	int Width=TEX_WIDTH;
+	int Height=TEX_HEIGHT;
+	int MipLevels = 1;
+	string Format = "D24S8";
+>;
+
+
+inline bool IsTimeToReset()
+{
+	return (AcsSi < 1/60.0);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct VS_OUTPUT {
+	float4 Pos : POSITION;
+	float2 Tex : TEXCOORD0;
+};
+
+// 共通の頂点シェーダ
+VS_OUTPUT Common_VS(float4 Pos: POSITION, float2 Tex: TEXCOORD)
+{
+	VS_OUTPUT Out;
+	Out.Pos = Pos;
+	Out.Tex = Tex + float2(0.5f/TEX_WIDTH, 0.5f/TEX_HEIGHT);
+	return Out;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+
+float4 CopyPos_PS(float2 Tex: TEXCOORD0) : COLOR
+{
+	return IsTimeToReset() ? 0 : tex2D(CoordSmp, Tex);
+}
+
+
+float4 UpdatePos_PS(float2 Tex: TEXCOORD0) : COLOR
+{
+	float4 Pos = tex2D(CoordWorkSmp, Tex);
+
+	int i = floor( Tex.x*TEX_WIDTH );
+	int j = floor( Tex.y*TEX_HEIGHT );
+	int p_index = i + j * TEX_WIDTH;
+	int frame = floor(time * FRAME_PER_SECOND + 0.5);
+
+	if (p_index == frame)
+	{
+		#if SAVE_PROJECTION_POSITION > 0
+			Pos = mul(float4(TargetPosition,1), matVP);
+		#else
+			Pos = float4(TargetPosition,1);
+		#endif
+		// TODO: 対象がなければPos.w = 0にする
+	}
+
+	return IsTimeToReset() ? 0 : Pos;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+// 
+
+struct VS_OUTPUT2
+{
+	float4 Pos		: POSITION;
+	float4 Tex		: TEXCOORD0;
+};
+
+VS_OUTPUT2 DrawLine_VS(float4 Pos : POSITION, float4 Tex : TEXCOORD0)
+{
+	VS_OUTPUT2 Out=(VS_OUTPUT2)0;
+
+	int particleIndex = round( Pos.z * 100.0f );
+	const int maxNum = min(DOT_DRAW_NUM * DOT_STEP, 512);
+
+	int frame = floor(time * FRAME_PER_SECOND + 0.5);
+	int drawFrame1 = frame + (particleIndex - maxNum);
+	int drawFrame2 = drawFrame1 + 1;
+	int i1 = drawFrame1 % TEX_WIDTH;
+	int j1 = floor(drawFrame1 / TEX_WIDTH);
+	int i2 = drawFrame2 % TEX_WIDTH;
+	int j2 = floor(drawFrame2 / TEX_WIDTH);
+
+	float2 texCoord1 = float2((i1+0.5f)/TEX_WIDTH, (j1+0.5f)/TEX_HEIGHT);
+	float2 texCoord2 = float2((i2+0.5f)/TEX_WIDTH, (j2+0.5f)/TEX_HEIGHT);
+	float4 Pos1 = tex2Dlod(CoordSmp, float4(texCoord1, 0, 0));
+	float4 Pos2 = tex2Dlod(CoordSmp, float4(texCoord2, 0, 0));
+
+	// 有効か?
+	float valid = saturate(Pos1.w * Pos2.w)
+		* (drawFrame1 >= 0) * (drawFrame2 < TEX_WIDTH * TEX_HEIGHT)
+		* (particleIndex < DOT_DRAW_NUM * DOT_STEP * 2);
+
+	#if SAVE_PROJECTION_POSITION > 0
+	#else
+		Pos1 = mul(Pos1, matVP);
+		Pos2 = mul(Pos2, matVP);
+	#endif
+
+	float2 ppos1 = Pos1.xy / Pos1.w;
+	float2 ppos2 = Pos2.xy / Pos2.w;
+	float2 v = normalize((ppos2 - ppos1) * ViewportSize.xy + float2(1e-4, 0));
+	v = v.yx * float2(-1,1);
+
+	float4 Pos0 = (Pos.x >= 0) ? Pos1 : Pos2;
+	Pos0.xy += v * Pos.y * LINE_WIDTH * 10.0 / ViewportSize.xy * Pos0.w;
+	Out.Pos = Pos0;
+
+	Out.Tex = Tex;
+	float alpha = exp(-abs(frame - drawFrame1) * 10.0 / maxNum) * 0.8 + 0.2;
+	Out.Tex.w = valid * alpha * AcsTr;
+
+	return Out;
+}
+
+float4 DrawLine_PS( VS_OUTPUT2 IN) : COLOR
+{
+	clip(IN.Tex.w - 0.01);
+	return float4(DOT_COLOR, IN.Tex.w);
+}
+
+
+VS_OUTPUT2 DrawDot_VS(float4 Pos : POSITION, float4 Tex : TEXCOORD0)
+{
+	VS_OUTPUT2 Out=(VS_OUTPUT2)0;
+
+	int particleIndex = round( Pos.z * 100.0f );
+
+	int frame = floor(time * FRAME_PER_SECOND / DOT_STEP + 0.5) * DOT_STEP;
+	int drawFrame = frame + (particleIndex - DOT_DRAW_NUM) * DOT_STEP;
+
+	float2 scale = DOT_SIZE * 10.0 / ViewportSize;
+	if (particleIndex == 0)
+	{
+		drawFrame = floor(time * FRAME_PER_SECOND + 0.5);
+		scale = DOT_SIZE_CURRENT * 10.0 / ViewportSize;
+	}
+
+	int i = drawFrame % TEX_WIDTH;
+	int j = floor(drawFrame / TEX_WIDTH);
+
+	float2 texCoord = float2((i+0.5f)/TEX_WIDTH, (j+0.5f)/TEX_HEIGHT);
+	float4 Pos0 = tex2Dlod(CoordSmp, float4(texCoord, 0, 0));
+
+	// 有効か?
+	float valid = saturate(Pos0.w)
+		* (drawFrame >= 0) * (drawFrame < TEX_WIDTH * TEX_HEIGHT)
+		* (particleIndex < DOT_DRAW_NUM * 2);
+
+	#if SAVE_PROJECTION_POSITION > 0
+	#else
+		Pos0 = mul(Pos0, matVP);
+	#endif
+
+	Pos0.xy += Pos.xy * Pos0.w * scale;
+	Out.Pos = Pos0;
+
+	Out.Tex = Tex;
+	float alpha = exp(-abs(frame - drawFrame) * 10.0 / (DOT_DRAW_NUM * DOT_STEP)) * 0.8 + 0.2;
+	Out.Tex.w = valid * alpha * AcsTr;
+
+	return Out;
+}
+
+float4 DrawDot_PS( VS_OUTPUT2 IN) : COLOR
+{
+	clip(IN.Tex.w - 0.01);
+
+	float4 color = tex2D(ParticleTexSamp, IN.Tex.xy);
+	color.rgb *= DOT_COLOR;
+	color.a *= IN.Tex.w;
+
+	return color;
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+technique MainTec2 < string MMDPass = "object";
+	string Script = 
+		"RenderColorTarget0=CoordWorkTex;"
+		"RenderDepthStencilTarget=CoordDepthBuffer;"
+		"Pass=CopyPos;"
+
+		"RenderColorTarget0=CoordTex;"
+		"Pass=UpdatePos;"
+
+		"RenderColorTarget0=;"
+		"RenderDepthStencilTarget=;"
+		"Pass=DrawLine;"
+		"Pass=DrawDot;"
+;
+>{
+	pass CopyPos < string Script= "Draw=Buffer;"; > {
+		ALPHABLENDENABLE = FALSE;	ALPHATESTENABLE = FALSE;
+		ZENABLE = FALSE; ZWRITEENABLE = FALSE;
+		VertexShader = compile vs_3_0 Common_VS();
+		PixelShader  = compile ps_3_0 CopyPos_PS();
+	}
+	pass UpdatePos < string Script= "Draw=Buffer;"; > {
+		ALPHABLENDENABLE = FALSE;	ALPHATESTENABLE = FALSE;
+		ZENABLE = FALSE; ZWRITEENABLE = FALSE;
+		VertexShader = compile vs_3_0 Common_VS();
+		PixelShader  = compile ps_3_0 UpdatePos_PS();
+	}
+
+	pass DrawLine < string Script= "Draw=Geometry;"; > {
+		ZENABLE = FALSE; ZWRITEENABLE = FALSE;
+		CULLMODE = NONE;
+		VertexShader = compile vs_3_0 DrawLine_VS();
+		PixelShader  = compile ps_3_0 DrawLine_PS();
+	}
+	pass DrawDot < string Script= "Draw=Geometry;"; > {
+		ZENABLE = FALSE; ZWRITEENABLE = FALSE;
+		CULLMODE = NONE;
+		VertexShader = compile vs_3_0 DrawDot_VS();
+		PixelShader  = compile ps_3_0 DrawDot_PS();
+	}
+}
+
+// Z値プロット用テクニック
+technique ZplotTec {}
+

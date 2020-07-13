@@ -1,0 +1,588 @@
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+#include "ikPolishShader.fxsub"
+
+
+// 座法変換行列
+float4x4 matW			: WORLD;
+float4x4 matV			: VIEW;
+float4x4 matP			: PROJECTION;
+float4x4 matWV			: WORLDVIEW;
+float4x4 matVP			: VIEWPROJECTION;
+float4x4 matWVP			: WORLDVIEWPROJECTION;
+// static float4x4 matWVP = mul(matWV, matP);
+
+// マテリアル色
+float4	MaterialDiffuse		: DIFFUSE  < string Object = "Geometry"; >;
+float3	MaterialAmbient		: AMBIENT  < string Object = "Geometry"; >;
+float3	MaterialEmissive	: EMISSIVE < string Object = "Geometry"; >;
+float3	MaterialSpecular	: SPECULAR < string Object = "Geometry"; >;
+float	SpecularPower		: SPECULARPOWER < string Object = "Geometry"; >;
+
+float3	CameraPosition		: POSITION  < string Object = "Camera"; >;
+float3	CameraDirection		: DIRECTION  < string Object = "Camera"; >;
+float3	LightDiffuse		: DIFFUSE   < string Object = "Light"; >;
+
+// 材質モーフ対応
+float4	TextureAddValue   : ADDINGTEXTURE;
+float4	TextureMulValue   : MULTIPLYINGTEXTURE;
+float4	SphereAddValue    : ADDINGSPHERETEXTURE;
+float4	SphereMulValue    : MULTIPLYINGSPHERETEXTURE;
+
+static float4 DiffuseColor  = float4(saturate((MaterialAmbient.rgb+MaterialEmissive.rgb)),MaterialDiffuse.a);
+
+#if !defined(USE_NCHL_SETTINGS)
+static float3 SpecularColor = (MaterialSpecular * (LightDiffuse.r * 9 + 1)) * 0.9 + 0.05;
+#else
+#define SpecularColor	(saturate(MaterialSpecular.g * 2) * 0.9 + 0.05)
+#endif
+
+
+
+#if defined(USE_AUTOREFLECTION_SETTINGS)
+// AutoReflection対応モデルのパラメータにより材質を決定する
+static float CustomMetalness = (saturate(frac(SpecularPower*100)+0.0001))%1.0;
+static float CustomSmoothness = (1.0 - saturate(1.0-clamp(SpecularPower,0,50.0)/50.0)) * 0.96 + 0.02;
+#else
+static float CustomMetalness = saturate(Metalness);
+
+#if defined(ENABLE_AUTO_SMOOTHNESS)
+// 謎の係数スペキュラーパワーを適当にスムースネスに置き換える。(0:マット。1:ツルツル)
+float CalcSmoothness(float power)
+{
+	// 1に近過ぎると、ピーキーになりすぎてハイライトがでないので、0.2～0.98の間に抑える
+	return saturate((log(power) / log(2) - 1) / 8.0) * 0.96 + 0.02;
+}
+static float CustomSmoothness = CalcSmoothness(SpecularPower);
+#else
+static float CustomSmoothness = saturate(Smoothness) * 0.96 + 0.02;
+#endif
+#endif
+static float CustomIntensity = saturate(Intensity);
+
+
+bool	spadd;	// スフィアマップ加算合成フラグ
+bool	use_spheremap;
+
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+	texture = <ObjectTexture>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;
+	ADDRESSV  = WRAP;
+};
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;
+	ADDRESSV  = WRAP;
+};
+
+
+#if defined(USE_SEPARATE_MAP)
+#if defined(METALNESSMAP_FILENAME)
+texture2D MetalnessMap <
+    string ResourceName = METALNESSMAP_FILENAME;
+>;
+sampler MetalnessMapSamp = sampler_state {
+	texture = <MetalnessMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = None;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+#if defined(SMOOTHNESSMAP_FILENAME)
+texture2D SmoothnessMap <
+    string ResourceName = SMOOTHNESSMAP_FILENAME;
+>;
+sampler SmoothnessMapSamp = sampler_state {
+	texture = <SmoothnessMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = None;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+#if defined(INTENSITYMAP_FILENAME)
+texture2D IntensityMap <
+    string ResourceName = INTENSITYMAP_FILENAME;
+>;
+sampler IntensityMapSamp = sampler_state {
+	texture = <IntensityMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = None;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+#if defined(SSSMAP_FILENAME)
+texture2D SSSMap <
+    string ResourceName = SSSMAP_FILENAME;
+>;
+sampler SSSMapSamp = sampler_state {
+	texture = <SSSMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = None;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+
+#elif defined(USE_MATERIALMAP)
+texture2D MaterialMap <
+    string ResourceName = MATERIALMAP_MAIN_FILENAME;
+>;
+sampler MaterialMapSamp = sampler_state {
+	texture = <MaterialMap>;
+	MinFilter = Linear;
+	MagFilter = Linear;
+	MipFilter = None;
+	AddressU  = WRAP;
+	AddressV = WRAP;
+};
+#endif
+
+#define VOXEL_ENABLE_OUPUT_COLOR
+// ブロック単位で色を統一するために、色情報と深度情報を出力する
+texture2D VoxelColorInfoTex : RenderColorTarget
+<
+	float2 ViewPortRatio = {0.5,0.5};
+	bool AntiAlias = false;
+	int Miplevels = 1;
+#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+	string Format = "A16B16G16R16F" ;
+#else
+	string Format = "R16F" ;
+#endif
+>;
+sampler VoxelInfoSampler = sampler_state {
+	texture = <VoxelColorInfoTex>;
+	FILTER = NONE;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+
+texture2D VoxelMatInfoTex : RenderColorTarget
+<
+	float2 ViewPortRatio = {0.5,0.5};
+	bool AntiAlias = false;
+	int Miplevels = 1;
+	string Format = "A8R8G8B8" ;
+>;
+sampler VoxelInfoMatSampler = sampler_state {
+	texture = <VoxelMatInfoTex>;
+	FILTER = NONE;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+
+texture2D VoxelDepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+>;
+
+float4 VoxelClearColor = {0,0,0,0};
+float VoxelClearDepth  = 1.0;
+
+bool isExistVoxelController : CONTROLOBJECT < string name = VOXEL_CONTROLLER_NAME; >;
+float VoxelAcsSi : CONTROLOBJECT < string name = VOXEL_CONTROLLER_NAME; string item = "Si"; >;
+static float VoxelScaledGridSize = max(VoxelGridSize * (isExistVoxelController ? VoxelAcsSi * 0.1 : 1.0), 0.01);
+
+
+// 出力用
+shared texture PPPNormalMapRT: RENDERCOLORTARGET;
+shared texture PPPMaterialMapRT: RENDERCOLORTARGET;
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 
+float3x3 compute_tangent_frame(float3 Normal, float3 View, float2 UV)
+{
+  float3 dp1 = ddx(View);
+  float3 dp2 = ddy(View);
+  float2 duv1 = ddx(UV);
+  float2 duv2 = ddy(UV);
+
+  float3x3 M = float3x3(dp1, dp2, cross(dp1, dp2));
+  float2x3 inverseM = float2x3(cross(M[1], M[2]), cross(M[2], M[0]));
+  float3 Tangent = mul(float2(duv1.x, duv2.x), inverseM);
+  float3 Binormal = mul(float2(duv1.y, duv2.y), inverseM);
+
+  return float3x3(normalize(Tangent), normalize(Binormal), Normal);
+}
+
+float4 CalcNormal(float2 Tex,float3 Eye,float3 Normal)
+{
+#if !defined(USE_NORMALMAP) && !defined(USE_NCHL_SETTINGS)
+	return float4(Normal,1);
+#else
+	float4 Norm = 1;
+
+	#if !defined(USE_NCHL_SETTINGS)
+	float2 tex = Tex* NormalMapMainLoopNum;//メイン
+	float4 NormalColor = tex2D( NormalMapSamp, tex) * 2 - 1;
+	NormalColor.rg *= NormalMapMainHeightScale;
+	#else
+	float4 NormalColor = tex2D( ObjSphareSampler, Tex) * 2 - 1;
+	#endif
+	NormalColor.rgb = normalize(NormalColor.rgb);
+
+	#if defined(USE_NORMALMAP)
+	float2 texSub = Tex * NormalMapSubLoopNum;//サブ
+	float4 NormalColorSub = tex2D( NormalMapSampSub, texSub)*2-1;	//-1～1の値にする
+	NormalColorSub.rg *= NormalMapSubHeightScale;
+	NormalColorSub.rgb = normalize(NormalColorSub.rgb);//正規化
+
+	NormalColor.rg += NormalColorSub.rg;
+	NormalColor.rgb = normalize(NormalColor.rgb);
+	#endif
+
+	NormalColor.a = 1;
+
+	float3x3 tangentFrame = compute_tangent_frame(Normal, Eye, Tex);
+	Norm.rgb = normalize(mul(NormalColor.rgb, tangentFrame));
+
+	return Norm;
+#endif
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+// ベクタの補正。
+// vに0が入って、1/vで無限大になるのを防ぐ
+inline float3 AdjustVector(float3 i)
+{
+	return (step(0.0, i) * 2.0 - 1.0) * max(abs(i), 1e-4);
+}
+
+// 座標の正規化
+inline float3 AlignPosition(float3 pos)
+{
+	// floorで0付近がおかしくならないように原点をズラしてからfloorする。
+	return (floor(pos.xyz * (1.0/VoxelScaledGridSize) + 1000 + 0.5) - 1000) * VoxelScaledGridSize;
+}
+
+// テクスチャの解像度を落とす
+inline float2 AlignTexture(float2 uv)
+{
+	return (floor(uv * VoxelTextureGridSize + 1000 + 0.5) - 1000) * (1.0/VoxelTextureGridSize);
+}
+
+
+// ヒット判定
+float4 Raytrace(float4 pos, float3 v, out float3 hitblock, out float4 params)
+{
+	float4 albedo = 0;
+	params = 0;
+
+	pos.xyz += v * (VoxelScaledGridSize * -2.0);
+
+	// 交差判定用の係数
+	float3 invV = 1.0 / v;
+	float3 offset1 = (sign(v) * VoxelScaledGridSize * 0.5) * invV;
+	// float3 offset2 = (sign(v) * VoxelScaledGridSize * 1.5) * invV;
+	// 次の次のブロックまでの距離を計算するための概算値
+	float3 tnext0 = abs(VoxelScaledGridSize * invV);
+	float t2 = min(tnext0.x, min(tnext0.y, tnext0.z));
+
+	for(int i = 0; i < VOXEL_ITERATION_NUMBER; i++)
+	{
+		hitblock = AlignPosition(pos.xyz);
+		float4 ppos = mul(float4(hitblock, 1), matVP);
+		float4 vpos = mul(float4(hitblock, 1), matV);
+		float2 uv = (ppos.xy / ppos.w * float2(0.5, -0.5) + 0.5);
+
+		#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+			float4 albedo0 = tex2Dlod(VoxelInfoSampler, float4(uv,0,0));
+			float depth = albedo0.w;
+		#else
+			float depth = tex2Dlod(VoxelInfoSampler, float4(uv,0,0)).x;
+		#endif
+
+		if (0.0 < depth && depth < vpos.z * 1.01 + VoxelScaledGridSize)
+		{
+			#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+				albedo = albedo0;
+			#else
+				albedo = 1;
+			#endif
+			params = tex2Dlod(VoxelInfoMatSampler, float4(uv,0,0));
+			break;
+		}
+
+		float3 dif = (hitblock - pos.xyz) * invV;
+		float3 tnear = offset1 + dif;		// 次のブロックまでの距離
+		// float3 tnext = offset2 + dif;	// 次の次のブロックまでの距離
+		float3 t0 = (tnear.x < tnear.y) ? tnear.xyz : tnear.yxz;
+		t0 = (t0.y < t0.z) ? t0.xyz : ((t0.x < t0.z) ? t0.xzy : t0.zxy);
+		pos.xyz += v * ((t0.x + min(t0.y, t0.x + t2)) * 0.5);
+	}
+
+	#if defined(VOXEL_ENABLE_FALLOFF) && VOXEL_ENABLE_FALLOFF > 0
+	if (albedo.w <= 0.0)
+	{
+		hitblock = AlignPosition(pos.xyz);
+		float4 ppos = mul(float4(hitblock, 1), matVP);
+		float2 uv = (ppos.xy / ppos.w * float2(0.5, -0.5) + 0.5);
+		#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+		albedo = tex2Dlod(VoxelInfoSampler, float4(uv,0,0));
+		#else
+		albedo = tex2Dlod(VoxelInfoSampler, float4(uv,0,0)).xxxx;
+		#endif
+	}
+	#endif
+
+	return albedo;
+}
+
+// 交点と法線の計算
+float3 CalcPositionAndNormal(float3 hitblock, inout float3 N, float3 V, float depthRate)
+{
+	float3 sv = sign(V);
+	float3 tNear = (CameraPosition - (hitblock.xyz + (VoxelScaledGridSize * 0.5))) * (1.0/V);
+	float3 tFar  = (CameraPosition - (hitblock.xyz - (VoxelScaledGridSize * 0.5))) * (1.0/V);
+	tNear = min(tNear, tFar);
+	float3 hitpos = CameraPosition - V * max(tNear.x, max(tNear.y, tNear.z));
+	float3 N0 = normalize(abs(hitpos - hitblock));
+	N0 = normalize(step(max(N0.x, max(N0.y, N0.z)).xxx - VoxelBevelOffset, N0) * sv);
+
+	// 距離に応じて法線を弱める
+	// ベベルがモアレになるのを軽減する。
+	N = normalize(lerp(N, N0, 1.0 - saturate(depthRate)));
+
+	return hitpos;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// ブロック単位で色を塗るための情報を出力する
+
+struct BufferShadow_OUTPUT
+{
+	float4 Pos		: POSITION;	 // 射影変換座標
+	float2 Tex		: TEXCOORD0;	// テクスチャ
+	float2 SpTex	: TEXCOORD1;
+	float4 Distance	: TEXCOORD2;
+};
+
+struct InfoPS_OUT_MRT
+{
+	float4 Color		: COLOR0;
+	float4 Material		: COLOR1;
+};
+
+
+BufferShadow_OUTPUT DrawInfo_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0)
+{
+	BufferShadow_OUTPUT Out = (BufferShadow_OUTPUT)0;
+	Out.Pos = mul( Pos, matWVP );
+	Out.Distance = mul( Pos, matWV );
+	Out.Tex = Tex;
+
+	if ( use_spheremap && !spadd) {
+		float2 NormalWV = normalize(mul( Normal, (float3x3)matWV).xy);
+		Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+		Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+	}
+
+	return Out;
+}
+
+InfoPS_OUT_MRT DrawInfo_PS(BufferShadow_OUTPUT IN, uniform bool useTexture)
+{
+	float4 Color = DiffuseColor;
+	if ( useTexture ) {
+		float4 TexColor = tex2D( ObjTexSampler, AlignTexture(IN.Tex) );
+		Color *= TexColor;
+	}
+
+	clip(Color.a - AlphaThreshold);
+
+	#if !defined(USE_NCHL_SETTINGS)
+	if ( use_spheremap && !spadd) {
+		// 加算のスフィアマップは擬似スペキュラだと思われるので無視
+		float4 TexColor = tex2D(ObjSphareSampler,IN.SpTex);
+		Color.rgb *= TexColor.rgb;
+	}
+	#endif
+
+	float4 params = 1;
+	#if defined(USE_MATERIALMAP) && !defined(USE_SEPARATE_MAP)
+		float2 tex = IN.Tex * MaterialMapLoopNum;
+		params = tex2D( MaterialMapSamp, tex);
+	#elif defined(USE_NCHL_SETTINGS)
+		float spec = tex2D( ObjSphareSampler, IN.Tex).a;
+		params.x = CustomMetalness;
+		#if defined(NCHL_ALPHA_AS_SMOOTHNESS)
+			params.y = spec;
+		#else
+			params.y = CustomSmoothness;
+		#endif
+		#if defined(NCHL_ALPHA_AS_INTENSITY)
+			params.z = spec;
+		#else
+			params.z = CustomIntensity;
+		#endif
+		params.w = SSSValue;
+	#else
+		params = float4(CustomMetalness, CustomSmoothness, CustomIntensity, SSSValue);
+	#endif
+	#if defined(USE_SEPARATE_MAP)
+		#if defined(METALNESSMAP_FILENAME)
+			params.x = tex2D( MetalnessMapSamp, IN.Tex * MetalnessMapLoopNum).r;
+		#endif
+		#if defined(SMOOTHNESSMAP_FILENAME)
+			params.y = tex2D( SmoothnessMapSamp, IN.Tex * SmoothnessMapLoopNum).r;
+		#endif
+		#if defined(INTENSITYMAP_FILENAME)
+			params.z = tex2D( IntensityMapSamp, IN.Tex * IntensityMapLoopNum).r;
+		#endif
+		#if defined(SSSMAP_FILENAME)
+			params.w = tex2D( SSSMapSamp, IN.Tex * SSSMapLoopNum).r;
+		#endif
+	#endif
+
+	// スペキュラの色＝反射色とみなす
+	float metalness = params.x;
+	float3 spColor = (Color.rgb * 0.5 + 0.5) * SpecularColor;
+	Color.rgb = lerp(NonmetalF0, spColor, metalness);
+	Color.w = IN.Distance.z;
+
+	InfoPS_OUT_MRT Out;
+	Out.Color = Color;
+	Out.Material = params;
+
+	return Out;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT
+{
+	float4 Pos		: POSITION;
+	float3 Normal	: TEXCOORD0;
+	float4 WPos		: TEXCOORD1;
+	float3 Distance	: TEXCOORD2;
+};
+
+struct PS_OUT_MRT
+{
+	float4 Color		: COLOR0;
+	float4 Normal		: COLOR1;
+	float4 Material		: COLOR2;
+};
+
+VS_OUTPUT Basic_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex: TEXCOORD0, uniform bool bExpand)
+{
+	VS_OUTPUT Out = (VS_OUTPUT)0;
+
+	Out.WPos = mul( Pos, matW );
+	Out.Normal = normalize( mul( Normal, (float3x3)matW ) );
+
+	if (bExpand)
+	{
+		// 法線方向に拡大
+		float3 vNormal = normalize(Out.Normal - dot(Out.Normal, CameraDirection));
+		Out.WPos.xyz += vNormal * VoxelScaledGridSize;
+	}
+
+	Out.Pos = mul( Out.WPos, matVP );
+
+	Out.Distance.x = mul(Out.WPos, matV).z;
+	Out.Distance.yz = mul(float4(0,VoxelScaledGridSize,Out.Distance.x,1), matP).yw;
+	Out.Distance.y *= ViewportSize.y * 0.5 / 2.0;
+
+	return Out;
+}
+
+
+PS_OUT_MRT Basic_PS( VS_OUTPUT IN) : COLOR
+{
+	float3 V = AdjustVector(normalize(CameraPosition - IN.WPos.xyz));
+	// float3 N = CalcNormal(IN.Tex, V, normalize(IN.Normal)).xyz;
+
+	//-----------------------------------------------------------
+	// どのブロックにヒットするか探す
+	float3 hitblock = 0;
+	float4 params = 0;
+	float4 albedo = Raytrace(IN.WPos, -V, hitblock, params);
+	clip(albedo.w - 1e-3); // ヒットしなかった
+
+	float3 N = IN.Normal;
+	float3 hitpos = CalcPositionAndNormal(hitblock, N, V, IN.Distance.z / IN.Distance.y);
+	float distance = mul(float4(hitpos,1), matV).z;
+
+	PS_OUT_MRT Out;
+	Out.Material = params;
+	Out.Normal = float4(N, distance);
+	Out.Color = albedo;
+
+	return Out;
+}
+
+#define OBJECT_TEC(name, mmdpass, tex) \
+	technique name < string MMDPass = mmdpass; bool UseTexture = tex; \
+	string Script = \
+		"RenderColorTarget0=VoxelColorInfoTex; RenderColorTarget1=VoxelMatInfoTex;" \
+		"RenderDepthStencilTarget=VoxelDepthBuffer;" \
+		"ClearSetColor=VoxelClearColor; ClearSetDepth=VoxelClearDepth; Clear=Color; Clear=Depth;" \
+		"Pass=DrawInfo;" \
+		"RenderColorTarget0=; RenderColorTarget1=PPPNormalMapRT; RenderColorTarget2=PPPMaterialMapRT;" \
+		"RenderDepthStencilTarget=;" \
+		"Pass=DrawFalloff; Pass=DrawObject;" \
+		"RenderColorTarget1=; RenderColorTarget2=;" \
+	; \
+	> { \
+		pass DrawInfo { \
+			AlphaTestEnable = FALSE; AlphaBlendEnable = FALSE; \
+			VertexShader = compile vs_3_0 DrawInfo_VS(); \
+			PixelShader  = compile ps_3_0 DrawInfo_PS(tex); \
+		} \
+		pass DrawFalloff { /* 拡大すると穴が開くことがあるので念のために */ \
+			AlphaTestEnable = FALSE; AlphaBlendEnable = FALSE; \
+			VertexShader = compile vs_3_0 Basic_VS(false); \
+			PixelShader  = compile ps_3_0 Basic_PS(); \
+		} \
+		pass DrawObject { \
+			AlphaTestEnable = FALSE; AlphaBlendEnable = FALSE; \
+			CullMode = none; \
+			VertexShader = compile vs_3_0 Basic_VS(true); \
+			PixelShader  = compile ps_3_0 Basic_PS(); \
+		} \
+	}
+
+
+OBJECT_TEC(MainTec0, "object", false)
+OBJECT_TEC(MainTec1, "object", true)
+OBJECT_TEC(MainTecBS0, "object_ss", false)
+OBJECT_TEC(MainTecBS1, "object_ss", true)
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTech < string MMDPass = "shadow";  > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////

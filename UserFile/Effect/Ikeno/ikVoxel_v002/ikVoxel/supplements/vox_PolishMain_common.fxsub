@@ -1,0 +1,584 @@
+
+#include "ikPolishShader.fxsub"
+
+bool Exist_Polish : CONTROLOBJECT < string name = "ikPolishShader.x"; >;
+
+// アンビエントマップ
+shared texture2D PPPReflectionMap : RENDERCOLORTARGET;
+sampler ReflectionMapSamp = sampler_state {
+	texture = <PPPReflectionMap>;
+	Filter = NONE;	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+// 材質マップ
+shared texture PPPMaterialMapRT: RENDERCOLORTARGET;
+sampler MaterialMap = sampler_state {
+	texture = <PPPMaterialMapRT>;
+	Filter = NONE;	AddressU  = CLAMP;	AddressV = CLAMP;
+
+};
+
+// 法線マップ
+shared texture PPPNormalMapRT: RENDERCOLORTARGET;
+sampler NormalMap = sampler_state {
+	texture = <PPPNormalMapRT>;
+	Filter = NONE;	AddressU  = CLAMP;	AddressV = CLAMP;
+};
+
+// シャドウマップ
+shared texture2D PPPShadowmapMap : RENDERCOLORTARGET;
+sampler2D ShadowmapSamp = sampler_state {
+    texture = <PPPShadowmapMap>;
+    Filter = NONE;    AddressU  = CLAMP; AddressV = CLAMP;
+};
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+float mDirectLightP : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "直接光+"; >;
+float mDirectLightM : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "直接光-"; >;
+/*
+float mTestMode : CONTROLOBJECT < string name = CONTROLLER_NAME; string item = "テストモード"; >;
+static int TestMode = floor(mTestMode * 4.0);
+*/
+
+// 座法変換行列
+float4x4 matWVP			: WORLDVIEWPROJECTION;
+float4x4 matWV			: WORLDVIEW;
+float4x4 matVP			: VIEWPROJECTION;
+float4x4 matW			: WORLD;
+float4x4 matV			: VIEW;
+float4x4 matP			: PROJECTION;
+
+float4x4 matLightWVP	: WORLDVIEWPROJECTION < string Object = "Light"; >;
+float3	LightDirection	: DIRECTION < string Object = "Light"; >;
+float3	CameraDirection	: DIRECTION < string Object = "Camera"; >;
+float3	CameraPosition	: POSITION  < string Object = "Camera"; >;
+
+// ライト色
+float3	LightDiffuse		: DIFFUSE   < string Object = "Light"; >;
+float3	LightSpecular	 	: SPECULAR  < string Object = "Light"; >;
+
+// マテリアル色
+float4	MaterialDiffuse		: DIFFUSE  < string Object = "Geometry"; >;
+float3	MaterialAmbientOrig	: AMBIENT  < string Object = "Geometry"; >;
+float3	MaterialEmissiveOrig	: EMISSIVE < string Object = "Geometry"; >;
+float3	MaterialSpecular	: SPECULAR < string Object = "Geometry"; >;
+float3	MaterialToon		: TOONCOLOR;
+
+// アクセサリのスペキュラは1/10されているのでそれを補正する
+#define SpecularColor	Degamma(MaterialSpecular * (LightDiffuse.r * 9 + 1))
+/*
+// NCHLの設定
+#define SpecularColor	saturate(MaterialSpecular.g * 2)
+*/
+
+#if defined(IGNORE_EMISSIVE)
+static float3	MaterialAmbient = MaterialAmbientOrig;
+static float3	MaterialEmissive = 0;
+#elif defined(EMMISIVE_AS_AMBIENT)
+static float3	MaterialAmbient = saturate(MaterialAmbientOrig + MaterialEmissiveOrig);
+static float3	MaterialEmissive = 0;
+#else
+static float3	MaterialAmbient = MaterialAmbientOrig;
+static float3	MaterialEmissive = MaterialEmissiveOrig;
+#endif
+
+// ライトの強度
+static float LightScale = CalcLightValue(mDirectLightP, mDirectLightM, DefaultLightScale);
+
+// 材質モーフ対応
+float4	TextureAddValue   : ADDINGTEXTURE;
+float4	TextureMulValue   : MULTIPLYINGTEXTURE;
+float4	SphereAddValue    : ADDINGSPHERETEXTURE;
+float4	SphereMulValue    : MULTIPLYINGSPHERETEXTURE;
+
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+static float2 ViewportOffset = (float2(0.5,0.5)/ViewportSize);
+
+bool use_texture;
+bool use_spheremap;
+bool use_toon;
+
+bool	 parthf;   // パースペクティブフラグ
+bool	 transp;   // 半透明フラグ
+bool	 spadd;	// スフィアマップ加算合成フラグ
+#define SKII1	1500
+#define SKII2	8000
+#define Toon	 3
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+// シャドウバッファのサンプラ。"register(s0)"なのはMMDがs0を使っているから
+sampler DefSampler : register(s0);
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+	texture = <ObjectTexture>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;
+	ADDRESSV  = WRAP;
+};
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphereSampler = sampler_state {
+	texture = <ObjectSphereMap>;
+	MINFILTER = LINEAR;
+	MAGFILTER = LINEAR;
+	ADDRESSU  = WRAP;
+	ADDRESSV  = WRAP;
+};
+
+
+
+#define VOXEL_ENABLE_OUPUT_COLOR
+#include "../vox_commons.fxsub"
+
+struct BufferShadow_OUTPUT {
+	float4 Pos		: POSITION;	// 射影変換座標
+	float2 Tex		: TEXCOORD0;	// Z値
+	float3 Normal	: TEXCOORD1;	// 法線
+	float4 ScreenTex	: TEXCOORD2;   // スクリーン座標
+
+	float3 Distance	: TEXCOORD3;
+	float4 WPos		: TEXCOORD4;	// Z値
+};
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+#define	PI	(3.14159265359)
+
+// ガンマ補正
+const float gamma = 2.2;
+const float epsilon = 1.0e-6;
+inline float3 Degamma(float3 col) { return pow(max(col,epsilon), gamma); }
+inline float3 Gamma(float3 col) { return pow(max(col,epsilon), 1.0/gamma); }
+inline float4 Degamma4(float4 col) { return float4(Degamma(col.rgb), col.a); }
+inline float4 Gamma4(float4 col) { return float4(Gamma(col.rgb), col.a); }
+inline float rgb2gray(float3 rgb)
+{
+	return dot(float3(0.299, 0.587, 0.114), max(rgb,0));
+}
+
+float3 CalcNormalizedToon()
+{
+	float3 result = 1;
+	if (use_toon)
+	{
+		float3 linearColor = Degamma(MaterialToon);
+		#if !defined(ToonColor_Scale)
+		float3 tmp = linearColor;
+		#else
+		float3 tmp = pow(linearColor, ToonColor_Scale);
+		#endif
+		result = saturate(tmp / max(rgb2gray(tmp), 0.001));
+	}
+	return result;
+}
+
+static float3 NormalizedToon = CalcNormalizedToon();
+static float3 MaterialBaseColor = Degamma((!use_toon) ? MaterialDiffuse.rgb : MaterialAmbient);
+
+float CalcDiffuse(float3 L, float3 N, float3 V, float smoothness, float3 f0)
+{
+	float NL = saturate(dot(N ,L));
+	float NV = saturate(dot(N, V));
+
+	// Simplified Oren-Nayar
+	float roughness = (1 - smoothness);
+	float sigma2 = roughness * roughness;
+
+	float A = 1 - 0.5 * sigma2 / (sigma2 + 0.33);
+	float B = 0.45 * sigma2 / (sigma2 + 0.09);
+
+	float a = max( acos( NV ), acos( NL ) );
+	float b = min( acos( NV ), acos( NL ) );
+	float g = max( dot(V - N * NV, L - N * NL), 0);
+	float C = A + B * g * sin(a) * tan(b);
+	float result = NL * C; //  / PI;
+
+	return saturate(result) * LightScale;
+}
+
+
+// 金属の場合、F0はrgb毎に異なる値を持つ
+inline float3 CalcFresnel(float NV, float3 F0)
+{
+	// Schlickの近似式
+//	return F0 + (1.0 - F0) * pow(1 - NV, 5);
+	float fc = pow(1 - NV, 5);
+	return (1.0 - fc) * F0 + fc;
+}
+
+//スペキュラの計算
+float3 CalcSpecular(float3 L, float3 N, float3 V, float smoothness, float3 f0)
+{
+	float3 H = normalize(L + V);
+
+	float a = 1 - smoothness;
+	a *= a;
+	float aSq = a * a;
+	float NV = saturate(dot(N, V));
+	float NH = saturate(dot(N, H));
+	float VH = saturate(dot(V, H));
+	float NL = saturate(dot(N, L));
+	float LH = saturate(dot(L, H));
+
+	// NDF: Trowbridge-Reitz(GGX)
+	float CosSq = (NH * NH) * (aSq - 1) + 1;
+	float D = aSq / (PI * CosSq * CosSq);
+
+	// フレネル項
+	float3 F = CalcFresnel(LH, f0);
+
+	// 幾何学的減衰係数(G項)
+	float k = a * 0.5;
+	float k2 = k * k;
+	float vis = 1.0 / (LH * LH * (1 - k2) + k2);
+	return saturate(NL * D * F * vis / 4.0) * LightScale;
+}
+
+inline float3 CalcReflectance(float smoothness, float3 N, float3 V, float3 f0)
+{
+	float NV = abs(dot(N,V));
+	float3 f = CalcFresnel(NV, f0);
+	float roughness = max(1.0 - smoothness, 1.0e-4);
+	float g = 1.0 / pow(2, roughness * 4.0); // ラフなほど暗くなる
+	return saturate(f) * g;
+}
+
+
+inline float CalcShadow(float4 wpos, float2 texCoord)
+{
+#if defined(ADD_DEFAULT_SHADOW)
+	float shadow = 1;
+
+	float4 ZCalcTex = mul( wpos, matLightWVP );
+
+	// テクスチャ座標に変換
+	ZCalcTex /= ZCalcTex.w;
+	float2 TransTexCoord;
+	TransTexCoord.x = (1.0f + ZCalcTex.x)*0.5f;
+	TransTexCoord.y = (1.0f - ZCalcTex.y)*0.5f;
+	if( any( saturate(TransTexCoord) != TransTexCoord ) ) {
+		; // シャドウバッファ外
+	} else {
+		float a = (parthf) ? SKII2*TransTexCoord.y : SKII1;
+		float d = ZCalcTex.z;
+		float z = tex2D(DefSampler,TransTexCoord).r;
+		shadow = 1 - saturate(max(d - z , 0.0f)*a-0.3f);
+	}
+
+	return min(shadow, tex2D(ShadowmapSamp, texCoord).r);
+#else
+	return tex2D(ShadowmapSamp, texCoord).r;
+#endif
+
+}
+
+inline float4 GetTextureColor(float2 uv)
+{
+	float4 TexColor = tex2D( ObjTexSampler, uv);
+	TexColor.rgb = lerp(1, TexColor * TextureMulValue + TextureAddValue, TextureMulValue.a + TextureAddValue.a).rgb;
+	return TexColor;
+}
+
+inline float4 GetSphereColor(float2 uv)
+{
+	float4 TexColor = tex2D(ObjSphereSampler, uv);
+	TexColor.rgb = lerp(spadd?0:1, TexColor * SphereMulValue + SphereAddValue, SphereMulValue.a + SphereAddValue.a).rgb;
+	return TexColor;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 輪郭描画
+technique EdgeTec < string MMDPass = "edge"; > {}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 影（非セルフシャドウ）描画
+technique ShadowTec < string MMDPass = "shadow"; > {}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// セルフシャドウ用Z値プロット
+
+#if defined(ADD_DEFAULT_SHADOW)
+
+struct VS_ZValuePlot_OUTPUT {
+	float4 Pos : POSITION;				// 射影変換座標
+	float4 ShadowMapTex : TEXCOORD0;	// Zバッファテクスチャ
+};
+
+VS_ZValuePlot_OUTPUT ZValuePlot_VS( float4 Pos : POSITION, float2 Tex : TEXCOORD0 )
+{
+	VS_ZValuePlot_OUTPUT Out = (VS_ZValuePlot_OUTPUT)0;
+	Out.Pos = mul( Pos, matLightWVP );
+	Out.ShadowMapTex = Out.Pos;
+	return Out;
+}
+
+// ピクセルシェーダ
+float4 ZValuePlot_PS( float4 ShadowMapTex : TEXCOORD0, float2 Tex : TEXCOORD1 ) : COLOR
+{
+	return float4(ShadowMapTex.z/ShadowMapTex.w,0,0,1);
+}
+
+technique ZplotTec < string MMDPass = "zplot"; > {
+	pass ZValuePlot {
+		AlphaBlendEnable = FALSE;
+		VertexShader = compile vs_2_0 ZValuePlot_VS();
+		PixelShader  = compile ps_2_0 ZValuePlot_PS();
+	}
+}
+
+#else
+
+// MMD標準のシャドウマップを使わないので、何もしない。
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+#endif
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// ブロック単位で色を塗るための情報を出力する
+
+struct DrawInfo_OUTPUT
+{
+	float4 Pos		: POSITION;	 // 射影変換座標
+	float2 Tex		: TEXCOORD0;	// テクスチャ
+	float4 Distance	: TEXCOORD1;
+};
+
+
+DrawInfo_OUTPUT DrawInfo_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0)
+{
+	DrawInfo_OUTPUT Out = (DrawInfo_OUTPUT)0;
+	Out.Pos = mul( Pos, matWVP );
+	Out.Distance = mul( Pos, matWV );
+	Out.Tex = Tex;
+	return Out;
+}
+
+float4 DrawInfo_PS(DrawInfo_OUTPUT IN) : COLOR
+{
+	// 素材自体の色
+	float4 albedo = float4(MaterialBaseColor, MaterialDiffuse.a);
+	if ( use_texture ) albedo *= Degamma4(GetTextureColor(AlignTexture(IN.Tex)));
+
+	clip(albedo.a - VoxelAlphaThreshold);
+	albedo.rgb = Gamma(albedo.rgb);
+	albedo.w = IN.Distance.z;
+
+	return albedo;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウON）
+
+// 頂点シェーダ
+BufferShadow_OUTPUT DrawObject_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, uniform bool useSelfShadow, uniform bool bExpand)
+{
+	BufferShadow_OUTPUT Out = (BufferShadow_OUTPUT)0;
+
+	Out.WPos = mul( Pos, matW );
+	Out.Normal = normalize( mul( Normal, (float3x3)matW ) );
+
+	if (bExpand)
+	{
+		// 法線方向に拡大
+		float3 vNormal = normalize(Out.Normal - dot(Out.Normal, CameraDirection));
+		Out.WPos.xyz += vNormal * VoxelScaledGridSize;
+	}
+
+	Out.Pos = mul( Out.WPos, matVP );
+
+	Out.Distance.x = mul(Out.WPos, matV).z;
+	Out.Distance.yz = mul(float4(0,VoxelScaledGridSize,Out.Distance.x,1), matP).yw;
+	Out.Distance.y *= ViewportSize.y * 0.5 / 2.0;
+
+	Out.ScreenTex = Out.Pos;
+	Out.Tex = Tex;
+
+	return Out;
+}
+
+
+// ピクセルシェーダ
+float4 DrawObject_PS(BufferShadow_OUTPUT IN, uniform bool useSelfShadow) : COLOR
+{
+	#if defined(VOXEL_ENBALE_ALPHA_BLOCK) && VOXEL_ENBALE_ALPHA_BLOCK > 0
+	// 透明なら破棄
+	float alpha = MaterialDiffuse.a;
+	if ( use_texture ) alpha *= tex2D( ObjTexSampler, AlignTexture(IN.Tex)).a;
+	clip(alpha - VoxelAlphaThreshold);
+	#endif
+
+	float3 L = -LightDirection;
+	float3 V = AdjustVector(normalize(CameraPosition - IN.WPos.xyz));
+	// float3 N = normalize(IN.Normal);
+
+	//-----------------------------------------------------------
+	// どのブロックにヒットするか探す
+	float3 hitblock = 0;
+	float4 albedo = Raytrace(IN.WPos, -V, hitblock);
+	clip(albedo.w - 1e-3); // ヒットしなかった
+
+	// 素材自体の色
+	albedo.rgb = Degamma(albedo.rgb);
+	albedo.a = alpha;
+
+	// 法線の計算
+	float3 N = IN.Normal;
+	float3 hitpos = CalcPositionAndNormal(hitblock, N, V, IN.Distance.z / IN.Distance.y);
+
+	#if defined(VOXEL_TEXTURE)
+	float2 griduv = CalcUV(N, hitpos * (1.0 / VoxelScaledGridSize));
+	float3 gridPattern = tex2D( VoxelPatternSmp, griduv).rgb;
+	albedo.rgb *= gridPattern;
+	#endif
+
+	//-----------------------------------------------------------
+
+	float2 texCoord = IN.ScreenTex.xy / IN.ScreenTex.w;;
+	texCoord.x = (1.0f + texCoord.x) * 0.5f;
+	texCoord.y = (1.0f - texCoord.y) * 0.5f;
+	texCoord += ViewportOffset;
+
+	float4 mat = float4(0, 0.5, 1.0, 0.5);
+	if (Exist_Polish)
+	{
+		#if !defined(DISABLE_NORMALMAP)
+		N = normalize(tex2D(NormalMap, texCoord).xyz);
+		#endif
+		mat = tex2D(MaterialMap, texCoord);
+	}
+
+	float metalness = mat.x;
+	float smoothness = mat.y;
+	float intensity = mat.z;
+	float sss = mat.w * (1 - metalness);
+
+	float3 SpSpecular = 0;
+	#if !defined(IGNORE_SPHERE)
+	if ( use_spheremap ) {
+		float2 SpTex = mul( N, (float3x3)matWV).xy * float2(0.5f, -0.5) + 0.5f;
+		float4 TexColor = GetSphereColor(SpTex);
+		if(spadd) {
+			SpSpecular = TexColor.rgb * LightSpecular;
+		} else {
+			albedo.rgb *= Degamma(TexColor.rgb);
+		}
+	}
+	#endif
+	albedo = saturate(albedo);
+
+	#if defined(ENABLE_SSS) && defined(ScatterColor)
+	// 表面色と内部色が透過によって見える。
+	float NV = dot(N, normalize(V));
+	float plusNV = saturate(NV);
+	float top = pow(1-plusNV, TopScale) * (1.0 - TopBias) + TopBias;
+	float bottom = pow(1-plusNV, BottomScale) * (1.0 - BottomBias) + BottomBias;
+	albedo.rgb = lerp(albedo.rgb, BottomCol, bottom * BottomIntensity);
+	albedo.rgb = lerp(albedo.rgb, TopCol, top * TopIntensity);
+	#endif
+
+	// ライトの計算
+	float3 f0 = lerp(0.05, SpecularColor, metalness);
+	float3 specular = CalcSpecular(L, N, V, smoothness, f0);
+	specular += CalcSpecular(L, N, V, SecondSpecularSmooth, f0) * SecondSpecularIntensity;
+	float3 reflectance = CalcReflectance(smoothness, N, V, f0) * intensity;
+
+	float diffuse = CalcDiffuse(L, N, V, smoothness, f0);
+	float shadow = (useSelfShadow) ? CalcShadow(float4(hitpos, 1), texCoord) : 1;
+	float directLight = min(diffuse, shadow);
+	float3 light = (Exist_Polish ? tex2D(ReflectionMapSamp, texCoord).rgb : directLight);
+
+	#if defined(ENABLE_BACKLIGHT)
+	// 逆光による明るさの追加
+	float diffuseBack = min(CalcDiffuse(L, -N, V, smoothness, f0), shadow);
+	float3 diffuseDiff = max(diffuseBack * albedo - directLight, 0);
+	directLight += rgb2gray(diffuseDiff);
+	light += diffuseDiff;
+	#endif
+	float3 tintColor = lerp(NormalizedToon, 1, directLight);
+
+	#if !defined(ScatterColor)
+	light = saturate(tintColor * light * LightSpecular + MaterialEmissive);
+	#else
+	float3 dif = light - directLight;
+	light = directLight + dif * lerp(1, ScatterColor, sss * saturate(1 - rgb2gray(dif)));
+	light = saturate(tintColor * light * LightSpecular + MaterialEmissive);
+	#endif
+
+	#if defined(DISABLE_COLOR)
+	albedo = 1;
+	#endif
+
+	float4 result = float4(light, MaterialDiffuse.a) * albedo;
+	result.rgb *= saturate(1 - reflectance);	// 映りこむ分、暗くする。
+
+	specular = specular * (LightSpecular * shadow) + SpSpecular;
+	#if defined(ENABLE_SPECULAR_ALPHA)
+	float alpha = result.a;
+	float alpha2 = saturate(1 - (1.0 - alpha) * (1.0 - rgb2gray(specular)));
+	result.rgb = (result.rgb * alpha + specular) / alpha2;
+	result.a = alpha2 * saturate(alpha * (1.0 / (5.0/255.0)));
+	#else
+	result.rgb += specular;
+	#endif
+
+	result = Gamma4(result);
+
+	#if defined(DISABLE_HDR)
+	result = saturate(result);
+	#endif
+
+	return result;
+}
+
+
+
+#define OBJECT_TEC(name, mmdpass, selfshadow) \
+	technique name < string MMDPass = mmdpass; bool UseSelfShadow = selfshadow;\
+	string Script = \
+		"RenderColorTarget0=VoxelInfoTex; RenderDepthStencilTarget=VoxelDepthBuffer;" \
+		"ClearSetColor=VoxelClearColor; ClearSetDepth=VoxelClearDepth; Clear=Color; Clear=Depth;" \
+		"Pass=DrawInfo;" \
+		"RenderColorTarget0=; RenderDepthStencilTarget=;" \
+		"Pass=DrawFalloff; Pass=DrawObject;" \
+; \
+	> { \
+		pass DrawInfo { \
+			AlphaBlendEnable = false; AlphaTestEnable = false; \
+			VertexShader = compile vs_3_0 DrawInfo_VS(); \
+			PixelShader  = compile ps_3_0 DrawInfo_PS(); \
+		} \
+		pass DrawFalloff { /* 拡大すると穴が開くことがあるので念のために */ \
+			VertexShader = compile vs_3_0 DrawObject_VS(selfshadow, false); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(selfshadow); \
+		} \
+		pass DrawObject { \
+			CullMode = none; \
+			VertexShader = compile vs_3_0 DrawObject_VS(selfshadow, true); \
+			PixelShader  = compile ps_3_0 DrawObject_PS(selfshadow); \
+		} \
+	}
+
+OBJECT_TEC(MainTec0, "object", false)
+OBJECT_TEC(MainTecBS0, "object_ss", true)
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+

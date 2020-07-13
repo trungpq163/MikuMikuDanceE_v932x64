@@ -1,0 +1,480 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ikPolishShaderのボクセル対応。
+// 他のエフェクトファイルと違い、ikPolishShader/Shadowsフォルダに入れる必要がある。
+// Shadow計算用の情報を読み込む必要があるため。
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+
+//----------------------------------------------------------------------------
+// voxel用パラメータ宣言
+
+// ブロックのサイズ。0.1～1.0程度。
+float VoxelGridSize = 0.5;
+
+// テクスチャの解像度を下げる。8～32程度。
+// 8でテクスチャを8分割する。小さいほど粗くなる。
+float VoxelTextureGridSize = 16;
+
+// 無視する透明度の閾値
+float VoxelAlphaThreshold = 0.05;
+
+// ブロックを描画するとき半透明を考慮する?
+// 0:不透明で描画、1:半透明度を利用する。
+//#define VOXEL_ENBALE_ALPHA_BLOCK	1
+
+// ブロックのフチを丸めるか? 0.0～0.1程度 大きいほどエッジ部分が強調される
+// ※ 0にしても計算誤差でエッジが見える場合があります。
+float VoxelBevelOffset = 0.05;
+
+// チェック回数。4～16程度。多いほど重くなる。
+#define VOXEL_ITERATION_NUMBER	6
+
+// 外部からブロックサイズをコントロールするアクセサリ名
+#define VOXEL_CONTROLLER_NAME	"ikiVoxelSize.x"
+
+// 付き抜けチェックをする? 0:しない、1:チェックする。
+// 1にすることで床が抜けるのを回避できる。代わりに見た目がおかしくなる。
+#define VOXEL_ENABLE_FALLOFF		0
+
+//----------------------------------------------------------------------------
+
+
+#include "../ikPolishShader.fxsub"
+#include "shadowCommons.fxsub"
+
+#define BORDER_RANGE	2		// 1/4画面の境界
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座法変換行列
+float4x4 matWVP				: WORLDVIEWPROJECTION;
+float4x4 matVP				: VIEWPROJECTION;
+float4x4 matWV				: WORLDVIEW;
+float4x4 matW				: WORLD;
+float4x4 matV				: VIEW;
+
+static float4x4 lightMatVP = mul(lightMatV, lightMatP);
+
+float4   MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+bool	opadd;		// 加算合成フラグ
+bool	use_texture;
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+	Filter = LINEAR;
+    ADDRESSU  = WRAP;
+    ADDRESSV  = WRAP;
+};
+
+shared texture LightMapRT : OFFSCREENRENDERTARGET;
+
+sampler LightSamp = sampler_state {
+	texture = <LightMapRT>;
+	Filter = LINEAR;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+
+
+// ブロック単位で色を統一するために、色情報と深度情報を出力する
+texture2D VoxelInfoTex : RenderColorTarget
+<
+	float2 ViewPortRatio = {0.5,0.5};
+	bool AntiAlias = false;
+	int Miplevels = 1;
+	string Format = "R16F"; // 色情報が不要な場合はR16Fで十分。
+>;
+sampler VoxelInfoSampler = sampler_state {
+	texture = <VoxelInfoTex>;
+	FILTER = NONE;
+	AddressU  = CLAMP;
+	AddressV = CLAMP;
+};
+
+texture2D VoxelDepthBuffer : RENDERDEPTHSTENCILTARGET <
+	string Format = "D24S8";
+>;
+
+float4 VoxelClearColor = {0,0,0,0};
+float VoxelClearDepth  = 1.0;
+
+bool isExistVoxelController : CONTROLOBJECT < string name = VOXEL_CONTROLLER_NAME; >;
+float VoxelAcsSi : CONTROLOBJECT < string name = VOXEL_CONTROLLER_NAME; string item = "Si"; >;
+static float VoxelScaledGridSize = max(VoxelGridSize * (isExistVoxelController ? VoxelAcsSi * 0.1 : 1.0), 0.01);
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// テクスチャ座標がどれだけエッジに近いか?
+// テクスチャ座標の範囲は[-1,1]
+inline float CalcEdgeFalloff(float2 texCoord)
+{
+	const float m = (SHADOW_TEX_SIZE * 0.5 / WARP_RANGE);
+	const float a = (BORDER_RANGE * 1.0 / WARP_RANGE);
+	float2 falloff = abs(texCoord) * (-m * 4.0) + (m - a);
+	return saturate(min(falloff.x, falloff.y));
+}
+
+inline float4 CalcCascadePPos(float2 uv, float2 offset, float index)
+{
+	// u, v, カスケードのインデックス, 重み を格納。
+	return float4(uv + ((0.5 + offset) * 0.5 + (0.5 / SHADOW_TEX_SIZE)), index, CalcEdgeFalloff(uv));
+}
+
+#define TEX2D(samp, uv)		tex2Dlod(samp, float4(uv, 0,0))
+//#define TEX2D(samp, uv)		tex2D(samp, uv)
+
+//#define CalcLight(casterDepth, receiverDepth, rate)	(casterDepth >= receiverDepth)
+//#define CalcLight(casterDepth, receiverDepth, rate)	saturate((casterDepth - receiverDepth) * (LightZMax * 10.0) + 1.0)
+
+#define CalcLight(casterDepth, receiverDepth, rate)	(1.0 - saturate(max(receiverDepth - casterDepth, 0) * rate))
+
+
+
+inline float3 AdjustVector(float3 i)
+{
+	return (step(0.0, i) * 2.0 - 1.0) * max(abs(i), 1e-4);
+}
+
+// 座標の正規化
+inline float3 AlignPosition(float3 pos)
+{
+	// floorで0付近がおかしくならないように原点をズラしてからfloorする。
+	return (floor(pos.xyz * (1.0/VoxelScaledGridSize) + 1000 + 0.5) - 1000) * VoxelScaledGridSize;
+}
+
+// テクスチャの解像度を落とす
+inline float2 AlignTexture(float2 uv)
+{
+	return (floor(uv * VoxelTextureGridSize + 1000 + 0.5) - 1000) * (1.0/VoxelTextureGridSize);
+}
+
+
+// ヒット判定
+float4 Raytrace(float4 pos, float3 v, out float3 hitblock)
+{
+	float4 albedo = 0;
+	pos.xyz += v * (VoxelScaledGridSize * -2.0);
+
+	// 交差判定用の係数
+	float3 invV = 1.0 / v;
+	float3 offset1 = (sign(v) * VoxelScaledGridSize * 0.5) * invV;
+	// float3 offset2 = (sign(v) * VoxelScaledGridSize * 1.5) * invV;
+	// 次の次のブロックまでの距離を計算するための概算値
+	float3 tnext0 = abs(VoxelScaledGridSize * invV);
+	float t2 = min(tnext0.x, min(tnext0.y, tnext0.z));
+
+	for(int i = 0; i < VOXEL_ITERATION_NUMBER; i++)
+	{
+		hitblock = AlignPosition(pos.xyz);
+		float4 ppos = mul(float4(hitblock, 1), matVP);
+		float4 vpos = mul(float4(hitblock, 1), matV);
+		float2 uv = (ppos.xy / ppos.w * float2(0.5, -0.5) + 0.5);
+
+		#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+			float4 albedo0 = tex2Dlod(VoxelInfoSampler, float4(uv,0,0));
+			float depth = albedo0.w;
+		#else
+			float depth = tex2Dlod(VoxelInfoSampler, float4(uv,0,0)).x;
+		#endif
+
+		if (0.0 < depth && depth < vpos.z * 1.01 + VoxelScaledGridSize)
+		{
+			#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+				albedo = albedo0;
+			#else
+				albedo = 1;
+			#endif
+			break;
+		}
+
+		float3 dif = (hitblock - pos.xyz) * invV;
+		float3 tnear = offset1 + dif;		// 次のブロックまでの距離
+		// float3 tnext = offset2 + dif;	// 次の次のブロックまでの距離
+		float3 t0 = (tnear.x < tnear.y) ? tnear.xyz : tnear.yxz;
+		t0 = (t0.y < t0.z) ? t0.xyz : ((t0.x < t0.z) ? t0.xzy : t0.zxy);
+		pos.xyz += v * ((t0.x + min(t0.y, t0.x + t2)) * 0.5);
+	}
+
+	#if defined(VOXEL_ENABLE_FALLOFF) && VOXEL_ENABLE_FALLOFF > 0
+	if (albedo.w <= 0.0)
+	{
+		hitblock = AlignPosition(pos.xyz);
+		float4 ppos = mul(float4(hitblock, 1), matVP);
+		float2 uv = (ppos.xy / ppos.w * float2(0.5, -0.5) + 0.5);
+		#if defined(VOXEL_ENABLE_OUPUT_COLOR)
+		albedo = tex2Dlod(VoxelInfoSampler, float4(uv,0,0));
+		#else
+		albedo = tex2Dlod(VoxelInfoSampler, float4(uv,0,0)).xxxx;
+		#endif
+	}
+	#endif
+
+	return albedo;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// ブロック単位で色を塗るための情報を出力する
+
+struct BufferInfo_OUTPUT
+{
+	float4 Pos		: POSITION;		// 射影変換座標
+	float2 Tex		: TEXCOORD0;	// テクスチャ
+	float4 Distance	: TEXCOORD1;
+};
+
+BufferInfo_OUTPUT DrawInfo_VS(float4 Pos : POSITION, float2 Tex : TEXCOORD0)
+{
+	BufferInfo_OUTPUT Out = (BufferInfo_OUTPUT)0;
+	Out.Pos = mul( Pos, matWVP );
+	Out.Distance = mul( Pos, matWV );
+	Out.Tex = Tex;
+	return Out;
+}
+
+float4 DrawInfo_PS(BufferInfo_OUTPUT IN) : COLOR
+{
+	float alpha = MaterialDiffuse.a;
+	if ( use_texture ) alpha *= tex2D( ObjTexSampler, AlignTexture(IN.Tex)).a;
+	clip(alpha - AlphaThreshold);
+
+	return float4(IN.Distance.z, 0,0, 1);
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウOFF）
+
+struct DrawObjectNoShadow_OUTPUT {
+    float4 Pos      : POSITION;     // 射影変換座標
+
+	float3 Normal   : TEXCOORD1;	// 法線
+	float3 Distance	: TEXCOORD2;
+	float4 WPos		: TEXCOORD3;	// Z値
+};
+
+DrawObjectNoShadow_OUTPUT DrawObjectNoShadow_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, uniform bool bExpand)
+{
+    DrawObjectNoShadow_OUTPUT Out = (DrawObjectNoShadow_OUTPUT)0;
+
+	Out.WPos = mul( Pos, matW );
+	float3 wNormal = normalize( mul( Normal, (float3x3)matW ) );
+	Out.Normal = wNormal;
+	if (bExpand)
+	{
+		// 法線方向に拡大
+		float3 vNormal = normalize(Normal - dot(Normal, CameraDirection));
+		Out.WPos.xyz += vNormal * VoxelScaledGridSize;
+	}
+
+	Out.Pos = mul( Out.WPos, matVP );
+
+    return Out;
+}
+
+float4 DrawObjectNoShadow_PS(DrawObjectNoShadow_OUTPUT IN) : COLOR
+{
+	clip( !opadd - 0.001f );	// 加算半透明なら無視する
+
+	float3 V = AdjustVector(normalize(CameraPosition - IN.WPos.xyz));
+
+	//-----------------------------------------------------------
+	// どのブロックにヒットするか探す
+	float3 hitblock = 0;
+	float4 albedo = Raytrace(IN.WPos, -V, hitblock);
+	clip(albedo.w - 1e-3); // ヒットしなかった
+
+	// ワールド空間でのヒット位置
+	float3 tNear = (CameraPosition - (hitblock.xyz + (VoxelScaledGridSize * 0.5))) * (1.0/V);
+	float3 tFar  = (CameraPosition - (hitblock.xyz - (VoxelScaledGridSize * 0.5))) * (1.0/V);
+	tNear = min(tNear, tFar);
+	float3 hitpos = CameraPosition - V * max(tNear.x, max(tNear.y, tNear.z));
+	float4 hitVPos = mul(float4(hitpos,1), matV);
+
+	return float4(1, hitVPos.z, 0.0, 1);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウON）
+
+struct DrawObject_OUTPUT {
+    float4 Pos      : POSITION;
+
+	float3 Normal   : TEXCOORD1;	// 法線
+	float3 Distance	: TEXCOORD2;
+	float4 WPos		: TEXCOORD3;	// Z値
+};
+
+DrawObject_OUTPUT DrawObject_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, uniform bool bExpand)
+{
+    DrawObject_OUTPUT Out = (DrawObject_OUTPUT)0;
+
+	Out.WPos = mul( Pos, matW );
+	float3 wNormal = normalize( mul( Normal, (float3x3)matW ) );
+	Out.Normal = wNormal;
+	if (bExpand)
+	{
+		// 法線方向に拡大
+		float3 vNormal = normalize(Normal - dot(Normal, CameraDirection));
+		Out.WPos.xyz += vNormal * VoxelScaledGridSize;
+	}
+
+	Out.Pos = mul( Out.WPos, matVP );
+
+    return Out;
+}
+
+
+float4 DrawObject_PS(DrawObject_OUTPUT IN) : COLOR
+{
+	float3 V = AdjustVector(normalize(CameraPosition - IN.WPos.xyz));
+
+	//-----------------------------------------------------------
+	// どのブロックにヒットするか探す
+	float3 hitblock = 0;
+	float4 albedo = Raytrace(IN.WPos, -V, hitblock);
+	clip(albedo.w - 1e-3); // ヒットしなかった
+
+	// ワールド空間でのヒット位置
+	float3 tNear = (CameraPosition - (hitblock.xyz + (VoxelScaledGridSize * 0.5))) * (1.0/V);
+	float3 tFar  = (CameraPosition - (hitblock.xyz - (VoxelScaledGridSize * 0.5))) * (1.0/V);
+	tNear = min(tNear, tFar);
+	float t = max(tNear.x, max(tNear.y, tNear.z));
+	float3 hitpos = CameraPosition - V * t;
+	float4 hitVPos = mul(float4(hitpos,1), matV);
+	float distanceFromCamera = hitVPos.z;
+
+	float4 PPos = mul(float4(hitpos,1), lightMatVP);
+	PPos /= PPos.w;
+
+	// ワールド空間での法線
+	float3 N = normalize(abs(hitpos - hitblock));
+	N = normalize(step(max(N.x, max(N.y, N.z)).xxx - VoxelBevelOffset, N) * sign(V));
+	// float depthRate = 1.0 - saturate(IN.Distance.z / IN.Distance.y);
+	// N = normalize(lerp(IN.Normal, N, depthRate));
+	//-----------------------------------------------------------
+
+	const float2 scale = float2(0.25, -0.25);
+	float4 LightPPos01;
+	float4 LightPPos23;
+	LightPPos01.xy = (PPos.xy * lightParam[0].xy + lightParam[0].zw);
+	LightPPos01.zw = (PPos.xy * lightParam[1].xy + lightParam[1].zw);
+	LightPPos23.xy = (PPos.xy * lightParam[2].xy + lightParam[2].zw);
+	LightPPos23.zw = (PPos.xy * lightParam[3].xy + lightParam[3].zw);
+	LightPPos01 *= scale.xyxy;
+	LightPPos23 *= scale.xyxy;
+
+	// float3 N = normalize(IN.Normal);
+	float dotNL = dot(N,-LightDirection);
+
+	float4 lightPPos0 = CalcCascadePPos(LightPPos01.xy, float2( 0, 0), 0);
+	float4 lightPPos1 = CalcCascadePPos(LightPPos01.zw, float2( 1, 0), 1);
+	float4 lightPPos2 = CalcCascadePPos(LightPPos23.xy, float2( 0, 1), 2);
+	float4 lightPPos3 = CalcCascadePPos(LightPPos23.zw, float2( 1, 1), 3);
+
+	float4 texCoord0 = lightPPos3;
+	float4 texCoord1 = 0;
+	if (lightPPos2.w > 0.0) { texCoord1 = texCoord0; texCoord0 = lightPPos2; }
+	if (lightPPos1.w > 0.0) { texCoord1 = texCoord0; texCoord0 = lightPPos1; }
+	if (lightPPos0.w > 0.0) { texCoord1 = texCoord0; texCoord0 = lightPPos0; }
+
+	float casterDepth0 = TEX2D(LightSamp, texCoord0.xy).x;
+	float casterDepth1 = TEX2D(LightSamp, texCoord1.xy).x;
+	float casterDepth = lerp(lerp(1, casterDepth1, texCoord1.w), casterDepth0, texCoord0.w);
+	float receiverDepth = PPos.z;
+
+	// 深度バイアス：適当
+	float bias = distanceFromCamera * (1.0 / LightZMax);
+	float depthSlope = min(abs( ddx( receiverDepth ) ) + abs( ddy( receiverDepth ) ), 0.1);
+	float lightSlpoe = min(1.0 / (abs(dotNL) + 1.0e-4), 8.0) * (1.0 / LightZMax);
+	bias = (bias + depthSlope + lightSlpoe) * BIAS_SCALE;
+	receiverDepth -= bias;
+
+	float sdrate = 30000.0 / 4.0 - 0.05;
+	float light = CalcLight(casterDepth.x, receiverDepth, sdrate);
+	float dist = receiverDepth - casterDepth.x;
+	float blurStep = clamp(dist * (LightZMax / 50.0), 0.125, 1.0);
+
+	// PCF
+	const float s = 1.0 / SHADOW_TEX_SIZE;
+
+	float light_a = CalcLight(TEX2D(LightSamp, texCoord0.xy + float2( s, 0)).x, receiverDepth, sdrate);
+	float light_b = CalcLight(TEX2D(LightSamp, texCoord0.xy + float2(-s, 0)).x, receiverDepth, sdrate);
+	float light_c = CalcLight(TEX2D(LightSamp, texCoord0.xy + float2( 0, s)).x, receiverDepth, sdrate);
+	float light_d = CalcLight(TEX2D(LightSamp, texCoord0.xy + float2( 0,-s)).x, receiverDepth, sdrate);
+	// エリア外だと、PCFの結果が当てにならない
+	float lightPCF = (light + light_a + light_b + light_c + light_d) * (1.0 / 5.0);
+	light = lerp(light, lightPCF, texCoord0.w);
+	light = light * light;
+
+	dotNL = (dotNL > 0.0);
+
+	return float4(min(light, dotNL), distanceFromCamera, blurStep, 1);
+}
+
+
+technique MainTec0 < string MMDPass = "object";
+	string Script = 
+		"RenderColorTarget0=VoxelInfoTex; RenderDepthStencilTarget=VoxelDepthBuffer;"
+		"ClearSetColor=VoxelClearColor; ClearSetDepth=VoxelClearDepth; Clear=Color; Clear=Depth;"
+		"Pass=DrawInfo;"
+		"RenderColorTarget0=; RenderDepthStencilTarget=;"
+		"Pass=DrawFalloff; Pass=DrawObject;"
+	;
+ > {
+	pass DrawInfo {
+		AlphaBlendEnable = false; AlphaTestEnable = false;
+		VertexShader = compile vs_3_0 DrawInfo_VS();
+		PixelShader  = compile ps_3_0 DrawInfo_PS();
+	}
+	pass DrawFalloff {
+		VertexShader = compile vs_3_0 DrawObjectNoShadow_VS(false);
+		PixelShader  = compile ps_3_0 DrawObjectNoShadow_PS();
+	}
+	pass DrawObject {
+		VertexShader = compile vs_3_0 DrawObjectNoShadow_VS(true);
+		PixelShader  = compile ps_3_0 DrawObjectNoShadow_PS();
+	}
+}
+
+technique MainTec1 < string MMDPass = "object_ss";
+	string Script = 
+		"RenderColorTarget0=VoxelInfoTex; RenderDepthStencilTarget=VoxelDepthBuffer;"
+		"ClearSetColor=VoxelClearColor; ClearSetDepth=VoxelClearDepth; Clear=Color; Clear=Depth;"
+		"Pass=DrawInfo;"
+		"RenderColorTarget0=; RenderDepthStencilTarget=;"
+		"Pass=DrawFalloff; Pass=DrawObject;"
+	;
+ > {
+	pass DrawInfo {
+		AlphaBlendEnable = false; AlphaTestEnable = false;
+		VertexShader = compile vs_3_0 DrawInfo_VS();
+		PixelShader  = compile ps_3_0 DrawInfo_PS();
+	}
+	pass DrawFalloff {
+		VertexShader = compile vs_3_0 DrawObject_VS(false);
+		PixelShader  = compile ps_3_0 DrawObject_PS();
+	}
+	pass DrawObject {
+		VertexShader = compile vs_3_0 DrawObject_VS(true);
+		PixelShader  = compile ps_3_0 DrawObject_PS();
+	}
+}
+
+technique EdgeTec < string MMDPass = "edge"; > {}
+technique ShadowTec < string MMDPass = "shadow"; > {}
+technique ZplotTec < string MMDPass = "zplot"; > {}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////

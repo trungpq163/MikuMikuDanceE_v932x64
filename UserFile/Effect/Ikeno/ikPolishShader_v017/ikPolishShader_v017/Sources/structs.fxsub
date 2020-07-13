@@ -1,0 +1,51 @@
+
+//-----------------------------------------------------------------------------
+// 構造体
+
+struct NormalDepth
+{
+	float3 normal;
+	float depth;
+};
+
+struct GeometryInfo
+{
+	float3 wpos;		// world position
+		// float4のほうが使いやすい? 行列計算とかで。
+	NormalDepth nd;		// normal and depth
+};
+
+struct MaterialParam
+{
+	float metalness;
+	float roughness;
+	float intensity;
+	float sssValue;
+	float f0;
+};
+
+MaterialParam UnpackMaterial(float4 rawdata)
+{
+	float mi = floor(rawdata.x * 255);
+	float metalness = max(mi - 32, 0) / (255.0 - 32);
+	float f0 = fmod(mi, 32) * 0.2 / 31;
+
+	MaterialParam result;
+	result.metalness = metalness;
+	result.f0 = f0;
+	result.roughness = rawdata.y;
+	result.intensity = rawdata.z; 
+	result.sssValue = rawdata.w;
+
+	return result;
+}
+
+struct VS_AL_INPUT {
+	float4 Pos : POSITION;
+	float2 Tex : TEXCOORD0;
+	float4 AddUV1 : TEXCOORD1;
+	float4 AddUV2 : TEXCOORD2;
+	float4 AddUV3 : TEXCOORD3;
+	float4 Normal : NORMAL;
+};
+

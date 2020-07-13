@@ -1,0 +1,323 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  SpotLight_Object.fx ver<<Ver>>
+//  作成: そぼろ
+//  原作: 舞力介入P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ユーザーパラメータ
+
+//ライト色
+float3 LightColor = <<LightColor>>;
+float LightPower1 = <<LightPower>>; //ライト発光強度
+
+//距離減衰スイッチ（0で無効、1で反比例、2で2乗反比例）
+#define DISTANCE_ATTENUATE <<DistanceAttenuate>>
+//異方性フィルタリングスイッチ
+#define FILTER_ENABLE  <<AFilter>>
+#define MIPTEXSIZE 512
+
+#include "CommonSystem.fx"
+
+////////////////////////////////////////////////////////////////////////////////////////////
+//スポット輝度分布用のテクスチャ
+
+texture2D SpotDist < string ResourceName = "SpotDist.bmp"; >;
+sampler SpotDistSampler = sampler_state {
+    texture = <SpotDist>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    AddressU  = CLAMP;
+    AddressV  = CLAMP;
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+float Script : STANDARDSGLOBAL <
+    string ScriptOutput = "color";
+    string ScriptClass = "sceneorobject";
+    string ScriptOrder = "standard";
+> = 0.8;
+
+// マテリアル色
+float4   MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+float3   MaterialAmbient   : AMBIENT  < string Object = "Geometry"; >;
+float3   MaterialEmmisive  : EMISSIVE < string Object = "Geometry"; >;
+float3   MaterialSpecular  : SPECULAR < string Object = "Geometry"; >;
+float    SpecularPower     : SPECULARPOWER < string Object = "Geometry"; >;
+float3   MaterialToon      : TOONCOLOR;
+float4   EdgeColor         : EDGECOLOR;
+// ライト色
+float3   LightDiffuse      : DIFFUSE   < string Object = "Light"; >;
+float3   LightAmbient      : AMBIENT   < string Object = "Light"; >;
+float3   LightSpecular     : SPECULAR  < string Object = "Light"; >;
+
+//光強度のMMDからの制御
+float Alpha1 : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "Tr"; >;
+
+//環境光の減少・SpotLightMasterControl.fxとの連携
+float AmbientReduce : CONTROLOBJECT < string name = "SpotLightMasterControl.x"; string item = "Tr"; >;
+bool use_toon;
+
+static const float lpower = Alpha1 * LightPower1;
+
+//制御色合成
+static const float4 DiffuseColor  = MaterialDiffuse  * float4(LightDiffuse, 1.0f);
+static const float3 AmbientColor = saturate(MaterialAmbient * LightColor * lerp(0.7, 1.0, use_toon) + MaterialEmmisive * AmbientReduce);
+static const float3 SpecularColor = MaterialSpecular * LightColor;
+
+//距離減衰の中央位置設定
+bool PowerCenterExist : CONTROLOBJECT < string name = "SpotLightPowerCenter.x"; >;
+float3 PowerCenterPos : CONTROLOBJECT < string name = "SpotLightPowerCenter.x"; >;
+static const float PowerCenterDistance = lerp(20, length(LightPosition - PowerCenterPos), PowerCenterExist);
+
+
+
+bool     transp;   // 半透明フラグ
+bool     spadd;    // スフィアマップ加算合成フラグ
+#define SKII1    1500
+#define SKII2    8000
+#define Toon     3
+
+
+// MMD本来のsamplerを上書きしないための記述です。削除不可。
+sampler MMDSamp0 : register(s0);
+sampler MMDSamp1 : register(s1);
+sampler MMDSamp2 : register(s2);
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+    texture = <ObjectSphereMap>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+
+#if FILTER_ENABLE==0
+    //標準のサンプラーをそのまま使用
+    sampler ObjTexSampler = sampler_state {
+        texture = <ObjectTexture>;
+        MINFILTER = LINEAR;
+        MAGFILTER = LINEAR;
+    };
+    
+#else
+    //異方性フィルタリング可能なテクスチャにコピーし、
+    //それをサンプリングするようサンプラーを置き換え
+    
+    sampler DefObjTexSampler = sampler_state {
+        texture = <ObjectTexture>;
+        MINFILTER = LINEAR;
+        MAGFILTER = LINEAR;
+    };
+
+    texture UseMipmapObjectTexture : RENDERCOLORTARGET <
+        int Width = MIPTEXSIZE;
+        int Height = MIPTEXSIZE;
+        int MipLevels = 0;
+        string Format = "A8R8G8B8" ;
+    >;
+    sampler ObjTexSampler = sampler_state {
+        texture = <UseMipmapObjectTexture>;
+        MINFILTER = ANISOTROPIC;
+        MAGFILTER = ANISOTROPIC;
+        MIPFILTER = LINEAR;
+        MAXANISOTROPY = 16;
+    };
+
+    texture2D DepthBuffer : RenderDepthStencilTarget <
+        int Width = MIPTEXSIZE;
+        int Height = MIPTEXSIZE;
+        string Format = "D24S8";
+    >;
+    
+    static float2 ViewportOffset = (float2(0.5,0.5)/MIPTEXSIZE);
+    
+    
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    // ミップマップ作成
+    
+    struct VS_OUTPUT_MIPMAPCREATER {
+        float4 Pos : POSITION;
+        float2 Tex : TEXCOORD0;
+    };
+    VS_OUTPUT_MIPMAPCREATER VS_MipMapCreater( float4 Pos : POSITION, float4 Tex : TEXCOORD0 ){
+        VS_OUTPUT_MIPMAPCREATER Out;
+        Out.Pos = Pos;
+        Out.Tex = Tex;
+        Out.Tex += ViewportOffset;
+        return Out;
+    }
+    
+    float4  PS_MipMapCreater(float2 Tex: TEXCOORD0) : COLOR0
+    {
+        return tex2D(DefObjTexSampler,Tex);
+    }
+    
+#endif
+
+
+////////////////////////////////////////////////////////////////////////////////////////////
+// 輪郭描画
+
+// 頂点シェーダ
+float4 ColorRender_VS(float4 Pos : POSITION) : POSITION 
+{
+    // カメラ視点のワールドビュー射影変換
+    return mul( Pos, WorldViewProjMatrix );
+}
+
+// ピクセルシェーダ
+float4 ColorRender_PS() : COLOR
+{
+    // 黒で塗りつぶし
+    return float4(0,0,0,1);
+}
+
+// 輪郭描画用テクニック
+technique EdgeTec < string MMDPass = "edge"; > {
+    pass DrawEdge {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 ColorRender_VS();
+        PixelShader  = compile ps_2_0 ColorRender_PS();
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 影描画
+
+// 地面影は表示しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+// MMD標準のセルフシャドウは表示しない
+technique ZplotTec < string MMDPass = "zplot"; > { }
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画（セルフシャドウOFF）
+
+struct VS_OUTPUT {
+    float4 Pos      : POSITION;     // 射影変換座標
+    float2 Tex      : TEXCOORD1;    // テクスチャ
+    float3 Normal   : TEXCOORD2;    // 法線
+    float3 Eye      : TEXCOORD3;    // カメラとの相対位置
+    float2 SpTex    : TEXCOORD4;    // スフィアマップテクスチャ座標
+    float4 WorldPos : TEXCOORD5;    // ワールド座標
+    float4 Color    : COLOR0;       // ディフューズ色
+    
+};
+
+// 頂点シェーダ
+VS_OUTPUT Basic_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+    
+    //ワールド座標の算出
+    Out.WorldPos = mul( Pos, WorldMatrix );
+    
+    //ライト方向の算出
+    float3 LightDirection = normalize(Out.WorldPos.xyz - LightPosition);
+    
+    // カメラ視点のワールドビュー射影変換
+    Out.Pos = mul( Pos, WorldViewProjMatrix );
+    
+    // カメラとの相対位置
+    Out.Eye = CameraPosition - Out.WorldPos;
+    // 頂点法線
+    Out.Normal = normalize( mul( Normal, (float3x3)WorldMatrix ) );
+    
+    // ディフューズ色＋アンビエント色 計算
+    Out.Color.rgb = AmbientColor;
+    if ( !useToon ) {
+        Out.Color.rgb += max(0,dot( Out.Normal, -LightDirection )) * DiffuseColor.rgb;
+    }
+    
+    
+    Out.Color.a = DiffuseColor.a;
+    Out.Color = saturate( Out.Color );
+    
+    // テクスチャ座標
+    Out.Tex = Tex;
+    
+    if ( useSphereMap ) {
+        // スフィアマップテクスチャ座標
+        float2 NormalWV = mul( Out.Normal, (float3x3)ViewMatrix );
+        Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+        Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+    }
+    
+    return Out;
+}
+
+// ピクセルシェーダ
+float4 Basic_PS(VS_OUTPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon) : COLOR0
+{
+    
+    float3 LightVector = IN.WorldPos.xyz - LightPosition;
+    float3 LightDirection = normalize(LightVector);
+    float SpotRate = acos(dot(LightDirection, LightAxisDirection)) / LightAngle; //光軸からの角度
+    float Distance = length(LightVector); //ライトからの距離
+    
+    #if DISTANCE_ATTENUATE==0
+        float DistanceRate = 1;
+    #else
+        float DistanceRate = (PowerCenterDistance + 10) / (Distance + 10); //距離減衰係数
+    #endif
+    #if DISTANCE_ATTENUATE==2
+        DistanceRate *= DistanceRate;
+    #endif
+        
+    
+    // スペキュラ色計算
+    float3 HalfVector = normalize( normalize(IN.Eye) - LightDirection );
+    float3 Specular = pow( max(0,dot( HalfVector, normalize(IN.Normal) )), SpecularPower ) * SpecularColor;
+    
+    float4 Color = IN.Color;
+    
+    
+    if ( useTexture ) {
+        // テクスチャ適用
+        float4 TexColor = tex2D( ObjTexSampler, IN.Tex );
+        Color *= TexColor;
+        
+    }
+    if ( useSphereMap ) {
+        // スフィアマップ適用
+        if(spadd) Color.rgb += tex2D(ObjSphareSampler,IN.SpTex).rgb;
+        else      Color.rgb *= tex2D(ObjSphareSampler,IN.SpTex).rgb;
+    }
+    
+    
+    if ( useToon ) {
+        // トゥーン適用
+        float LightNormal = dot( IN.Normal, -LightDirection );
+        Color.rgb *= lerp(MaterialToon, float3(1,1,1), saturate(LightNormal * 16 + 0.5));
+    }
+    
+    // スペキュラ適用
+    Color.rgb += Specular;
+    
+    //スポット径・距離減衰適用
+    Color.rgb *= tex2D(SpotDistSampler, float2(0.5, SpotRate)).r * lpower * DistanceRate;
+    
+    
+    return Color;
+    
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+//テクニックリストの読み込み
+
+#if FILTER_ENABLE==0
+    #include "CommonTechniques.fx"
+#else
+    #include "CommonTechniquesAF.fx"
+#endif
+
+///////////////////////////////////////////////////////////////////////////////////////////////
