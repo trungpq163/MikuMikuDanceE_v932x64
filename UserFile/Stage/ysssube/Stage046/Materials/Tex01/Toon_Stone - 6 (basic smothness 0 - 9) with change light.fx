@@ -31,7 +31,7 @@ const float alphaMapLoopNum = 1.0;
 #define NORMAL_MAP_FILE "Tex01_NORM.png"
 //#define NORMAL_MAP_FILE "./Tex/Stone-N.png"
 
-const float normalMapScale = 1.5;
+const float normalMapScale = 3.0;
 const float normalMapLoopNum = 1.0;
 
 #define NORMAL_SUB_MAP_FROM 1
