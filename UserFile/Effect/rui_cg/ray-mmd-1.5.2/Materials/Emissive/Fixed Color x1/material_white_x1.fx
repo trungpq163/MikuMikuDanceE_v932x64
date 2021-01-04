@@ -48,7 +48,7 @@ const float normalSubMapLoopNum = 1.0;
 #define SMOOTHNESS_MAP_APPLY_SCALE 0
 #define SMOOTHNESS_MAP_FILE "smoothness.png"
 
-const float smoothness = 0.0;
+const float smoothness = 0.500;
 const float smoothnessMapLoopNum = 1.0;
 
 #define METALNESS_MAP_FROM 0
@@ -98,10 +98,10 @@ const float parallaxMapLoopNum = 1.0;
 #define EMISSIVE_MAP_APPLY_BLINK 0
 #define EMISSIVE_MAP_FILE "emissive.png"
 
-const float3 emissive = 1.0;
-const float3 emissiveBlink = 1.0;
+const float3 emissive = 0.001;
+const float3 emissiveBlink = 0.001;
 const float  emissiveIntensity = 1.0;
-const float2 emissiveMapLoopNum = 1.0;
+const float2 emissiveMapLoopNum = 0.001;
 
 #define CUSTOM_ENABLE 0
 

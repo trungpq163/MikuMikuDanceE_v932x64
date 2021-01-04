@@ -41,14 +41,14 @@ const float normalMapLoopNum = 1.0;
 const float normalSubMapScale = 1.0;
 const float normalSubMapLoopNum = 1.0;
 
-#define SMOOTHNESS_MAP_FROM 0
+#define SMOOTHNESS_MAP_FROM 9
 #define SMOOTHNESS_MAP_TYPE 0
 #define SMOOTHNESS_MAP_UV_FLIP 0
 #define SMOOTHNESS_MAP_SWIZZLE 0
 #define SMOOTHNESS_MAP_APPLY_SCALE 0
 #define SMOOTHNESS_MAP_FILE "smoothness.png"
 
-const float smoothness = 0.0;
+const float smoothness = 0.600;
 const float smoothnessMapLoopNum = 1.0;
 
 #define METALNESS_MAP_FROM 0
@@ -89,7 +89,7 @@ const float occlusionMapLoopNum = 1.0;
 const float parallaxMapScale = 1.0;
 const float parallaxMapLoopNum = 1.0;
 
-#define EMISSIVE_ENABLE 1
+#define EMISSIVE_ENABLE 0
 #define EMISSIVE_MAP_FROM 0
 #define EMISSIVE_MAP_UV_FLIP 0
 #define EMISSIVE_MAP_APPLY_SCALE 0
@@ -98,10 +98,9 @@ const float parallaxMapLoopNum = 1.0;
 #define EMISSIVE_MAP_APPLY_BLINK 0
 #define EMISSIVE_MAP_FILE "emissive.png"
 
-// const float3 emissive = float3(0.933, 0.933, 0.1);
-const float3 emissive = float3(0.921, 0.933, 0.6);
+const float3 emissive = 1.0;
 const float3 emissiveBlink = 1.0;
-const float  emissiveIntensity = 0.4444;
+const float  emissiveIntensity = 1.0;
 const float2 emissiveMapLoopNum = 1.0;
 
 #define CUSTOM_ENABLE 0
@@ -125,4 +124,4 @@ const float customAMapLoopNum = 1.0;
 const float3 customB = 0.0;
 const float2 customBMapLoopNum = 1.0;
 
-#include "../../material_common_2.0.fxsub"
+#include "material_common_2.0.fxsub"
