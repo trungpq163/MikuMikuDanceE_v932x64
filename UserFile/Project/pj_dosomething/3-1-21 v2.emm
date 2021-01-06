@@ -46,7 +46,6 @@ Acs41 = UserFile\Effect\redialc\iKclut_RC_Cinema\RedialC_Sytle\RC.x
 Acs42 = UserFile\Effect\GABAmanP\CameraScreen\CameraScreen.x
 Acs43 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Extension\FXAA\FXAA.x
 Acs44 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Extension\SMAA\SMAA.x
-Acs45 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\ikGodray.x
 
 [Effect]
 Default = none
@@ -220,7 +219,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@FogMap]
 Owner = Acs37
@@ -304,7 +302,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@LightMap]
 Owner = Acs37
@@ -373,7 +370,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@ShadowMap]
 Owner = Pmd7@LightMap
@@ -428,7 +424,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@ShadowMap(1)]
 Owner = Pmd8@LightMap
@@ -483,7 +478,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@ShadowMap(2)]
 Owner = Pmd9@LightMap
@@ -538,7 +532,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@ShadowMap(3)]
 Owner = Pmd10@LightMap
@@ -593,7 +586,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@ShadowMap(4)]
 Owner = Pmd11@LightMap
@@ -648,7 +640,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@ShadowMap(5)]
 Owner = Pmd12@LightMap
@@ -703,7 +694,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@ShadowMap(6)]
 Owner = Pmd13@LightMap
@@ -758,7 +748,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@ShadowMap(7)]
 Owner = Pmd14@LightMap
@@ -813,7 +802,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@ShadowMap(8)]
 Owner = Pmd15@LightMap
@@ -873,7 +861,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@MaterialMap]
 Owner = Acs37
@@ -1020,7 +1007,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@PSSM1]
 Owner = Acs37
@@ -1081,7 +1067,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@PSSM2]
 Owner = Acs37
@@ -1142,7 +1127,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@PSSM3]
 Owner = Acs37
@@ -1203,7 +1187,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@PSSM4]
 Owner = Acs37
@@ -1264,7 +1247,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@SSAOMap]
 Owner = Acs37
@@ -1326,7 +1308,6 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
 
 [Effect@LinearDepthMapRT]
 Owner = Acs39
@@ -1383,53 +1364,4 @@ Acs41.show = false
 Acs42.show = false
 Acs43.show = false
 Acs44.show = false
-Acs45.show = false
-
-[Effect@MaskMapRT]
-Owner = Acs45
-Acs1 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd2 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd3 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd4 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd5 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd6 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd7 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd8 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd9 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd10 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd11 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd12 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd13 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd14 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd15 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd16 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd17 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd18 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd19 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd20 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd21 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd22 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd23 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd24 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd25 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd26 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd27 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd28 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd29 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd30 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd31 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd32 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd33 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd34 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd35 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Pmd36 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Acs37.show = false
-Acs38 = C:\Users\Administrator\Desktop\ikGodray_v002\ikGodray_v002\mask.fx
-Acs39.show = false
-Acs40.show = false
-Acs41.show = false
-Acs42.show = false
-Acs43.show = false
-Acs44.show = false
-Acs45.show = false
 
