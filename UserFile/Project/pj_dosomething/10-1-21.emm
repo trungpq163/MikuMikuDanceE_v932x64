@@ -1,0 +1,153 @@
+[Info]
+Version = 3
+
+[Object]
+Acs1 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\ray.x
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Skybox\SkyBox-TheWanderingEarth\Sky with box.pmx
+Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Skybox\Sky Hemisphere\Sky with box.pmx
+Pmd4 = UserFile\Stage\war_stories\Office\1.pmx
+Pmd5 = UserFile\Stage\war_stories\Office\2.pmx
+Pmd6 = UserFile\Stage\war_stories\Office\3.pmx
+Pmd7 = UserFile\Model\shuiling\ëoê∂ä¯Â⁄é„âπ-çXêV by shuiling\ëoê∂ä¯Â⁄é„âπ-¸Kî≈.pmx
+Pmd8 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\ray_controller.pmx
+
+[Effect]
+Default = none
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Skybox\SkyBox-TheWanderingEarth\Sky with box.fx
+Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Skybox\Sky Hemisphere\Sky with box.fx
+Pmd4 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Main\main.fx
+Pmd4.show = true
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Main\main.fx
+Pmd5.show = true
+Pmd6 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Main\main.fx
+Pmd6.show = true
+Pmd7 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Main\main.fx
+Pmd7.show = true
+Pmd8 = none
+
+[Effect@EnvLightMap]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Skybox\skylighting_none.fx
+Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Skybox\Sky Hemisphere\Sky with lighting.fx
+Pmd3.show = true
+Pmd4 = none
+Pmd4.show = false
+Pmd5 = none
+Pmd5.show = false
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Pmd8 = none
+Pmd8.show = false
+
+[Effect@FogMap]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = none
+Pmd2.show = false
+Pmd3 = none
+Pmd3.show = false
+Pmd4 = none
+Pmd4.show = false
+Pmd5 = none
+Pmd5.show = false
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Pmd8 = none
+Pmd8.show = false
+
+[Effect@LightMap]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = none
+Pmd2.show = false
+Pmd3 = none
+Pmd3.show = false
+Pmd4 = none
+Pmd4.show = false
+Pmd5 = none
+Pmd5.show = false
+Pmd6 = none
+Pmd6.show = false
+Pmd7 = none
+Pmd7.show = false
+Pmd8 = none
+Pmd8.show = false
+
+[Effect@MaterialMap]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\materials\material_skybox.fx
+Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\Materials\material_skybox.fx
+Pmd3.show = true
+Pmd4 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\materials\material_2.0.fx
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\materials\material_2.0.fx
+Pmd6 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\materials\material_2.0.fx
+Pmd7 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\materials\material_2.0.fx
+Pmd8 = none
+Pmd8.show = false
+
+[Effect@PSSM1]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM1.fx
+Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM1.fx
+Pmd4 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM1.fx
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM1.fx
+Pmd6 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM1.fx
+Pmd7 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM1.fx
+Pmd8 = none
+Pmd8.show = false
+
+[Effect@PSSM2]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM2.fx
+Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM2.fx
+Pmd4 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM2.fx
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM2.fx
+Pmd6 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM2.fx
+Pmd7 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM2.fx
+Pmd8 = none
+Pmd8.show = false
+
+[Effect@PSSM3]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM3.fx
+Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM3.fx
+Pmd4 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM3.fx
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM3.fx
+Pmd6 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM3.fx
+Pmd7 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM3.fx
+Pmd8 = none
+Pmd8.show = false
+
+[Effect@PSSM4]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM4.fx
+Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM4.fx
+Pmd4 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM4.fx
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM4.fx
+Pmd6 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM4.fx
+Pmd7 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\PSSM4.fx
+Pmd8 = none
+Pmd8.show = false
+
+[Effect@SSAOMap]
+Owner = Acs1
+Acs1.show = false
+Pmd2 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\SSAO visibility 1.0.fx
+Pmd3 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\SSAO visibility 1.0.fx
+Pmd4 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\SSAO visibility 1.0.fx
+Pmd5 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\SSAO visibility 1.0.fx
+Pmd6 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\SSAO visibility 1.0.fx
+Pmd7 = UserFile\Effect\rui_cg\ray-mmd-1.5.2\shadow\SSAO visibility 1.0.fx
+Pmd8 = none
+Pmd8.show = false
+
