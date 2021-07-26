@@ -1,0 +1,100 @@
+PostRimLighting.fx / AL_RimLighting.fx
+
+MikuMikuEffect および MikuMikuMoving 用のポストエフェクトです。
+
+
+◆概要
+逆光の位置関係の時、輪郭が明るくなるあの感じを出します。
+ポストエフェクトなので、他のシェーダ系と併せて使うのもいいかもしれません。
+
+また、AutoLuminous 用のセレクタエフェクトとして使うことで淡い輪郭発光みたいな感じにできます。
+謎パワーを醸し出したり、幻想的な雰囲気を作りたいときなんかにいいかもしれません。
+
+
+◆使用方法
+
+■MikuMikuDance / MikuMikuEffect の場合
+PostRimLighting.x をアクセサリとして読み込みます。
+Tr 値でリムライトの強度を調整できます。
+
+◇特定のオブジェクトだけをリムライト演出する
+[MMEffect] > [エフェクト割当] より [PRL_AdditiveRT] を開き、
+リムライトを適用したくないオブジェクトに真っ黒に描画するシェーダを割り当ててください。
+例えば、AutoLuminous の AL_BlackMask.fx を使うとか。
+
+
+◇リムライト色を照明に依存せず変更する
+PostRimLighting.x の位置を調整することにより色を変更できます。
+X が R, Y が G, Z が B です。たぶん。
+
+
+◇リムライトの境界をくっきりさせる
+PostRimLighting.x の Rx 値を 1 以上の任意の値にすると、値を大きくすればするほど
+リムライトで照らされる範囲が狭くなりくっきりするようになります。
+
+
+◇リムライトを照明の方向に追従させる (逆光時のみリムライトが出るようにする)
+PostRimLighting.x の Ry 値を大きくすることで順光の部分のリムライトが弱くなります。
+
+
+◇リムライトで照らされる広さを広げる
+PostRimLighting.x の Rz 値を大きくすることでリムライトで照らされる範囲が広がります。
+Rx 値の大きさも同時に大きくすると幅が打ち消されますが、その場合 Rx だけで似たような結果にするのに比べ
+境界のくっきりさを実現しつつ範囲を広げることができます。
+
+◇リムライトの明度を調整する
+PostRimLighting.x の Si 値を低くするとリムライトが薄くなります。
+
+
+◇AutoLuminous セレクタとして使う
+ここから本編です。
+AutoLuminous を読み込んだ後、[MMEffect] > [エフェクト割当] の [AL_EmitterRT] から
+リムライト演出したいオブジェクトに AL_RimLighting.fx を割り当てると、素敵な感じになります。
+また、パラメータ調整は PostRimLighting.x の各種値を変更することでできます。
+AL セレクタとしてだけ使う場合は PostRimLighting.x を非表示設定にしますが、
+もっとシャキッっと！させたい場合は PostRimLighting と併用するのもアリです。
+
+
+■MikuMikuMoving の場合
+PostRimLighting.fx をエフェクト読み込みで読み込みます。
+その他は MMD/MME の場合とたぶん同じです。
+
+
+◆アレ
+
+Q. 照明に追従するタイプのリムライトの具合がおかしい
+A. 偶然できたものなのでお察しください
+
+
+◆その他
+・beat32lop 氏の SampleFull_v2.fxm をベースに改造させていただきました。
+・Pocol 氏のリムライティングを大いに参考にさせていただきました。
+  http://asura.iaigiri.com/OpenGL/gl49.html
+
+
+◆改変、再配布について
+自らの責任でご自由にどうぞ。
+
+
+◆更新履歴
+
+Release 4, Wed, 16 May 2012
+
+	Rz で範囲を広げられるように
+	テクスチャの透明度を考慮するように (異方性フィルタリングはしてないのでモアレに注意)
+
+Release 3, Sun, 13 May 2012
+
+	DL_PostRimLighting 統合
+	アクセサリの値でパラメータを制御するように
+
+Release 2, Fri, 11 May 2012
+
+	DL_PostRimLighting 追加
+
+Release 1, Fri, 11 May 2012
+
+	製作
+
+----
+ミーフォ茜 <star@glasscore.net>

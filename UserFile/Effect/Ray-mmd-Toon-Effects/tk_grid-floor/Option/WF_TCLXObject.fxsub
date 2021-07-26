@@ -1,0 +1,689 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  深度＆ベロシティマップ出力エフェクト for WorkingFloorAL.fx
+//  ( WorkingFloorAL.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P( そぼろ氏のTCLXObject.fxsub改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 背景まで透過させる閾値を設定します
+float TransparentThreshold = 0.6;
+
+// 透過判定にテクスチャの透過度を使用します。1で有効、0で無効
+#define TRANS_TEXTURE  1
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// アクセに組み込む場合はここを適宜変更してください．
+float3 MirrorPos = float3( 0.0, 0.0, 0.0 );    // ローカル座標系における鏡面上の任意の座標(アクセ頂点座標の一点)
+float3 MirrorNormal = float3( 0.0, 1.0, 0.0 ); // ローカル座標系における鏡面の法線ベクトル
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 鏡面座標変換パラメータ
+float4x4 MirrorWorldMatrix: CONTROLOBJECT < string Name = "(OffscreenOwner)"; >; // 鏡面アクセのワールド変換行列
+
+// ワールド座標系における鏡像位置への変換
+static float3 WldMirrorPos = mul( float4(MirrorPos, 1.0f), MirrorWorldMatrix ).xyz;
+static float3 WldMirrorNormal = normalize( mul( MirrorNormal, (float3x3)MirrorWorldMatrix ) );
+
+// 座標の鏡像変換
+float4 TransMirrorPos( float4 Pos )
+{
+    Pos.xyz -= WldMirrorNormal * 2.0f * dot(WldMirrorNormal, Pos.xyz - WldMirrorPos);
+    return Pos;
+}
+
+float3 CameraPosition : POSITION  < string Object = "Camera"; >;
+
+// 鏡面表裏判定(座標とカメラが両方鏡面の表側にある時だけ＋)
+float IsFace( float4 Pos )
+{
+    return min( dot(Pos.xyz-WldMirrorPos, WldMirrorNormal),
+                dot(CameraPosition-WldMirrorPos, WldMirrorNormal) );
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+float DepthLimit = 2000;
+
+#define SCALE_VALUE 4
+
+
+// 座法変換行列
+float4x4 WorldMatrix     : WORLD;
+float4x4 ViewMatrix      : VIEW;
+float4x4 ProjMatrix      : PROJECTION;
+float4x4 ViewProjMatrix  : VIEWPROJECTION;
+
+bool use_texture;  //テクスチャの有無
+
+// マテリアル色
+float4 MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+
+// スクリーンサイズ
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+static float ViewportAspect = ViewportSize.x / ViewportSize.y;
+
+
+//オートフォーカスの使用
+//bool UseAF : CONTROLOBJECT < string name = "TCLXAutoFocus.x"; >;
+//float3 AFPos : CONTROLOBJECT < string name = "TCLXAutoFocus.x"; >;
+//float AFScale : CONTROLOBJECT < string name = "TCLXAutoFocus.x"; >;
+
+//マニュアルフォーカスの使用
+//bool UseMF : CONTROLOBJECT < string name = "TCLXManualFocus.x"; >;
+//float MFScale : CONTROLOBJECT < string name = "TCLXManualFocus.x"; >;
+//float4x4 MFWorld : CONTROLOBJECT < string name = "TCLXManualFocus.x"; >; 
+//static float MF_y = MFWorld._42;
+
+//フォーカスの使用
+bool FocusEnable : CONTROLOBJECT < string name = "TCLX_Focus.x"; >;
+float FocusMode : CONTROLOBJECT < string name = "TCLX_Focus.x"; string item = "Ry"; >;
+float FocusDeep : CONTROLOBJECT < string name = "TCLX_Focus.x"; string item = "Tr"; >;
+float FocusScale : CONTROLOBJECT < string name = "TCLX_Focus.x"; >;
+float3 FocusPos : CONTROLOBJECT < string name = "TCLX_Focus.x"; >;
+float4x4 FocusWorld : CONTROLOBJECT < string name = "TCLX_Focus.x"; >;
+static float FocusY = FocusWorld._42;
+
+
+//コントローラの使用
+//bool UseCT : CONTROLOBJECT < string name = "TCLXController.pmd"; >;
+//float3 CTVal_Focus : CONTROLOBJECT < string name = "TCLXController.pmd"; string item = "フォーカス"; >;
+//static float MVal_Focus = UseCT ? max(CTVal_Focus.y, 0.01) : 100;
+
+
+//合焦距離の取得
+static float3 FocusVec = FocusPos - CameraPosition;
+static float FocusLength = (FocusMode != 0) ? FocusY : length(FocusVec); //UseMF ? MF_y : (UseAF ? (length(FocusVec)) : 0);
+
+//焦点がカメラの背面にあるかどうか
+float3 CameraDirection : DIRECTION < string Object = "Camera"; >;
+static bool BackOut = (dot(CameraDirection, normalize(FocusVec)) < 0) && FocusEnable;
+
+
+#if TRANS_TEXTURE!=0
+    // オブジェクトのテクスチャ
+    texture ObjectTexture: MATERIALTEXTURE;
+    sampler ObjTexSampler = sampler_state
+    {
+        texture = <ObjectTexture>;
+        MINFILTER = LINEAR;
+        MAGFILTER = LINEAR;
+        MIPFILTER = LINEAR;
+        ADDRESSU  = WRAP;
+        ADDRESSV  = WRAP;
+    };
+#endif
+
+
+//26万頂点まで対応
+#define VPBUF_WIDTH  512
+#define VPBUF_HEIGHT 512
+
+//頂点座標バッファサイズ
+static float2 VPBufSize = float2(VPBUF_WIDTH, VPBUF_HEIGHT);
+
+static float2 VPBufOffset = float2(0.5 / VPBUF_WIDTH, 0.5 / VPBUF_HEIGHT);
+
+
+//頂点ごとのワールド座標を記録
+texture DepthBuffer : RenderDepthStencilTarget <
+   int Width=VPBUF_WIDTH;
+   int Height=VPBUF_HEIGHT;
+    string Format = "D24S8";
+>;
+texture VertexPosBufTex : RenderColorTarget
+<
+    int Width=VPBUF_WIDTH;
+    int Height=VPBUF_HEIGHT;
+    bool AntiAlias = false;
+    int Miplevels = 1;
+    string Format="A32B32G32R32F";
+>;
+sampler VertexPosBuf = sampler_state
+{
+   Texture = (VertexPosBufTex);
+   ADDRESSU = Clamp;
+   ADDRESSV = Clamp;
+   MAGFILTER = Point;
+   MINFILTER = Point;
+   MIPFILTER = None;
+};
+texture VertexPosBufTex2 : RenderColorTarget
+<
+    int Width=VPBUF_WIDTH;
+    int Height=VPBUF_HEIGHT;
+    bool AntiAlias = false;
+    int Miplevels = 1;
+    string Format="A32B32G32R32F";
+>;
+sampler VertexPosBuf2 : register(s3) = sampler_state
+{
+   Texture = (VertexPosBufTex2);
+   ADDRESSU = Clamp;
+   ADDRESSV = Clamp;
+   MAGFILTER = Point;
+   MINFILTER = Point;
+   MIPFILTER = None;
+};
+
+
+//ワールドビュー射影行列などの記録
+
+#define INFOBUFSIZE 8
+
+float2 InfoBufOffset = float2(0.5 / INFOBUFSIZE, 0.5);
+
+texture DepthBufferMB : RenderDepthStencilTarget <
+   int Width=INFOBUFSIZE;
+   int Height=1;
+    string Format = "D24S8";
+>;
+texture MatrixBufTex : RenderColorTarget
+<
+    int Width=INFOBUFSIZE;
+    int Height=1;
+    bool AntiAlias = false;
+    int Miplevels = 1;
+    string Format="A32B32G32R32F";
+>;
+
+float4 MatrixBufArray[INFOBUFSIZE] : TEXTUREVALUE <
+    string TextureName = "MatrixBufTex";
+>;
+
+//前フレームのワールドビュー射影行列
+#ifndef MIKUMIKUMOVING
+static float4x4 lastWorldMatrix = float4x4( MatrixBufArray[0].xyz, 0.0f,
+                                            MatrixBufArray[1].xyz, 0.0f,
+                                            MatrixBufArray[2],
+                                            MatrixBufArray[3] );
+#else
+static float4x4 lastWorldMatrix = WorldMatrix; // ※MMMではBuffer描画でWorldMatrix使用不可っぽい
+#endif
+static float4x4 lastViewProjMatrix = float4x4(MatrixBufArray[4], MatrixBufArray[5], MatrixBufArray[6], MatrixBufArray[7]);
+
+//時間
+float ftime : TIME<bool SyncInEditMode=true;>;
+float stime : TIME<bool SyncInEditMode=false;>;
+
+//出現フレームかどうか
+//前回呼び出しから0.5s以上経過していたら非表示だったと判断
+static float last_stime = MatrixBufArray[0].w;
+static bool Appear = (abs(last_stime - stime) > 0.5);
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//MMM対応
+
+#ifndef MIKUMIKUMOVING
+    struct VS_INPUT{
+        float4 Pos : POSITION;
+        float2 Tex : TEXCOORD0;
+        float4 AddUV1 : TEXCOORD1;
+        float4 AddUV2 : TEXCOORD2;
+        float4 AddUV3 : TEXCOORD3;
+        int Index     : _INDEX;
+    };
+    #define GETPOS (IN.Pos)
+    #define GET_VPMAT(p) (ViewProjMatrix)
+    const int voffset = 0;
+#else
+    #define VS_INPUT  MMM_SKINNING_INPUT
+    #define GETPOS MMM_SkinnedPosition(IN.Pos, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1)
+    #define GET_VPMAT(p) (MMM_IsDinamicProjection ? mul(ViewMatrix, MMM_DynamicFov(ProjMatrix, length(CameraPosition-p.xyz))) : ViewProjMatrix)
+    int voffset : VERTEXINDEXOFFSET;
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//汎用関数
+
+//W付きスクリーン座標を単純スクリーン座標に
+float2 ScreenPosRasterize(float4 ScreenPos){
+    return ScreenPos.xy / ScreenPos.w;
+}
+
+
+//頂点座標バッファ取得
+float4 getVertexPosBuf(int index)
+{
+    float4 Color;
+    float2 tpos = 0;
+    tpos.x = modf((float)index / VPBUF_WIDTH, tpos.y);
+    tpos.y /= VPBUF_HEIGHT;
+    tpos += VPBufOffset;
+    
+    Color = tex2Dlod(VertexPosBuf2, float4(tpos,0,0));
+    return Color;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct VS_OUTPUT
+{
+    float4 Pos        : POSITION;    // 射影変換座標
+    float2 Tex        : TEXCOORD0;   // UV
+    float4 WorldPos   : TEXCOORD1;   // ワールド座標
+    float4 CurrentPos : TEXCOORD2;   // 現在の座標
+    float4 LastPos    : TEXCOORD3;   // 前回の座標
+    
+};
+
+VS_OUTPUT Velocity_VS(VS_INPUT IN , uniform bool useToon)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+    
+    float4 pos = GETPOS;
+    
+    if(useToon){
+        Out.LastPos = getVertexPosBuf((float)(IN.Index + voffset));
+    }else{
+        Out.LastPos = mul( pos, lastWorldMatrix );
+    }
+    
+    // 鏡像位置への座標変換
+    Out.LastPos = TransMirrorPos( Out.LastPos ); // 鏡像変換
+    
+    //ワールド座標
+    Out.WorldPos = mul( pos, WorldMatrix );
+
+    // 鏡像位置への座標変換
+    Out.CurrentPos = TransMirrorPos( Out.WorldPos ); // 鏡像変換
+    
+    // カメラ視点のビュー射影変換
+    Out.Pos = mul( Out.CurrentPos, GET_VPMAT(Out.CurrentPos) );
+    Out.Pos.x *= -1.0f; // ポリゴンが裏返らないように左右反転にして描画
+    
+    #if TRANS_TEXTURE!=0
+        Out.Tex = IN.Tex; //テクスチャUV
+    #endif
+    
+    return Out;
+}
+
+
+float4 Velocity_PS( VS_OUTPUT IN , uniform bool useToon) : COLOR0
+{
+    // 鏡面の裏側にある部位は鏡像表示しない
+    clip( IsFace( IN.WorldPos ) );
+    
+    float4 lastPos, ViewPos;
+    
+    lastPos = mul( IN.LastPos, lastViewProjMatrix );
+    ViewPos = mul( IN.CurrentPos, ViewProjMatrix );
+    
+    float alpha = MaterialDiffuse.a;
+    
+
+    //深度
+    float mb_depth = ViewPos.z / ViewPos.w;
+    float dof_depth = length(CameraPosition - IN.CurrentPos);
+    
+    dof_depth = (dof_depth - FocusLength) / FocusDeep + FocusLength;
+    
+    dof_depth = min(dof_depth, DepthLimit);
+    dof_depth = max(dof_depth, 0);
+    
+    //合焦距離で正規化
+    dof_depth /= FocusLength;
+    dof_depth /= SCALE_VALUE;
+    
+    dof_depth = (FocusLength < 0.01) ? (1.0 / SCALE_VALUE) : dof_depth;
+    
+    #if TRANS_TEXTURE!=0
+        if(use_texture) alpha *= tex2D(ObjTexSampler,IN.Tex).a;
+    #endif
+    
+    mb_depth += 0.001;
+    mb_depth *= (alpha >= TransparentThreshold);
+    
+    
+    //速度算出
+    float2 Velocity = ScreenPosRasterize(ViewPos) - ScreenPosRasterize(lastPos);
+    Velocity.x *= ViewportAspect;
+    
+    if(Appear) Velocity = float2(0, 0); //出現時、速度キャンセル
+    //Velocity = float2(0, 0);
+    
+    //速度を色として出力
+    Velocity = Velocity * 0.25 + 0.5;
+    float4 Color = float4(Velocity, dof_depth, mb_depth);
+    
+    return Color;
+    
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////////
+//情報バッファの作成
+
+struct VS_OUTPUT2 {
+    float4 Pos: POSITION;
+    float2 texCoord: TEXCOORD0;
+};
+
+
+VS_OUTPUT2 DrawMatrixBuf_VS(float4 Pos: POSITION, float2 Tex: TEXCOORD) {
+    VS_OUTPUT2 Out;
+    
+    Out.Pos = Pos;
+    Out.texCoord = Tex + InfoBufOffset;
+    return Out;
+}
+
+float4 DrawMatrixBuf_PS(float2 texCoord: TEXCOORD0) : COLOR {
+    
+    int dindex = floor(texCoord.x * INFOBUFSIZE); //テクセル番号
+    float4 Color;
+    
+    if(dindex < 4){
+        Color = WorldMatrix[dindex]; //行列を記録
+        if(dindex==0) Color.w = stime;
+        if(dindex==1) Color.w = ftime;
+    }else{
+        Color = ViewProjMatrix[dindex-4]; //行列を記録
+    }
+    
+    return Color;
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////////
+//頂点座標バッファの作成
+
+struct VS_OUTPUT3 {
+    float4 Pos: POSITION;
+    float4 BasePos: TEXCOORD0;
+};
+
+VS_OUTPUT3 DrawVertexBuf_VS(VS_INPUT IN)
+{
+    VS_OUTPUT3 Out;
+    
+    float findex = (float)(IN.Index + voffset);
+    float2 tpos = 0;
+    tpos.x = modf(findex / VPBUF_WIDTH, tpos.y);
+    tpos.y /= VPBUF_HEIGHT;
+    
+    //バッファ出力
+    Out.Pos.xy = (tpos * 2 - 1) * float2(1,-1); //テクスチャ座標→頂点座標変換
+    Out.Pos.zw = float2(0, 1);
+    
+    //ラスタライズなしでピクセルシェーダに渡す
+    Out.BasePos = mul( GETPOS, WorldMatrix );
+    
+    return Out;
+}
+
+float4 DrawVertexBuf_PS( VS_OUTPUT3 IN ) : COLOR0
+{
+    //座標を色として出力
+    return IN.BasePos;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////
+//頂点座標バッファのコピー
+
+VS_OUTPUT2 CopyVertexBuf_VS(float4 Pos: POSITION, float2 Tex: TEXCOORD) {
+   VS_OUTPUT2 Out;
+  
+   Out.Pos = Pos;
+   Out.texCoord = Tex + VPBufOffset;
+   return Out;
+}
+
+float4 CopyVertexBuf_PS(float2 texCoord: TEXCOORD0) : COLOR {
+   return tex2D(VertexPosBuf, texCoord);
+}
+
+/////////////////////////////////////////////////////////////////////////////////////
+
+
+float4 ClearColor = {0,0,0,1};
+float ClearDepth  = 1.0;
+
+
+// オブジェクト描画用テクニック
+
+stateblock PMD_State = stateblock_state
+{
+    
+    DestBlend = InvSrcAlpha; SrcBlend = SrcAlpha; //加算合成のキャンセル
+    AlphaBlendEnable = false;
+    AlphaTestEnable = true;
+    
+    VertexShader = compile vs_3_0 Velocity_VS(true);
+    PixelShader  = compile ps_3_0 Velocity_PS(true);
+};
+
+stateblock Accessory_State = stateblock_state
+{
+    
+    DestBlend = InvSrcAlpha; SrcBlend = SrcAlpha; //加算合成のキャンセル
+    AlphaBlendEnable = false;
+    AlphaTestEnable = true;
+    
+    VertexShader = compile vs_3_0 Velocity_VS(false);
+    PixelShader  = compile ps_3_0 Velocity_PS(false);
+};
+
+stateblock makeMatrixBufState = stateblock_state
+{
+    AlphaBlendEnable = false;
+    AlphaTestEnable = false;
+    VertexShader = compile vs_3_0 DrawMatrixBuf_VS();
+    PixelShader  = compile ps_3_0 DrawMatrixBuf_PS();
+};
+
+
+stateblock makeVertexBufState = stateblock_state
+{
+    DestBlend = InvSrcAlpha; SrcBlend = SrcAlpha; //加算合成のキャンセル
+    FillMode = POINT;
+    CullMode = NONE;
+    ZEnable = false;
+    ZWriteEnable = false;
+    AlphaBlendEnable = false;
+    AlphaTestEnable = false;
+    
+    VertexShader = compile vs_3_0 DrawVertexBuf_VS();
+    PixelShader  = compile ps_3_0 DrawVertexBuf_PS();
+};
+
+stateblock copyVertexBufState = stateblock_state
+{
+    AlphaBlendEnable = false;
+    AlphaTestEnable = false;
+    VertexShader = compile vs_3_0 CopyVertexBuf_VS();
+    PixelShader  = compile ps_3_0 CopyVertexBuf_PS();
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+technique MainTec0_0 < 
+    string MMDPass = "object"; 
+    bool UseToon = true;
+    string Subset = "0"; 
+    string Script =
+        
+        "RenderColorTarget=MatrixBufTex;"
+        "RenderDepthStencilTarget=DepthBufferMB;"
+        "Pass=DrawMatrixBuf;"
+        
+        "RenderColorTarget=VertexPosBufTex2;"
+        "RenderDepthStencilTarget=DepthBuffer;"
+        "Pass=CopyVertexBuf;"
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+        "Pass=DrawObject;"
+        
+        "RenderColorTarget=VertexPosBufTex;"
+        "RenderDepthStencilTarget=DepthBuffer;"
+        "Pass=DrawVertexBuf;"
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+    ;
+> {
+    pass DrawMatrixBuf < string Script = "Draw=Buffer;";>   { StateBlock = (makeMatrixBufState); }
+    pass DrawObject    < string Script = "Draw=Geometry;";> { StateBlock = (PMD_State);  }
+    pass DrawVertexBuf < string Script = "Draw=Geometry;";> { StateBlock = (makeVertexBufState); }
+    pass CopyVertexBuf < string Script = "Draw=Buffer;";>   { StateBlock = (copyVertexBufState); }
+    
+}
+
+
+technique MainTec0_1 < 
+    string MMDPass = "object"; 
+    bool UseToon = true;
+    string Script =
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+        "Pass=DrawObject;"
+        
+        "RenderColorTarget=VertexPosBufTex;"
+        "RenderDepthStencilTarget=DepthBuffer;"
+        "Pass=DrawVertexBuf;"
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+    ;
+> {
+    pass DrawObject    < string Script = "Draw=Geometry;";> { StateBlock = (PMD_State);  }
+    pass DrawVertexBuf < string Script = "Draw=Geometry;";> { StateBlock = (makeVertexBufState); }
+    
+}
+
+technique MainTec1 < 
+    string MMDPass = "object"; 
+    bool UseToon = false;
+    string Script =
+        
+        "RenderColorTarget=MatrixBufTex;"
+        "RenderDepthStencilTarget=DepthBufferMB;"
+        "Pass=DrawMatrixBuf;"
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+        "Pass=DrawObject;"
+        
+    ;
+> {
+    pass DrawObject    < string Script = "Draw=Geometry;";> { StateBlock = (Accessory_State);  }
+    pass DrawMatrixBuf < string Script = "Draw=Buffer;";>   { StateBlock = (makeMatrixBufState); }
+    
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+technique MainTec0_0SS < 
+    string MMDPass = "object_ss"; 
+    bool UseToon = true;
+    string Subset = "0"; 
+    string Script =
+        
+        "RenderColorTarget=MatrixBufTex;"
+        "RenderDepthStencilTarget=DepthBufferMB;"
+        "Pass=DrawMatrixBuf;"
+        
+        "RenderColorTarget=VertexPosBufTex2;"
+        "RenderDepthStencilTarget=DepthBuffer;"
+        "Pass=CopyVertexBuf;"
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+        "Pass=DrawObject;"
+        
+        "RenderColorTarget=VertexPosBufTex;"
+        "RenderDepthStencilTarget=DepthBuffer;"
+        "Pass=DrawVertexBuf;"
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+    ;
+> {
+    pass DrawMatrixBuf < string Script = "Draw=Buffer;";>   { StateBlock = (makeMatrixBufState); }
+    pass DrawObject    < string Script = "Draw=Geometry;";> { StateBlock = (PMD_State);  }
+    pass DrawVertexBuf < string Script = "Draw=Geometry;";> { StateBlock = (makeVertexBufState); }
+    pass CopyVertexBuf < string Script = "Draw=Buffer;";>   { StateBlock = (copyVertexBufState); }
+    
+}
+
+
+technique MainTec0_1SS < 
+    string MMDPass = "object_ss"; 
+    bool UseToon = true;
+    string Script =
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+        "Pass=DrawObject;"
+        
+        "RenderColorTarget=VertexPosBufTex;"
+        "RenderDepthStencilTarget=DepthBuffer;"
+        "Pass=DrawVertexBuf;"
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+    ;
+> {
+    pass DrawObject    < string Script = "Draw=Geometry;";> { StateBlock = (PMD_State);  }
+    pass DrawVertexBuf < string Script = "Draw=Geometry;";> { StateBlock = (makeVertexBufState); }
+    
+}
+
+technique MainTec1SS < 
+    string MMDPass = "object_ss"; 
+    bool UseToon = false;
+    string Script =
+        
+        "RenderColorTarget=MatrixBufTex;"
+        "RenderDepthStencilTarget=DepthBufferMB;"
+        "Pass=DrawMatrixBuf;"
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+        "Pass=DrawObject;"
+        
+    ;
+> {
+    pass DrawObject    < string Script = "Draw=Geometry;";> { StateBlock = (Accessory_State);  }
+    pass DrawMatrixBuf < string Script = "Draw=Buffer;";>   { StateBlock = (makeMatrixBufState); }
+    
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 輪郭描画
+
+technique EdgeTec < string MMDPass = "edge";
+    string Script =
+        
+        "RenderColorTarget=;"
+        "RenderDepthStencilTarget=;"
+        "Pass=DrawObject;"
+        
+    ;
+> {
+    pass DrawObject < string Script = "Draw=Geometry;";> { StateBlock = (PMD_State);  }
+    
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 影（非セルフシャドウ）描画
+
+// 影なし
+technique ShadowTec < string MMDPass = "shadow"; > {
+    
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// セルフシャドウ用Z値プロット
+
+// Z値プロット用テクニック
+technique ZplotTec < string MMDPass = "zplot"; > {
+    
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+

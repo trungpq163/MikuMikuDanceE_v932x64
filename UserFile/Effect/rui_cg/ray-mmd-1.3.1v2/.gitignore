@@ -1,0 +1,19 @@
+# Windows image file caches
+Thumbs.db
+ehthumbs.db
+
+# Folder config file
+Desktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+Test
+Extension/NoiseBlur
+Extension/PaniniProjection
+Extension/BokehBlur
+Extension/OpticalLight
+Extension/SSAO
+Extension/SoundSpectrum/WaveCircle
+Tools/AudiosFFT/_CommonRedist
+Skybox/Gradient Sky

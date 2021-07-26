@@ -1,0 +1,50 @@
+#include "../ray.conf"
+#include "../shader/math.fxsub"
+#include "../shader/common.fxsub"
+
+texture DiffuseMap : MATERIALTEXTURE;
+sampler DiffuseMapSamp = sampler_state
+{
+	texture = <DiffuseMap>;
+	MINFILTER = POINT; MAGFILTER = POINT; MIPFILTER = POINT;
+	ADDRESSU = WRAP; ADDRESSV = WRAP;
+};
+
+void DrawObjectVS(
+	in float4 Position : POSITION,
+	in float4 Texcoord : TEXCOORD0,
+	out float4 oTexcoord : TEXCOORD0,
+	out float4 oPosition : POSITION)
+{
+	oTexcoord = Texcoord;
+	oPosition = mul(Position, matWorldViewProject);
+}
+
+float4 DrawObjectPS(float4 texcoord : TEXCOORD0) : COLOR
+{
+#if DISCARD_ALPHA_ENABLE
+	float alpha = MaterialDiffuse.a;
+#if DISCARD_ALPHA_MAP_ENABLE
+	if (use_texture) alpha *= tex2D(DiffuseMapSamp, texcoord.xy).a;
+#endif
+	clip(alpha - DiscardAlphaThreshold);
+#endif
+	return 0;
+}
+
+#define OBJECT_TEC(name, mmdpass)\
+	technique name<string MMDPass = mmdpass;\
+	>{\
+		pass DrawObject {\
+			AlphaTestEnable = FALSE; AlphaBlendEnable = FALSE;\
+			VertexShader = compile vs_3_0 DrawObjectVS();\
+			PixelShader = compile ps_3_0 DrawObjectPS();\
+		}\
+	}
+
+OBJECT_TEC(MainTec0, "object")
+OBJECT_TEC(MainTecBS0, "object_ss")
+
+technique EdgeTec<string MMDPass = "edge";>{}
+technique ZplotTec<string MMDPass = "zplot";>{}
+technique ShadowTech<string MMDPass = "shadow";>{}
