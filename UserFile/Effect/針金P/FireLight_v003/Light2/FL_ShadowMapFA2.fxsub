@@ -1,0 +1,175 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  FL_ShadowMapFA.fxsub : FireLight 動的双放物面シャドウマップ(床補助)
+//  ( FireLight.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ここのパラメータを変更してください
+//(FireLight.fxと同名パラメータは同じ値に設定してください)
+
+// ライトID番号
+#define  LightID  2   // 1～4以外で新たに光源を増やす場合はファイル名変更とこの値を5,6,7･･と変えていく
+
+
+// 解らない人はここから下はいじらないでね
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+#define  OwnerDataTex(n)  FireLight_OwnerDataTex##n   // データバッファのテクスチャ名
+
+shared texture OwnerDataTex(LightID) : RENDERCOLORTARGET;
+sampler OwnerDataSmp = sampler_state
+{
+   Texture = <OwnerDataTex(LightID)>;
+   AddressU  = CLAMP;
+   AddressV = CLAMP;
+   MinFilter = NONE;
+   MagFilter = NONE;
+   MipFilter = NONE;
+};
+static float4 OwnerDat = tex2Dlod(OwnerDataSmp, float4(0.125f, 0.5f, 0, 0 ));
+/* ↓これで読みたいけどエラーになる
+float4 OwnerData[1] : TEXTUREVALUE <
+   string TextureName = "FireLight_OwnerDataTex1";
+>;
+*/
+
+// 光源位置
+float3 LightOrg : CONTROLOBJECT < string name = "(OffscreenOwner)"; >;
+static float3 LightPosition = LightOrg + OwnerDat.xyz;
+
+
+// 双放物面マップの向き
+#define MAP_FRONT   1.0  // 正面
+#define MAP_BACK   -1.0  // 背面
+
+// Zプロット範囲
+#define Z_NEAR  1.0     // 最近値
+#define Z_FAR   1000.0  // 最遠値
+
+#define MSC   0.98  // マップ縮小率
+
+// ワールド変換行列
+float4x4 WorldMatrix : WORLD;
+
+// ビュー変換行列(FB 1:正面,-1:背面)
+float4x4 GetViewMatrix(float FB)
+{
+    return float4x4( 1.0f, 0.0f, 0.0f, 0.0f,
+                     0.0f, FB,   0.0f, 0.0f,
+                     0.0f, 0.0f, FB,   0.0f,
+                     -LightPosition.x, -LightPosition.y*FB, -LightPosition.z*FB, 1.0f );
+};
+
+// 射影変換行列(VPos:ビュー座標, FB 1:正面,-1:背面)
+// (双放物面マップ正面を上半分に背面を下半分に描画する)
+float4x4 GetProjMatrix(float4 VPos, float FB)
+{
+    float L = length(VPos.xyz);
+    float vL = 1.0f / L;
+    float z = Z_FAR * vL * ( L - Z_NEAR ) / ( Z_FAR - Z_NEAR );
+    return float4x4( vL*MSC, 0.0f,        0.0f,  0.0f,
+                     0.0f,   0.5f*vL*MSC, 0.0f,  0.0f,
+                     0.0f,   0.5f*vL*FB,  z*vL,  vL,  
+                     0.0f,   0.5f*FB,     z,     1.0f );
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//MMM対応
+
+#ifndef MIKUMIKUMOVING
+    struct VS_INPUT{
+        float4 Pos : POSITION;
+    };
+    #define GETPOS    (IN.Pos)
+#else
+    #define VS_INPUT  MMM_SKINNING_INPUT
+    #define GETPOS    MMM_SkinnedPosition(IN.Pos, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1)
+#endif
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// Zプロット描画
+
+struct VS_OUTPUT {
+    float4 Pos  : POSITION;    // 射影変換座標
+    float4 VPos : TEXCOORD0;   // ビュー変換座標
+    float4 PPos : TEXCOORD1;   // 射影変換座標
+};
+
+// 頂点シェーダ
+VS_OUTPUT VS_ShadowMap(VS_INPUT IN, uniform float FB)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+    // 双放物面マップへのワールドビュー変換
+    float4 VPos = mul( GETPOS, mul(WorldMatrix, GetViewMatrix(FB)) );
+    Out.VPos = VPos;
+
+    // 双放物面マップへの射影変換
+    Out.Pos = mul( VPos, GetProjMatrix(VPos, FB) );
+    Out.PPos = Out.Pos;
+
+    return Out;
+}
+
+//ピクセルシェーダ
+float4 PS_ShadowMap(VS_OUTPUT IN, uniform float FB) : COLOR
+{
+    // 反対側の双放物面領域は描画しない
+    clip( IN.PPos.y * FB );
+
+    // 反対面でラスタライズされるピクセルは描画しない
+    float3 ltDirec = normalize(IN.VPos.xyz);
+    clip( 0.7f - dot(ltDirec, float3(0.0f ,0.0f, -1.0f)) ); 
+
+    // Z値
+    float z = saturate(IN.PPos.z / IN.PPos.w);
+
+    return float4(z, z*z, 0, 1);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+// オブジェクト描画(セルフシャドウなし)
+technique DepthTec0 < string MMDPass = "object"; >
+{
+    pass DrawObjectF {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_3_0 VS_ShadowMap(MAP_FRONT);
+        PixelShader  = compile ps_3_0 PS_ShadowMap(MAP_FRONT);
+    }
+    pass DrawObjectB {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_3_0 VS_ShadowMap(MAP_BACK);
+        PixelShader  = compile ps_3_0 PS_ShadowMap(MAP_BACK);
+    }
+}
+
+// オブジェクト描画(セルフシャドウあり)
+technique DepthTecSS0 < string MMDPass = "object_ss"; >
+{
+    pass DrawObjectF {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_3_0 VS_ShadowMap(MAP_FRONT);
+        PixelShader  = compile ps_3_0 PS_ShadowMap(MAP_FRONT);
+    }
+    pass DrawObjectB {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_3_0 VS_ShadowMap(MAP_BACK);
+        PixelShader  = compile ps_3_0 PS_ShadowMap(MAP_BACK);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+// 輪郭は描画しない
+technique EdgeTec < string MMDPass = "edge"; > { }
+// 地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+

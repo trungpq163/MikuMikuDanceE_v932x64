@@ -1,0 +1,222 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  HgSL_WPosMapMMM.fxsub : HgSpotLightオブジェクトワールド座標・深度描画
+//  ( MikuMikuMoving対応版, HgSpotLight.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+// 透過値に対する深度読み取り閾値
+float AlphaClipThreshold = 0.5;
+
+// 座標変換行列
+float4x4 WorldViewProjMatrix : WORLDVIEWPROJECTION;
+float4x4 ViewProjMatrix      : VIEWPROJECTION;
+float4x4 WorldMatrix         : WORLD;
+float4x4 ViewMatrix          : VIEW;
+float4x4 ProjMatrix          : PROJECTION;
+
+//カメラ位置
+float3 CameraPosition  : POSITION  < string Object = "Camera"; >;
+
+// マテリアル色
+float4 MaterialDiffuse  : DIFFUSE  < string Object = "Geometry"; >;
+float4 EdgeColor        : EDGECOLOR;
+float  EdgeWidth        : EDGEWIDTH;
+
+bool opadd; // 加算合成フラグ
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT {
+    float4 Pos  : POSITION;    // 射影変換座標
+    float4 WPos : TEXCOORD0;   // ワールド座標
+    float2 Tex  : TEXCOORD1;   // テクスチャ
+};
+
+//==============================================
+// 頂点シェーダ
+// MikuMikuMoving独自の頂点シェーダ入力(MMM_SKINNING_INPUT)
+//==============================================
+VS_OUTPUT VS_Object(MMM_SKINNING_INPUT IN)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPositionNormal)。座標と法線を取得する。
+    //================================================================================
+    MMM_SKINNING_OUTPUT SkinOut = MMM_SkinnedPositionNormal(IN.Pos, IN.Normal, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // ワールド座標
+    Out.WPos = mul( SkinOut.Position, WorldMatrix );
+
+    // 頂点座標
+    if (MMM_IsDinamicProjection)
+    {
+        // カメラとの相対位置
+        float Len = length( CameraPosition - mul( SkinOut.Position, WorldMatrix ).xyz );
+        float4x4 wvpmat = mul(mul(WorldMatrix, ViewMatrix), MMM_DynamicFov(ProjMatrix, Len));
+        Out.Pos = mul( SkinOut.Position, wvpmat );
+    }
+    else
+    {
+        Out.Pos = mul( SkinOut.Position, WorldViewProjMatrix );
+    }
+
+    // テクスチャ座標
+    Out.Tex = IN.Tex;
+
+    return Out;
+}
+
+//==============================================
+// ピクセルシェーダ
+//==============================================
+float4 PS_Object(VS_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+    // α値
+    float alpha = MaterialDiffuse.a * !opadd;
+    if ( useTexture ) {
+        // テクスチャ透過値適用
+        alpha *= tex2D( ObjTexSampler, IN.Tex ).a * !opadd;
+    }
+    // α値が閾値以下の箇所は描画しない
+    clip(alpha - AlphaClipThreshold);
+
+    // ワールド座標出力
+    return float4( IN.WPos.xyz, distance(IN.WPos.xyz, CameraPosition) );
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+// オブジェクト描画(セルフシャドウなし)
+technique LightVecTec0 < string MMDPass = "object"; bool UseTexture = false; bool UseSelfShadow = false; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(false);
+    }
+}
+
+technique LightVecTec1 < string MMDPass = "object"; bool UseTexture = true; bool UseSelfShadow = false; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true);
+    }
+}
+
+// オブジェクト描画(セルフシャドウあり)
+technique LightVecTecSS0 < string MMDPass = "object"; bool UseTexture = false; bool UseSelfShadow = true; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(false);
+    }
+}
+
+technique LightVecTecSS1 < string MMDPass = "object"; bool UseTexture = true; bool UseSelfShadow = true; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// エッジ描画
+
+struct VS_EDGE {
+    float4 Pos  : POSITION;    // 射影変換座標
+    float4 WPos : TEXCOORD0;   // ワールド座標
+};
+
+//==============================================
+// 頂点シェーダ
+//==============================================
+VS_EDGE VS_Edge(MMM_SKINNING_INPUT IN) 
+{
+    VS_EDGE Out = (VS_EDGE)0;
+
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    MMM_SKINNING_OUTPUT SkinOut = MMM_SkinnedPositionNormal(IN.Pos, IN.Normal, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // ワールド座標
+    float4 Pos = mul(SkinOut.Position, WorldMatrix);
+    Out.WPos = Pos;
+
+    // 法線方向
+    float3 Normal = normalize( mul( SkinOut.Normal, (float3x3)WorldMatrix ) );
+
+    // 頂点座標
+    if (MMM_IsDinamicProjection)
+    {
+        float dist = length(CameraPosition - Pos.xyz);
+        float4x4 vpmat = mul(ViewMatrix, MMM_DynamicFov(ProjMatrix, dist));
+
+        Pos += float4(Normal, 0) * IN.EdgeWeight * EdgeWidth * distance(Pos.xyz, CameraPosition) * MMM_GetDynamicFovEdgeRate(dist);
+        Out.Pos = mul( Pos, vpmat );
+    }
+    else
+    {
+        Pos += float4(Normal, 0) * IN.EdgeWeight * EdgeWidth * distance(Pos.xyz, CameraPosition);
+        Out.Pos = mul( Pos, ViewProjMatrix );
+    }
+
+    return Out;
+}
+
+//==============================================
+// ピクセルシェーダ
+//==============================================
+float4 PS_Edge(VS_EDGE IN) : COLOR
+{
+    // α値
+    float alpha = EdgeColor.a * !opadd;
+    // α値が閾値以下の箇所は描画しない
+    clip(alpha - AlphaClipThreshold);
+
+    // ワールド座標出力
+    return float4( IN.WPos.xyz, 1 );
+}
+
+
+technique EdgeLightVecTec < string MMDPass = "edge"; >
+{
+    pass DrawEdge {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 VS_Edge();
+        PixelShader  = compile ps_2_0 PS_Edge();
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+//地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+

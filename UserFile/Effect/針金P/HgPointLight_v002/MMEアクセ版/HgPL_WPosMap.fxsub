@@ -1,0 +1,154 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  HgPL_WPosMap.fxsub : HgPointLightオブジェクトワールド座標・Z値描画
+//  ( HgPointLight.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+// Zプロット範囲
+#define Z_NEAR  1.0     // 最近値
+#define Z_FAR   1000.0  // 最遠値
+
+// 光源位置
+float3 LightPosition : CONTROLOBJECT < string name = "(OffscreenOwner)"; >;
+
+// 透過値に対する深度読み取り閾値
+float AlphaClipThreshold = 0.5;
+// 座標変換行列
+float4x4 WorldViewProjMatrix : WORLDVIEWPROJECTION;
+float4x4 WorldMatrix         : WORLD;
+
+// マテリアル色
+float4 MaterialDiffuse  : DIFFUSE  < string Object = "Geometry"; >;
+float4 EdgeColor        : EDGECOLOR;
+
+bool opadd; // 加算合成フラグ
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = LINEAR;
+    ADDRESSU  = WRAP;
+    ADDRESSV  = WRAP;
+};
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT {
+    float4 Pos  : POSITION;    // 射影変換座標
+    float4 WPos : TEXCOORD0;   // ワールド座標
+    float2 Tex  : TEXCOORD1;   // テクスチャ
+};
+
+// 頂点シェーダ
+VS_OUTPUT VS_Object(float4 Pos : POSITION, float2 Tex : TEXCOORD0)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    // カメラ視点のワールドビュー射影変換
+    Out.Pos = mul( Pos, WorldViewProjMatrix );
+
+    // ワールド座標
+    Out.WPos = mul( Pos, WorldMatrix );
+
+    // テクスチャ座標
+    Out.Tex = Tex;
+
+    return Out;
+}
+
+// ピクセルシェーダ
+float4 PS_Object(VS_OUTPUT IN, uniform bool isObj, uniform bool useTexture) : COLOR
+{
+    // α値
+    float alpha;
+    if( isObj ) {
+        alpha = MaterialDiffuse.a * !opadd;
+        if ( useTexture ) {
+            // テクスチャ透過値適用
+            alpha *= tex2D( ObjTexSampler, IN.Tex ).a * !opadd;
+        }
+    }else{
+        alpha = EdgeColor.a * !opadd;
+    }
+    // α値が閾値以下の箇所は描画しない
+    clip(alpha - AlphaClipThreshold);
+
+    // Z値
+    float L = length(IN.WPos.xyz - LightPosition);
+    float z = ( Z_FAR / L ) * ( L - Z_NEAR ) / ( Z_FAR - Z_NEAR );
+
+    // ワールド座標・Z値出力
+    return float4( IN.WPos.xyz, z );
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+// エッジ描画
+technique EdgeLightVecTec < string MMDPass = "edge"; >
+{
+    pass DrawEdge {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(false, false);
+    }
+}
+
+// オブジェクト描画(セルフシャドウなし)
+technique LightVecTec0 < string MMDPass = "object"; bool UseTexture = false; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true, false);
+    }
+}
+
+technique LightVecTec1 < string MMDPass = "object"; bool UseTexture = true; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true, true);
+    }
+}
+
+// オブジェクト描画(セルフシャドウあり)
+technique LightVecTecSS0 < string MMDPass = "object_ss"; bool UseTexture = false; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true, false);
+    }
+}
+
+technique LightVecTecSS1 < string MMDPass = "object_ss"; bool UseTexture = true; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable  = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true, true);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+//地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+

@@ -1,0 +1,230 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  KeyScreen_MMM.fxm ver0.0.3  screen.bmpを使用したアクセの映像をカラーキーで透過させます
+//  (MikuMikuMoving対応版)
+//  作成: 針金P( Mogg氏のSampleBase.fxm改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ここのパラメータを変更してください
+
+#define BothSides  1     // 0:片面描画，1:両面描画
+
+float3 ColorKey <      // カラーキーの色
+   string UIName = "カラーキーの色";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float3(0.0, 0.0, 1.0);
+
+float Threshold <  // カラーキーの閾値
+   string UIName = "キー閾値";
+   string UIWidget = "Slider";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = 0.2;
+
+
+// 解らない人はここから下はいじらないでね
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+//座標変換行列
+float4x4 WorldViewProjMatrix : WORLDVIEWPROJECTION;
+float4x4 ViewProjMatrix      : VIEWPROJECTION;
+float4x4 WorldMatrix         : WORLD;
+float4x4 ViewMatrix          : VIEW;
+float4x4 ProjMatrix          : PROJECTION;
+
+//ライト関連
+bool     LightEnables[MMM_LightCount]      : LIGHTENABLES;      // 有効フラグ
+float4x4 LightWVPMatrices[MMM_LightCount]  : LIGHTWVPMATRICES;  // 座標変換行列
+float3   LightDirection[MMM_LightCount]    : LIGHTDIRECTIONS;   // 方向
+float3   LightPositions[MMM_LightCount]    : LIGHTPOSITIONS;    // ライト位置
+float    LightZFars[MMM_LightCount]        : LIGHTZFARS;        // ライトzFar値
+
+//材質モーフ関連
+float4 AddingTexture    : ADDINGTEXTURE;       // 材質モーフ加算Texture値
+float4 AddingSphere     : ADDINGSPHERE;        // 材質モーフ加算SphereTexture値
+float4 MultiplyTexture  : MULTIPLYINGTEXTURE;  // 材質モーフ乗算Texture値
+float4 MultiplySphere   : MULTIPLYINGSPHERE;   // 材質モーフ乗算SphereTexture値
+
+//カメラ位置
+float3 CameraPosition  : POSITION  < string Object = "Camera"; >;
+
+// マテリアル色
+float4 MaterialDiffuse    : DIFFUSE  < string Object = "Geometry"; >;
+float3 MaterialAmbient    : AMBIENT  < string Object = "Geometry"; >;
+float3 MaterialEmmisive   : EMISSIVE < string Object = "Geometry"; >;
+float3 MaterialSpecular   : SPECULAR < string Object = "Geometry"; >;
+float  SpecularPower      : SPECULARPOWER < string Object = "Geometry"; >;
+float4 MaterialToon       : TOONCOLOR;
+
+// ライト色
+float3 LightDiffuses[MMM_LightCount]   : LIGHTDIFFUSECOLORS;
+float3 LightAmbients[MMM_LightCount]   : LIGHTAMBIENTCOLORS;
+float3 LightSpeculars[MMM_LightCount]  : LIGHTSPECULARCOLORS;
+
+// ライト色
+static float4 DiffuseColor[3]  = { MaterialDiffuse * float4(LightDiffuses[0], 1.0f),
+                                   MaterialDiffuse * float4(LightDiffuses[1]*1.3f, 1.0f),
+                                   MaterialDiffuse * float4(LightDiffuses[2]*1.3f, 1.0f) };
+static float3 AmbientColor[3]  = { saturate(MaterialAmbient * LightAmbients[0]) + MaterialEmmisive,
+                                   saturate(MaterialAmbient * LightAmbients[1]) + MaterialEmmisive*1.8f,
+                                   saturate(MaterialAmbient * LightAmbients[2]) + MaterialEmmisive*1.8f };
+static float3 SpecularColor[3] = { MaterialSpecular * LightSpeculars[0],
+                                   MaterialSpecular * LightSpeculars[1],
+                                   MaterialSpecular * LightSpeculars[2] };
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+struct VS_OUTPUT {
+    float4 Pos     : POSITION;     // 射影変換座標
+    float2 Tex     : TEXCOORD0;    // テクスチャ
+    float4 SubTex  : TEXCOORD1;    // サブテクスチャ/スフィアマップテクスチャ座標
+    float3 Normal  : TEXCOORD2;    // 法線
+    float3 Eye     : TEXCOORD3;    // カメラとの相対位置
+    float4 SS_UV1  : TEXCOORD4;    // セルフシャドウテクスチャ座標
+    float4 SS_UV2  : TEXCOORD5;    // セルフシャドウテクスチャ座標
+    float4 SS_UV3  : TEXCOORD6;    // セルフシャドウテクスチャ座標
+    float4 Color   : COLOR0;       // ライト0による色
+};
+
+//==============================================
+// 頂点シェーダ
+// MikuMikuMoving独自の頂点シェーダ入力(MMM_SKINNING_INPUT)
+//==============================================
+VS_OUTPUT Basic_VS(MMM_SKINNING_INPUT IN, uniform bool useTexture, uniform bool useSelfShadow)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    // カメラとの相対位置
+    Out.Eye = CameraPosition - mul( IN.Pos, WorldMatrix ).xyz;
+    // 頂点法線
+    Out.Normal = normalize( mul( IN.Normal, (float3x3)WorldMatrix ) );
+
+    // 頂点座標
+    if (MMM_IsDinamicProjection)
+    {
+        float4x4 wvpmat = mul(mul(WorldMatrix, ViewMatrix), MMM_DynamicFov(ProjMatrix, length(Out.Eye)));
+        Out.Pos = mul( IN.Pos, wvpmat );
+    }
+    else
+    {
+        Out.Pos = mul( IN.Pos, WorldViewProjMatrix );
+    }
+
+    // ディフューズ色＋アンビエント色 計算
+    float3 color = float3(0, 0, 0);
+    float3 ambient = float3(0, 0, 0);
+    float count = 0;
+    for (int i = 0; i < 3; i++) {
+        if (LightEnables[i]) {
+            color += (float3(1,1,1) - color) * (max(0, DiffuseColor[i].rgb * dot(Out.Normal, -LightDirection[i])));
+            ambient += AmbientColor[i];
+            count = count + 1.0;
+        }
+    }
+    Out.Color.rgb = saturate(ambient / count + color);
+    Out.Color.a = MaterialDiffuse.a;
+
+    // テクスチャ座標
+    Out.Tex = IN.Tex;
+
+    if (useSelfShadow) {
+        float4 dpos = mul(IN.Pos, WorldMatrix);
+        //デプスマップテクスチャ座標
+        Out.SS_UV1 = mul(dpos, LightWVPMatrices[0]);
+        Out.SS_UV2 = mul(dpos, LightWVPMatrices[1]);
+        Out.SS_UV3 = mul(dpos, LightWVPMatrices[2]);
+
+        Out.SS_UV1.y = -Out.SS_UV1.y;
+        Out.SS_UV2.y = -Out.SS_UV2.y;
+        Out.SS_UV3.y = -Out.SS_UV3.y;
+
+        Out.SS_UV1.z = (length(LightPositions[0] - IN.Pos.xyz) / LightZFars[0]);
+        Out.SS_UV2.z = (length(LightPositions[1] - IN.Pos.xyz) / LightZFars[1]);
+        Out.SS_UV3.z = (length(LightPositions[2] - IN.Pos.xyz) / LightZFars[2]);
+    }
+
+    return Out;
+}
+
+//==============================================
+// ピクセルシェーダ
+// 入力は特に独自形式なし
+//==============================================
+float4 Basic_PS(VS_OUTPUT IN, uniform bool useTexture, uniform bool useSelfShadow) : COLOR0
+{
+    float4 Color = IN.Color;
+    float4 texColor = float4(1,1,1,1);
+
+    //スペキュラ色計算
+    float3 HalfVector;
+    float3 Specular = 0;
+    for (int i = 0; i < 3; i++) {
+        if (LightEnables[i]) {
+            HalfVector = normalize( normalize(IN.Eye) + -LightDirection[i] );
+            Specular += pow( max(0,dot( HalfVector, normalize(IN.Normal) )), SpecularPower ) * SpecularColor[i];
+        }
+    }
+
+    // テクスチャ適用
+    if (useTexture) {
+        texColor = tex2D(ObjTexSampler, IN.Tex);
+        // カラーキー透過
+        float len = length(texColor.rgb - ColorKey);
+        clip(len - Threshold);
+    }
+    Color.rgb *= texColor.rgb;
+
+    // アルファ適用
+    Color.a = IN.Color.a * texColor.a;
+
+    // セルフシャドウ
+    if (useSelfShadow) {
+        Color.rgb *= MMM_GetSelfShadowToonColor(MaterialToon, IN.Normal, IN.SS_UV1, IN.SS_UV2, IN.SS_UV3, false, false);
+    }
+
+    // スペキュラ適用
+    Color.rgb += Specular;
+
+    return Color;
+}
+
+//==============================================
+// オブジェクト描画テクニック
+// UseSelfShadowが独自に追加されています。
+//==============================================
+
+technique MainTec1 < string MMDPass = "object"; bool UseSelfShadow = false; > {
+    pass DrawObject {
+        #if(BothSides == 1)
+        CullMode = NONE;
+        #endif
+        VertexShader = compile vs_3_0 Basic_VS(true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false);
+    }
+}
+
+
+technique MainTec2 < string MMDPass = "object"; bool UseSelfShadow = true; > {
+    pass DrawObject {
+        #if(BothSides == 1)
+        CullMode = NONE;
+        #endif
+        VertexShader = compile vs_3_0 Basic_VS(true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true);
+    }
+}
+
+

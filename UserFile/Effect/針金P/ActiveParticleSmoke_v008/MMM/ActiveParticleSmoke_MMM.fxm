@@ -1,0 +1,1030 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  ActiveParticleSmoke_MMM.fxm ver0.0.8 納豆ミサイルっぽいエフェクト
+//  オブジェクトの移動に応じて煙が尾を引きます
+//  (MikuMikuMoving対応版)
+//  作成: 針金P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ここのパラメータを変更してください
+
+// 粒子数設定
+#define UNIT_COUNT   8   // ←この数×1024 が一度に描画出来る粒子の数になる(整数値で指定すること)
+
+// 粒子パラメータスイッチ
+#define SMOKE_TYPE  1    // 煙の種類(とりあえず0～2で選択,0:従来通り,1:ノーマルマップ使用粒小,2:ノーマルマップ使用粒大)
+#define MMM_LIGHT   1    // MMMの照明操作に 0:連動しない, 1:連動する
+
+// 追加粒子設定
+#define UNIT_COUNT0   0   // ←この数×1024 が一度に描画出来る追加粒子の数になる(整数値で指定,0にすると追加粒子描画は行わない)
+#define TEX_ADD_FLG   1   // 0:半透明合成, 1:加算合成
+
+
+// 粒子パラメータ設定
+float3 ParticleColor <      // 粒子の色(RBG)
+   string UIName = "粒子色";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float3(1.0, 1.0, 1.0);
+
+float ParticleSize <        // 粒子大きさ
+   string UIName = "粒子大きさ";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 30.0;
+> = float( 1.5 );
+
+float ParticleSpeedMin <    // 粒子初期最小スピード
+   string UIName = "初期最小ｽﾋﾟｰﾄﾞ";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 50.0;
+> = float( 0.5 );
+
+float ParticleSpeedMax <    // 粒子初期最大スピード
+   string UIName = "初期最大ｽﾋﾟｰﾄﾞ";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 50.0;
+> = float( 1.5 );
+
+float ParticleInitPos <     // 粒子発生時の相対位置(大きくすると粒子の初期配置がばらつきます)
+   string UIName = "発生時相対位置";
+   string UIHelp = "粒子発生時の相対位置(大きくすると粒子の初期配置がばらつきます)";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 50.0;
+> = float( 0.0 );
+
+float ParticleLife <        // 粒子の寿命(秒)
+   string UIName = "粒子の寿命(秒)";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 60.0;
+> = float( 5.0 );
+
+float ParticleDecrement <   // 粒子が消失を開始する時間(ParticleLifeとの比)
+   string UIName = "消失開始時間比";
+   string UIHelp = "粒子が消失を開始する時間(粒子の寿命との比)";
+   string UIWidget = "Slider";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float( 0.3 );
+
+float ParticleScaleUp <   // 粒子発生後の拡大度
+   string UIName = "粒子拡大度";
+   string UIHelp = "粒子発生後の拡大度";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 50.0;
+> = float( 2.0 );
+
+//#if (SMOKE_TYPE > 0)
+float ParticleContrast <  // 粒子陰影のコントラスト(0.0～1.0、ノーマルマップ使用時のみ有効)
+   string UIName = "陰影ｺﾝﾄﾗｽﾄ";
+   string UIHelp = "粒子陰影のコントラスト(ノーマルマップ使用時のみ有効)";
+   string UIWidget = "Slider";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float( 0.4 );
+
+float ParticleShadeDiffusion <  // 粒子発生後の陰影拡散度(大きくすると時間がたつにつれ陰影がぼやけてくる、ノーマルマップのみ)
+   string UIName = "陰影拡散度";
+   string UIHelp = "粒子発生後の陰影拡散度\n(大きくすると時間がたつにつれ陰影がぼやけてくる、ノーマルマップ使用時のみ有効)";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 30.0;
+> = float( 4.0 );
+//#endif
+
+float OccurFactor <         // オブジェクト移動量に対する粒子発生度(大きくすると粒子が出やすくなる)
+   string UIName = "粒子発生頻度";
+   string UIHelp = "オブジェクト移動量に対する粒子発生度(大きくすると粒子が出やすくなる)";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 10.0;
+> = float( 1.0 );
+
+float ObjVelocityRate <     // オブジェクト移動方向に対する粒子速度依存度
+   string UIName = "移動方向依存度";
+   string UIHelp = "オブジェクト移動方向に対する粒子速度依存度";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = -30.0;
+   float UIMax = 30.0;
+> = float( -1.5 );
+
+float3 StartDirect <        // 初期噴射方向ベクトル
+   string UIName = "初期噴射方向";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = -1.0;
+   float UIMax = 1.0;
+> = float3( 0.0, 1.0, 0.0 );
+
+float DiffusionAngle <     // 初期噴射拡散角(0.0～180.0)
+   string UIName = "初期噴射拡散角";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 180.0;
+> = float( 180.0 );
+
+
+//#if (UNIT_COUNT0 > 0)
+float3 ParticleColor0 <     // 追加粒子の色(RBG)
+   string UIName = "追加粒子色";
+   string UIHelp = "追加粒子色(パラメータスイッチ UNIT_COUNT0 > 0 の時のみ有効)";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float3( 1.0, 0.4, 0.0 );
+
+//#if (TEX_ADD_FLG != 0)
+float ParticleLightPower0 < // 加算合成時の輝度
+   string UIName = "追加粒子輝度";
+   string UIHelp = "追加粒子加算合成時の輝度\n(パラメータスイッチ UNIT_COUNT0 > 0, TEX_ADD_FLG = 1 の時のみ有効)";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 10.0;
+> = float( 1.0 );
+//#endif
+
+float ParticleLife0 <       // 追加粒子の寿命(秒)
+   string UIName = "追加粒子の寿命";
+   string UIHelp = "追加粒子の寿命(パラメータスイッチ UNIT_COUNT0 > 0 の時のみ有効)";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 30.0;
+> = float( 0.3 );
+
+float OccurFactor0 <        // オブジェクト移動量に対する追加粒子発生度(大きくすると粒子が出やすくなる)
+   string UIName = "粒子発生頻度";
+   string UIHelp = " オブジェクト移動量に対する追加粒子発生度(大きくすると粒子が出やすくなる)\n(パラメータスイッチ UNIT_COUNT0 > 0 の時のみ有効)";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 20.0;
+> = float( 2.0 );
+
+//#endif
+
+
+// 物理パラメータ設定
+float3 GravFactor <         // 重力定数
+   string UIName = "重力定数";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = -50.0;
+   float UIMax = 50.0;
+> = float3( 0.0, 0.0, 0.0 );
+
+float ResistFactor <        // 速度抵抗係数
+   string UIName = "速度抵抗係数";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 10.0;
+> = float( 0.0 );
+
+
+// (風等の)空間の流速場を定義する関数
+// 粒子位置ParticlePosにおける空気の流れを記述します。
+// 戻り値が0以外の時はオブジェクトが動かなくても粒子を放出します。
+// ただし速度抵抗係数がResistFactor>0でないと流速場は粒子の動きに影響を与えません。
+float3 VelocityField(float3 ParticlePos)
+{
+   float3 vel = float3( 0.0, 0.0, 0.0 );
+   return vel;
+}
+
+
+// 必要に応じて煙のテクスチャをここで定義
+#if SMOKE_TYPE == 0
+   #define TEX_FileName  "Smoke.png"     // 粒子に貼り付けるテクスチャファイル名
+   #define TEX_TYPE   0             // 粒子テクスチャの種類 0:通常テクスチャ, 1:ノーマルマップ
+   #define TEX_PARTICLE_XNUM  1     // 粒子テクスチャのx方向粒子数
+   #define TEX_PARTICLE_YNUM  1     // 粒子テクスチャのy方向粒子数
+   #define TEX_PARTICLE_PXSIZE 128  // 1粒子当たりに使われているテクスチャのピクセルサイズ
+#endif
+
+#if SMOKE_TYPE == 1
+   #define TEX_FileName  "SmokeNormal1.png" // 粒子に貼り付けるテクスチャファイル名
+   #define TEX_TYPE   1             // 粒子テクスチャの種類 0:通常テクスチャ, 1:ノーマルマップ
+   #define TEX_PARTICLE_XNUM  2     // 粒子テクスチャのx方向粒子数
+   #define TEX_PARTICLE_YNUM  2     // 粒子テクスチャのy方向粒子数
+   #define TEX_PARTICLE_PXSIZE 128  // 1粒子当たりに使われているテクスチャのピクセルサイズ
+#endif
+
+#if SMOKE_TYPE == 2
+   #define TEX_FileName  "SmokeNormal2.png" // 粒子に貼り付けるテクスチャファイル名
+   #define TEX_TYPE   1             // 粒子テクスチャの種類 0:通常テクスチャ, 1:ノーマルマップ
+   #define TEX_PARTICLE_XNUM  2     // 粒子テクスチャのx方向粒子数
+   #define TEX_PARTICLE_YNUM  2     // 粒子テクスチャのy方向粒子数
+   #define TEX_PARTICLE_PXSIZE 128  // 1粒子当たりに使われているテクスチャのピクセルサイズ
+#endif
+
+// オプションのコントロールファイル名
+#define BackgroundCtrlFileName  "BackgroundControl.x" // 背景座標コントロールファイル名
+#define SmoothCtrlFileName      "SmoothControl.x"     // 接地面スムージングコントロールファイル名
+#define TimrCtrlFileName        "TimeControl.x"       // 時間制御コントロールファイル名
+
+
+// 解らない人はここから下はいじらないでね
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+/*
+#if (UNIT_COUNT0 == 0)
+   #define ParticleColor0       ParticleColor
+   #define ParticleLightPower0  1.0f
+   #define ParticleLife0        ParticleLife
+   #define OccurFactor0         OccurFactor
+#endif
+*/
+
+#define ArrangeFileName "Arrange.pfm" // 配置･乱数情報ファイル名
+#define TEX_WIDTH_A  4            // 配置･乱数情報テクスチャピクセル幅
+#define TEX_WIDTH    UNIT_COUNT   // テクスチャピクセル幅
+#define TEX_HEIGHT   1024         // テクスチャピクセル高さ
+
+#define PAI 3.14159265f   // π
+
+float AcsTr : CONTROLOBJECT < string name = "(self)"; string item = "Tr"; >;
+float AcsSi : CONTROLOBJECT < string name = "(self)"; string item = "Si"; >;
+
+int RepertCount = UNIT_COUNT;  // シェーダ内描画反復回数
+int RepertIndex;               // 複製モデルカウンタ
+
+// オプションのコントロールパラメータ
+bool IsBack : CONTROLOBJECT < string name = BackgroundCtrlFileName; >;
+float4x4 BackMat : CONTROLOBJECT < string name = BackgroundCtrlFileName; >;
+
+bool IsSmooth : CONTROLOBJECT < string name = SmoothCtrlFileName; >;
+float SmoothSi : CONTROLOBJECT < string name = SmoothCtrlFileName; string item = "Si"; >;
+float4x4 SmoothMat : CONTROLOBJECT < string name = SmoothCtrlFileName; >;
+static float3 SmoothPos = SmoothMat._41_42_43;
+static float3 SmoothNormal = normalize(SmoothMat._21_22_23);
+
+bool IsTimeCtrl : CONTROLOBJECT < string name = TimrCtrlFileName; >;
+float TimeSi : CONTROLOBJECT < string name = TimrCtrlFileName; string item = "Si"; >;
+float TimeTr : CONTROLOBJECT < string name = TimrCtrlFileName; string item = "Tr"; >;
+static bool TimeSync = IsTimeCtrl ? ((TimeSi>0.001f) ? true : false) : true;
+static float TimeRate = IsTimeCtrl ? TimeTr : 1.0f;
+
+// ライト関連
+bool LightEnables[3]  : LIGHTENABLES;	// 有効フラグ
+
+#if MMM_LIGHT == 1
+float3 LightDirection[3] : LIGHTDIRECTIONS;
+float3 LightAmbients[3] : LIGHTAMBIENTCOLORS;
+static float3 ResColor[3]  = { ParticleColor * lerp(float3(0.5f, 0.5f, 0.5f), float3(1.92f, 1.92f, 1.92f), LightAmbients[0]),
+                               ParticleColor * lerp(float3(0.5f, 0.5f, 0.5f), float3(1.92f, 1.92f, 1.92f), LightAmbients[1]),
+                               ParticleColor * lerp(float3(0.5f, 0.5f, 0.5f), float3(1.92f, 1.92f, 1.92f), LightAmbients[2]) };
+static float3 ResColor0[3] = { ParticleColor0 * lerp(float3(0.5f, 0.5f, 0.5f), float3(1.92f, 1.92f, 1.92f), LightAmbients[0]),
+                               ParticleColor0 * lerp(float3(0.5f, 0.5f, 0.5f), float3(1.92f, 1.92f, 1.92f), LightAmbients[1]),
+                               ParticleColor0 * lerp(float3(0.5f, 0.5f, 0.5f), float3(1.92f, 1.92f, 1.92f), LightAmbients[2]) };
+#else
+float3 CameraDirection : DIRECTION < string Object = "Camera"; >;
+static float3 LightDirection[3] = { CameraDirection, CameraDirection, CameraDirection };
+static float3 ResColor[3] = { ParticleColor, ParticleColor, ParticleColor };
+static float3 ResColor0[3] = { ParticleColor0, ParticleColor0, ParticleColor0 };
+#endif
+
+static float diffD = saturate( 1.0f - DiffusionAngle / 180.0 );
+static float3 sDirect = normalize( StartDirect );
+
+float3 CameraPosition : POSITION  < string Object = "Camera"; >;
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+
+// 座標変換行列
+float4x4 WorldMatrix       : WORLD;
+float4x4 ViewMatrix        : VIEW;
+float4x4 ProjMatrix        : PROJECTION;
+float4x4 ViewProjMatrix    : VIEWPROJECTION;
+float4x4 ViewMatrixInverse : VIEWINVERSE;
+
+static float3x3 BillboardMatrix = {
+    normalize(ViewMatrixInverse[0].xyz),
+    normalize(ViewMatrixInverse[1].xyz),
+    normalize(ViewMatrixInverse[2].xyz),
+};
+
+// 粒子テクスチャ
+texture2D ParticleTex <
+    string ResourceName = TEX_FileName;
+    int MipLevels = 0;
+>;
+sampler ParticleSamp = sampler_state {
+    texture = <ParticleTex>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = CLAMP;
+    AddressV  = CLAMP;
+};
+
+// 配置･乱数情報テクスチャ
+texture2D ArrangeTex <
+    string ResourceName = ArrangeFileName;
+>;
+sampler ArrangeSmp : register(s2) = sampler_state{
+    texture = <ArrangeTex>;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+// 粒子座標記録用
+texture CoordTex : RENDERCOLORTARGET
+<
+   int Width=TEX_WIDTH;
+   int Height=TEX_HEIGHT;
+   string Format="A32B32G32R32F";
+>;
+sampler CoordSmp : register(s3) = sampler_state
+{
+   Texture = <CoordTex>;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+    MinFilter = NONE;
+    MagFilter = NONE;
+    MipFilter = NONE;
+};
+texture CoordDepthBuffer : RenderDepthStencilTarget <
+   int Width=TEX_WIDTH;
+   int Height=TEX_HEIGHT;
+   string Format = "D24S8";
+>;
+
+// 粒子速度記録用
+texture VelocityTex : RENDERCOLORTARGET
+<
+   int Width=TEX_WIDTH;
+   int Height=TEX_HEIGHT;
+   string Format="A32B32G32R32F";
+>;
+sampler VelocitySmp = sampler_state
+{
+   Texture = <VelocityTex>;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+    MinFilter = NONE;
+    MagFilter = NONE;
+    MipFilter = NONE;
+};
+
+// オブジェクトのワールド座標記録用
+texture WorldCoord : RENDERCOLORTARGET
+<
+   int Width=1;
+   int Height=1;
+   string Format="A32B32G32R32F";
+>;
+sampler WorldCoordSmp = sampler_state
+{
+   Texture = <WorldCoord>;
+   AddressU  = CLAMP;
+   AddressV = CLAMP;
+   MinFilter = NONE;
+   MagFilter = NONE;
+   MipFilter = NONE;
+};
+texture WorldCoordDepthBuffer : RenderDepthStencilTarget <
+   int Width=1;
+   int Height=1;
+    string Format = "D24S8";
+>;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 噴射口追加粒子テクスチャ定義
+
+#if (UNIT_COUNT0 > 0)
+
+#define TEX_WIDTH0  UNIT_COUNT0  // テクスチャピクセル幅
+
+int RepertCount0 = UNIT_COUNT0;  // シェーダ内描画反復回数
+
+// 粒子座標記録用
+texture CoordTex0 : RENDERCOLORTARGET
+<
+   int Width=TEX_WIDTH0;
+   int Height=TEX_HEIGHT;
+   string Format="A32B32G32R32F";
+>;
+sampler CoordSmp0 : register(s3) = sampler_state
+{
+   Texture = <CoordTex0>;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+    MinFilter = NONE;
+    MagFilter = NONE;
+    MipFilter = NONE;
+};
+texture CoordDepthBuffer0 : RenderDepthStencilTarget <
+   int Width=TEX_WIDTH0;
+   int Height=TEX_HEIGHT;
+   string Format = "D24S8";
+>;
+
+// 粒子速度記録用
+texture VelocityTex0 : RENDERCOLORTARGET
+<
+   int Width=TEX_WIDTH0;
+   int Height=TEX_HEIGHT;
+   string Format="A32B32G32R32F";
+>;
+sampler VelocitySmp0 = sampler_state
+{
+   Texture = <VelocityTex0>;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+    MinFilter = NONE;
+    MagFilter = NONE;
+    MipFilter = NONE;
+};
+
+// オブジェクトのワールド座標記録用
+texture WorldCoord0 : RENDERCOLORTARGET
+<
+   int Width=1;
+   int Height=1;
+   string Format="A32B32G32R32F";
+>;
+sampler WorldCoordSmp0 = sampler_state
+{
+   Texture = <WorldCoord0>;
+   AddressU  = CLAMP;
+   AddressV = CLAMP;
+   MinFilter = NONE;
+   MagFilter = NONE;
+   MipFilter = NONE;
+};
+
+#endif
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 時間間隔設定
+
+/*
+float time1 : TIME;
+float time2 : TIME < bool SyncInEditMode = true; >;
+static float time = TimeSync ? time1 : time2;
+float elapsed_time : ELAPSEDTIME;
+float elapsed_time2 : ELAPSEDTIME < bool SyncInEditMode = true; >;
+static float Dt = (TimeSync ? clamp(elapsed_time, 0.001f, 0.1f) : clamp(elapsed_time2, 0.0f, 0.1f)) * TimeRate;
+*/
+
+float time1 : Time;
+float time2 : Time < bool SyncInEditMode = true; >;
+static float time = TimeSync ? time1 : time2;
+
+// 更新時刻記録用
+texture TimeTex : RENDERCOLORTARGET
+<
+   int Width=1;
+   int Height=1;
+   string Format = "D3DFMT_R32F" ;
+>;
+sampler TimeTexSmp = sampler_state
+{
+   Texture = <TimeTex>;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+    MinFilter = NONE;
+    MagFilter = NONE;
+    MipFilter = NONE;
+};
+texture TimeDepthBuffer : RenderDepthStencilTarget <
+   int Width=1;
+   int Height=1;
+    string Format = "D3DFMT_D24S8";
+>;
+static float Dt = clamp(time - tex2D(TimeTexSmp, float2(0.5f,0.5f)).r, 0.0f, 0.1f) * TimeRate;
+
+float4 UpdateTime_VS(float4 Pos : POSITION) : POSITION
+{
+    return Pos;
+}
+
+float4 UpdateTime_PS() : COLOR
+{
+   return float4(time, 0, 0, 1);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 配置･乱数情報テクスチャからデータを取り出す
+float3 Color2Float(int index, int item)
+{
+    return tex2D(ArrangeSmp, float2((item+0.5f)/TEX_WIDTH_A, (index+0.5f)/TEX_HEIGHT)).xyz;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座標の2D回転
+float2 Rotation2D(float2 pos, float rot)
+{
+    float x = pos.x * cos(rot) - pos.y * sin(rot);
+    float y = pos.x * sin(rot) + pos.y * cos(rot);
+
+    return float2(x,y);
+}
+
+// クォータニオンの積算
+float4 MulQuat(float4 q1, float4 q2)
+{
+   return float4(cross(q1.xyz, q2.xyz)+q1.xyz*q2.w+q2.xyz*q1.w, q1.w*q2.w-dot(q1.xyz, q2.xyz));
+}
+
+// 背景アクセ基準のワールド座標→MMDワールド座標
+float3 InvBackWorldCoord(float3 pos)
+{
+    if( IsBack ){
+        float scaling = 1.0f / length(BackMat._11_12_13);
+        pos = mul( float4(pos, 1), float4x4( BackMat[0]*scaling,
+                                             BackMat[1]*scaling,
+                                             BackMat[2]*scaling,
+                                             BackMat[3] )      ).xyz;
+    }
+    return pos;
+}
+
+// MMDワールド座標→背景アクセ基準のワールド座標
+float3 BackWorldCoord(float3 pos)
+{
+    if( IsBack ){
+        float scaling = 1.0f / length(BackMat._11_12_13);
+        float3x3 mat3x3_inv = transpose((float3x3)BackMat) * scaling;
+        pos = mul( float4(pos, 1), float4x4( mat3x3_inv[0], 0, 
+                                             mat3x3_inv[1], 0, 
+                                             mat3x3_inv[2], 0, 
+                                            -mul(BackMat._41_42_43,mat3x3_inv), 1 ) ).xyz;
+    }
+    return pos;
+}
+
+// MMDワールド変換行列→背景アクセ基準のワールド変換行列
+float4x4 BackWorldMatrix(float4x4 mat)
+{
+    if( IsBack ){
+        float scaling = 1.0f / length(BackMat._11_12_13);
+        float3x3 mat3x3_inv = transpose((float3x3)BackMat) * scaling;
+        mat = mul( mat, float4x4( mat3x3_inv[0], 0, 
+                                  mat3x3_inv[1], 0, 
+                                  mat3x3_inv[2], 0, 
+                                 -mul(BackMat._41_42_43,mat3x3_inv), 1 ) );
+    }
+    return mat;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct VS_OUTPUT {
+   float4 Pos : POSITION;
+   float2 Tex : TEXCOORD0;
+};
+
+// 共通の頂点シェーダ
+VS_OUTPUT Common_VS(float4 Pos: POSITION, float2 Tex: TEXCOORD)
+{
+   VS_OUTPUT Out;
+   Out.Pos = Pos;
+   Out.Tex = Tex + float2(0.5f/TEX_WIDTH, 0.5f/TEX_HEIGHT);
+   return Out;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////
+// 粒子の発生・座標更新計算(xyz:座標,w:経過時間+1sec,wは更新時に1に初期化されるため+1sからスタート)
+
+float4 UpdatePos_PS(float2 Tex: TEXCOORD0, uniform bool calcMain, uniform int texWidth, 
+                    uniform sampler smpCoord, uniform sampler smpVelocity, uniform sampler smpWorldCoord) : COLOR
+{
+   // 粒子の座標
+   float4 Pos = tex2D(smpCoord, Tex);
+
+   // 粒子の速度
+   float3 Vel = tex2D(smpVelocity, Tex).xyz;
+
+   if(Pos.w < 1.001f){
+   // 未発生粒子の中から移動距離に応じて新たに粒子を発生させる
+      // 現在のオブジェクト座標
+      float3 WPos1 = BackWorldCoord(WorldMatrix._41_42_43);
+
+      // 1フレーム前のオブジェクト座標
+      float4 WPos0 = tex2D(smpWorldCoord, float2(0.5f, 0.5f));
+      WPos0.xyz -= VelocityField(WPos1) * Dt; // 流体速度場位置補正
+
+      // 1フレーム間の発生粒子数
+      float occurFact = calcMain ? OccurFactor : OccurFactor0;
+      float p_count = length( WPos1 - WPos0.xyz ) * occurFact * AcsSi*0.1f;
+
+      // 粒子インデックス
+      int i = floor( Tex.x*texWidth );
+      int j = floor( Tex.y*TEX_HEIGHT );
+      float p_index = float( i*TEX_HEIGHT + j );
+
+      // 新たに粒子を発生させるかどうかの判定
+      if(p_index < WPos0.w) p_index += float(texWidth*TEX_HEIGHT);
+      if(p_index < WPos0.w+p_count){
+         // 粒子発生座標
+         float s = (p_index - WPos0.w) / p_count;
+         float aveSpeed = (ParticleSpeedMin + ParticleSpeedMax) * 0.5f;
+         Pos.xyz = lerp(WPos0.xyz, WPos1, s) + Vel * ParticleInitPos * Color2Float(j, 1).x / aveSpeed;
+         Pos.w = 1.0011f;  // Pos.w>1.001で粒子発生
+      }else{
+         Pos.xyz = WPos1;
+      }
+   }else{
+   // 発生中粒子の座標を更新
+      // 加速度計算(速度抵抗力+重力)
+      float3 Accel = ( VelocityField(Pos.xyz) - Vel ) * ResistFactor + GravFactor;
+
+      // 座標移動量
+      float3 dPos = Dt * (Vel + Dt * Accel);
+
+      // 発生直後の粒子位置を一様化(初速度に伴う偏りを均一化する)
+      if(Pos.w < 1.00111f){
+          int j = floor( Tex.y*TEX_HEIGHT );
+          dPos = lerp(float3(0,0,0), dPos, Color2Float(j, 1).y);
+      }
+
+      // 座標・経過時間の更新
+      Pos += float4(dPos, Dt);
+
+      // 指定時間を超えると0(粒子消失)
+      if( calcMain ){
+          Pos.w *= step(Pos.w-1.0f, ParticleLife);
+      }else{
+          Pos.w *= step(Pos.w-1.0f, ParticleLife0);
+      }
+   }
+
+   // 0フレーム再生で粒子初期化
+   if(time < 0.001f) Pos = float4(BackWorldCoord(WorldMatrix._41_42_43), 0.0f);
+
+   return Pos;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////
+// 粒子の速度計算
+
+float4 UpdateVelocity_PS(float2 Tex: TEXCOORD0, uniform sampler smpCoord,
+                         uniform sampler smpVelocity, uniform sampler smpWorldCoord) : COLOR
+{
+   // 粒子の座標
+   float4 Pos = tex2D(smpCoord, Tex);
+
+   // 粒子の速度
+   float4 Vel = tex2D(smpVelocity, Tex);
+
+   if(Pos.w < 1.00111f){
+      // 発生したての粒子に初速度与える
+      int j = floor( Tex.y*TEX_HEIGHT );
+      float3 vec = Color2Float(j, 0);
+      float3 v = cross( sDirect, vec ); // 放出方向への回転軸
+      v = any(v) ? normalize(v) : float3(0,0,1);
+      float rot = acos( dot( vec, sDirect) ) * diffD; // 放出方向への回転角
+      float sinHD = sin(0.5f * rot);
+      float cosHD = cos(0.5f * rot);
+      float4 q1 = float4(v*sinHD, cosHD);
+      float4 q2 = float4(-v*sinHD, cosHD);
+      vec = MulQuat( MulQuat(q2, float4(vec, 1.0f)), q1).xyz; // 放出方向への回転(クォータニオン)
+      float speed = lerp( ParticleSpeedMin, ParticleSpeedMax, Color2Float(j, 1).y );
+      Vel = float4( normalize( mul( vec, (float3x3)BackWorldMatrix(WorldMatrix) ) ) * speed, 1.0f );
+      float4 WPos0 = tex2D(smpWorldCoord, float2(0.5f, 0.5f));
+      float3 WPos1 = BackWorldCoord(WorldMatrix._41_42_43);
+      Vel.xyz += normalize(WPos1-WPos0.xyz)*ObjVelocityRate; // オブジェクト移動方向を付加する
+   }else{
+      // 発生中粒子の速度計算
+      float3 Accel = ( VelocityField(Pos.xyz) - Vel.xyz ) * ResistFactor + GravFactor; // 加速度計算(速度抵抗力+重力)
+      Vel.xyz += Dt * Accel; // 新しい速度に更新
+   }
+
+   return Vel;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクトのワールド座標記録
+
+VS_OUTPUT WorldCoord_VS(float4 Pos : POSITION)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+    Out.Pos = Pos;
+    Out.Tex = float2(0.5f, 0.5f);
+
+    return Out;
+}
+
+float4 WorldCoord_PS(float2 Tex: TEXCOORD0, uniform bool calcMain, uniform int texWidth, uniform sampler smpWorldCoord) : COLOR
+{
+   // オブジェクトのワールド座標
+   float3 Pos1 = BackWorldCoord(WorldMatrix._41_42_43);
+   float4 Pos0 = tex2D(smpWorldCoord, Tex);
+   Pos0.xyz -= VelocityField(Pos1) * Dt; // 流体速度場位置補正
+
+   // 次発生粒子の起点
+   float occurFact = calcMain ? OccurFactor : OccurFactor0;
+   float p_count = length( Pos1 - Pos0.xyz ) * occurFact * AcsSi*0.1f;
+   float w = Pos0.w + p_count;
+   if(w >= float(texWidth*TEX_HEIGHT)) w -= float(texWidth*TEX_HEIGHT);
+   if(time < 0.001f) w = 0.0f;
+
+   return float4(Pos1, w);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////
+// パーティクル描画
+
+struct VS_OUTPUT2
+{
+    float4 Pos       : POSITION;    // 射影変換座標
+    float2 Tex       : TEXCOORD0;   // テクスチャ
+    float3 Param     : TEXCOORD1;   // x経過時間,yボードピクセルサイズ,z回転
+    float  Distance  : TEXCOORD2;   // 壁距離
+    float3 LightDir1 : TEXCOORD3;   // ライト方向1
+    float3 LightDir2 : TEXCOORD4;   // ライト方向2
+    float3 LightDir3 : TEXCOORD5;   // ライト方向3
+    float4 Color1    : COLOR1;      // 粒子の乗算色1
+    float4 Color2    : COLOR2;      // 粒子の乗算色2
+    float4 Color3    : COLOR3;      // 粒子の乗算色3
+};
+
+// 頂点シェーダ
+VS_OUTPUT2 Particle_VS(float4 Pos : POSITION, float2 Tex : TEXCOORD0, uniform bool calcMain, uniform int texWidth, uniform sampler smpCoord)
+{
+   VS_OUTPUT2 Out = (VS_OUTPUT2)0;
+
+   int i = RepertIndex;
+   int j = round( Pos.z * 100.0f );
+   int Index0 = i * TEX_HEIGHT + j;
+   float2 texCoord = float2((i+0.5f)/texWidth, (j+0.5f)/TEX_HEIGHT);
+   Pos.z = 0.0f;
+
+   // 粒子の座標
+   float4 Pos0 = tex2Dlod(smpCoord, float4(texCoord, 0, 0));
+   Pos0.xyz = InvBackWorldCoord(Pos0.xyz);
+
+   // 経過時間
+   float etime = Pos0.w - 1.0f;
+   Out.Param.x = etime;
+
+   // 乱数設定
+   float3 rand = tex2Dlod(ArrangeSmp, float4(3.5f/TEX_WIDTH_A, (j+0.5f)/TEX_HEIGHT, 0, 0)).xyz;
+
+   // 経過時間に対する粒子拡大度
+   float scale = ParticleScaleUp * sqrt(etime) + 2.0f;
+
+   // 粒子の大きさ
+   scale *= 0.5f + rand.x;
+   Pos.xy *= ParticleSize * scale * 10.0f;
+
+   // ボードに貼るテクスチャのミップマップレベル
+   float pxLen = length(CameraPosition - Pos0.xyz);
+   float4 pxPos = float4(0.0f, abs(Pos.y), pxLen, 1.0f);
+   pxPos = mul( pxPos, ProjMatrix );
+   float pxSize = ViewportSize.y * pxPos.y/pxPos.w;
+   Out.Param.y = max( log2(TEX_PARTICLE_PXSIZE/pxSize), 0.0f );
+
+   // 粒子の回転
+   float rot = 2.0f * PAI * rand.y;
+   Pos.xy = Rotation2D(Pos.xy, rot);
+   Out.Param.z = rot;
+
+   // ビルボード
+   Pos.xyz = mul( Pos.xyz, BillboardMatrix );
+
+   // 粒子のワールド座標
+   Pos.xyz += Pos0.xyz;
+   Pos.xyz *= step(0.001f, etime);
+   Pos.w = 1.0f;
+
+   // カメラ視点のビュー射影変換
+   if (MMM_IsDinamicProjection)
+   {
+       float4x4 vpmat = mul(ViewMatrix, MMM_DynamicFov(ProjMatrix, length(CameraPosition - Pos.xyz)));
+       Out.Pos = mul( Pos, vpmat );
+   }
+   else
+   {
+       Out.Pos = mul( Pos, ViewProjMatrix );
+   }
+
+   // 粒子の遮蔽面距離
+   Out.Distance = dot(Pos.xyz-SmoothPos, SmoothNormal);
+
+   // カメラ視点のライト方向
+   Out.LightDir1 = mul(-LightDirection[0], (float3x3)ViewMatrix);
+   Out.LightDir2 = mul(-LightDirection[1], (float3x3)ViewMatrix);
+   Out.LightDir3 = mul(-LightDirection[2], (float3x3)ViewMatrix);
+
+   // 粒子の乗算色
+   float pLife = calcMain ? ParticleLife : ParticleLife0;
+   float alpha = step(0.001f, etime) * smoothstep(-pLife, -pLife*ParticleDecrement, -etime) * AcsTr;
+   if( calcMain ){
+      Out.Color1 = float4(ResColor[0], alpha);
+      Out.Color2 = float4(ResColor[1], alpha);
+      Out.Color3 = float4(ResColor[2], alpha);
+   }else{
+      Out.Color1 = float4(ResColor0[0], alpha);
+      Out.Color2 = float4(ResColor0[1], alpha);
+      Out.Color3 = float4(ResColor0[2], alpha);
+   }
+
+   // テクスチャ座標
+   int texIndex = Index0 % (TEX_PARTICLE_XNUM * TEX_PARTICLE_YNUM);
+   int tex_i = texIndex % TEX_PARTICLE_XNUM;
+   int tex_j = texIndex / TEX_PARTICLE_XNUM;
+   Out.Tex = float2((Tex.x + tex_i)/TEX_PARTICLE_XNUM, (Tex.y + tex_j)/TEX_PARTICLE_YNUM);
+
+   return Out;
+}
+
+// ピクセルシェーダ
+float4 Particle_PS( VS_OUTPUT2 IN, uniform bool calcMain ) : COLOR0
+{
+   #if TEX_TYPE == 1
+   // 粒子テクスチャ(ノーマルマップ)から法線計算
+   float shadeDiffuse = max( IN.Param.y, lerp(0, ParticleShadeDiffusion, IN.Param.x/ParticleLife) );
+   float4 Color = tex2Dlod( ParticleSamp, float4(IN.Tex, 0, shadeDiffuse) );
+   float3 Normal = float3(2.0f * Color.r - 1.0f, 1.0f - 2.0f * Color.g,  -Color.b);
+   Normal.xy = Rotation2D(Normal.xy, IN.Param.z);
+   Normal = normalize(Normal);
+
+   // 粒子の色
+   Color.rgb = 0.0f;
+   if (LightEnables[0]) Color.rgb  =                               (IN.Color1.rgb * lerp(1.0f-ParticleContrast, 1.0f, max(dot(Normal, IN.LightDir1), 0.0f)));
+   if (LightEnables[1]) Color.rgb += (float3(1,1,1) - Color.rgb) * (IN.Color2.rgb * lerp(1.0f-ParticleContrast, 1.0f, max(dot(Normal, IN.LightDir2), 0.0f)));
+   if (LightEnables[2]) Color.rgb += (float3(1,1,1) - Color.rgb) * (IN.Color3.rgb * lerp(1.0f-ParticleContrast, 1.0f, max(dot(Normal, IN.LightDir3), 0.0f)));
+   Color.rgb = saturate(Color.rgb);
+   Color.a *= tex2Dlod( ParticleSamp, float4(IN.Tex, 0, 0) ).a * IN.Color1.a;
+   #else
+
+   // 粒子の色
+   float4 Color = float4(0,0,0,1);
+   if (LightEnables[0]) Color.rgb  =                               IN.Color1.rgb;
+   if (LightEnables[1]) Color.rgb += (float3(1,1,1) - Color.rgb) * IN.Color2.rgb;
+   if (LightEnables[2]) Color.rgb += (float3(1,1,1) - Color.rgb) * IN.Color3.rgb;
+
+   // 粒子テクスチャの色
+   Color *= tex2D( ParticleSamp, IN.Tex );
+   Color.rgb = saturate(Color.rgb);
+   Color.a *= IN.Color1.a;
+   #endif
+
+   // 遮蔽面処理
+   if( IsSmooth ){
+      float pSize = clamp(ParticleSize, 0.5f, 2.0f);
+      if( calcMain ){
+         Color.a *= smoothstep(0.1f * pSize, 0.2f * pSize * SmoothSi, IN.Distance);
+      }else{
+         #if TEX_ADD_FLG == 1
+         Color.rgb *= smoothstep(0.1f * pSize, 0.2f * pSize * SmoothSi, IN.Distance);
+         #else
+         Color.a *= smoothstep(0.1f * pSize, 0.2f * pSize * SmoothSi, IN.Distance);
+         #endif
+      }
+   }
+
+   #if TEX_ADD_FLG == 1
+   if( !calcMain ) Color.rgb *= Color.a * ParticleLightPower0;
+   #endif
+
+   return Color;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+technique MainTec1 < string MMDPass = "object";
+   string Script = 
+       "RenderColorTarget0=CoordTex;"
+	    "RenderDepthStencilTarget=CoordDepthBuffer;"
+	    "Pass=UpdatePos;"
+       "RenderColorTarget0=VelocityTex;"
+	    "RenderDepthStencilTarget=CoordDepthBuffer;"
+	    "Pass=UpdateVelocity;"
+       "RenderColorTarget0=WorldCoord;"
+           "RenderDepthStencilTarget=WorldCoordDepthBuffer;"
+           "Pass=UpdateWorldCoord;"
+       "RenderColorTarget0=;"
+	    "RenderDepthStencilTarget=;"
+            "LoopByCount=RepertCount;"
+            "LoopGetIndex=RepertIndex;"
+                "Pass=DrawObject;"
+            "LoopEnd=;"
+       #if (UNIT_COUNT0 > 0)
+       "RenderColorTarget0=CoordTex0;"
+	    "RenderDepthStencilTarget=CoordDepthBuffer0;"
+	    "Pass=UpdatePos0;"
+       "RenderColorTarget0=VelocityTex0;"
+	    "RenderDepthStencilTarget=CoordDepthBuffer0;"
+	    "Pass=UpdateVelocity0;"
+       "RenderColorTarget0=WorldCoord0;"
+           "RenderDepthStencilTarget=WorldCoordDepthBuffer;"
+           "Pass=UpdateWorldCoord0;"
+       "RenderColorTarget0=;"
+	    "RenderDepthStencilTarget=;"
+            "LoopByCount=RepertCount0;"
+            "LoopGetIndex=RepertIndex;"
+                "Pass=DrawObject0;"
+            "LoopEnd=;"
+       #endif
+       "RenderColorTarget0=TimeTex;"
+            "RenderDepthStencilTarget=TimeDepthBuffer;"
+            "Pass=UpdateTime;"
+       "RenderColorTarget0=;"
+	    "RenderDepthStencilTarget=;"
+       ;
+>{
+   pass UpdatePos < string Script= "Draw=Buffer;"; > {
+       ALPHABLENDENABLE = FALSE;
+       ALPHATESTENABLE = FALSE;
+       VertexShader = compile vs_3_0 Common_VS();
+       PixelShader  = compile ps_3_0 UpdatePos_PS( true, TEX_WIDTH, CoordSmp, VelocitySmp, WorldCoordSmp );
+   }
+   pass UpdateVelocity < string Script= "Draw=Buffer;"; > {
+       ALPHABLENDENABLE = FALSE;
+       ALPHATESTENABLE = FALSE;
+       VertexShader = compile vs_3_0 Common_VS();
+       PixelShader  = compile ps_3_0 UpdateVelocity_PS( CoordSmp, VelocitySmp, WorldCoordSmp );
+   }
+   pass UpdateWorldCoord < string Script= "Draw=Buffer;"; > {
+       ALPHABLENDENABLE = FALSE;
+       ALPHATESTENABLE = FALSE;
+       VertexShader = compile vs_2_0 WorldCoord_VS();
+       PixelShader  = compile ps_2_0 WorldCoord_PS( true, TEX_WIDTH, WorldCoordSmp );
+   }
+   pass DrawObject {
+       ZENABLE = TRUE;
+       ZWRITEENABLE = FALSE;
+       AlphaBlendEnable = TRUE;
+       VertexShader = compile vs_3_0 Particle_VS( true, TEX_WIDTH, CoordSmp );
+       PixelShader  = compile ps_3_0 Particle_PS( true );
+   }
+   #if (UNIT_COUNT0 > 0)
+   pass UpdatePos0 < string Script= "Draw=Buffer;"; > {
+       ALPHABLENDENABLE = FALSE;
+       ALPHATESTENABLE = FALSE;
+       VertexShader = compile vs_3_0 Common_VS();
+       PixelShader  = compile ps_3_0 UpdatePos_PS( false, TEX_WIDTH0, CoordSmp0, VelocitySmp0, WorldCoordSmp0 );
+   }
+   pass UpdateVelocity0 < string Script= "Draw=Buffer;"; > {
+       ALPHABLENDENABLE = FALSE;
+       ALPHATESTENABLE = FALSE;
+       VertexShader = compile vs_3_0 Common_VS();
+       PixelShader  = compile ps_3_0 UpdateVelocity_PS( CoordSmp0, VelocitySmp0, WorldCoordSmp0 );
+   }
+   pass UpdateWorldCoord0 < string Script= "Draw=Buffer;"; > {
+       ALPHABLENDENABLE = FALSE;
+       ALPHATESTENABLE = FALSE;
+       VertexShader = compile vs_2_0 WorldCoord_VS();
+       PixelShader  = compile ps_2_0 WorldCoord_PS( false, TEX_WIDTH0, WorldCoordSmp0 );
+   }
+   pass DrawObject0 {
+       ZENABLE = TRUE;
+       ZWRITEENABLE = FALSE;
+       AlphaBlendEnable = TRUE;
+       #if TEX_ADD_FLG == 1
+         DestBlend = ONE;
+         SrcBlend = ONE;
+       #else
+         DestBlend = INVSRCALPHA;
+         SrcBlend = SRCALPHA;
+       #endif
+       VertexShader = compile vs_3_0 Particle_VS( false, TEX_WIDTH0, CoordSmp0 );
+       PixelShader  = compile ps_3_0 Particle_PS( false );
+   }
+   #endif
+   pass UpdateTime < string Script= "Draw=Buffer;"; > {
+       ZEnable = FALSE;
+       AlphaBlendEnable = FALSE;
+       AlphaTestEnable = FALSE;
+       VertexShader = compile vs_1_1 UpdateTime_VS();
+       PixelShader  = compile ps_2_0 UpdateTime_PS();
+   }
+}
+
+

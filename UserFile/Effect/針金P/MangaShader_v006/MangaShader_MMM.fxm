@@ -1,0 +1,867 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  MangaShader_MMM.fxm ver0.0.6  モデルの漫画風描画を行います
+//  (MikuMikuMoving対応版)
+//  作成: 針金P( Mogg氏のSampleBase.fxm改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ここのパラメータを変更してください
+
+#define TexFile1  "ScreenToon1.png"  // 濃いスクリーントーンテクスチャファイル名1
+#define TexFile2  "ScreenToon2.png"  // 薄いスクリーントーンテクスチャファイル名2
+
+
+float ToonLevel1 <   // 黒とトーンの境値(0～1)
+   string UIName = "黒-ﾄｰﾝ境";
+   string UIWidget = "Slider";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float( 0.4 );
+
+float ToonLevel2 <   // トーンと白の境値(0～1)
+   string UIName = "ﾄｰﾝ-白境";
+   string UIWidget = "Slider";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float( 0.8 );
+
+float ToonScaling1 <     // 濃いトーンのスケーリング
+   string UIName = "濃ﾄｰﾝのｽｹｰﾙ";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 0.5;
+> = float( 0.014 );
+
+float ToonScaling2 <     // 薄いトーンのスケーリング
+   string UIName = "薄ﾄｰﾝのｽｹｰﾙ";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 0.5;
+> = float( 0.012 );
+
+float ToonScalingShadow < // 地面影トーンのスケーリング
+   string UIName = "地面影ﾄｰﾝのｽｹｰﾙ";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 0.5;
+> = float( 0.012 );
+
+float EdgeThick < // 独自描画のエッジ太さ
+   string UIName = "独自エッジ太さ";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 5.0;
+> = float( 1.0 );
+
+float3 ToonColor1 <      // 濃いスクリーントーンの色(RBG)
+   string UIName = "濃いトーン色";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float3(0.0, 0.0, 0.0);
+
+float3 ToonColor2 <      // 薄いスクリーントーンの色(RGB)
+   string UIName = "薄いトーン色";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float3(0.0, 0.0, 0.0);
+
+float3 FillColor <      // べた塗りの色(RGB)
+   string UIName = "べた塗り色";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float3(0.0, 0.0, 0.0);
+
+float3 ShadowColor <      // 地面影トーンの色(RGB)
+   string UIName = "地面影トーン色";
+   string UIWidget = "Color";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 1.0;
+> = float3(0.0, 0.0, 0.0);
+
+bool UseDither <        // 薄いトーンに対するディザ処理on/off
+   string UIName = "ディザ処理";
+   bool UIVisible =  true;
+> = true;
+
+
+// 解らない人はここから下はいじらないでね
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座標変換行列
+float4x4 WorldViewProjMatrix  : WORLDVIEWPROJECTION;
+float4x4 ViewProjMatrix       : VIEWPROJECTION;
+float4x4 WorldMatrix          : WORLD;
+float4x4 ViewMatrix           : VIEW;
+float4x4 ProjMatrix           : PROJECTION;
+
+//ライト関連
+bool     LightEnables[MMM_LightCount]      : LIGHTENABLES;      // 有効フラグ
+float3   LightDirection[MMM_LightCount]    : LIGHTDIRECTIONS;   // 方向
+
+//材質モーフ関連
+float4 AddingTexture    : ADDINGTEXTURE;       // 材質モーフ加算Texture値
+float4 AddingSphere     : ADDINGSPHERE;        // 材質モーフ加算SphereTexture値
+float4 MultiplyTexture  : MULTIPLYINGTEXTURE;  // 材質モーフ乗算Texture値
+float4 MultiplySphere   : MULTIPLYINGSPHERE;   // 材質モーフ乗算SphereTexture値
+
+//カメラ位置
+float3 CameraPosition  : POSITION  < string Object = "Camera"; >;
+
+// マテリアル色
+float4 MaterialDiffuse    : DIFFUSE  < string Object = "Geometry"; >;
+float3 MaterialAmbient    : AMBIENT  < string Object = "Geometry"; >;
+float3 MaterialEmmisive   : EMISSIVE < string Object = "Geometry"; >;
+float3 MaterialSpecular   : SPECULAR < string Object = "Geometry"; >;
+float  SpecularPower      : SPECULARPOWER < string Object = "Geometry"; >;
+float4 MaterialToon       : TOONCOLOR;
+float4 EdgeColor          : EDGECOLOR;
+float  EdgeWidth          : EDGEWIDTH;
+static float4 DiffuseColor = MaterialDiffuse;
+static float3 AmbientColor = saturate(MaterialAmbient + MaterialEmmisive);
+
+bool spadd;                // スフィアマップ加算合成フラグ
+
+// スクリーンサイズ
+float2 ViewportSize : VIEWPORTPIXELSIZE;
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+    texture = <ObjectSphereMap>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+};
+
+
+// 濃いスクリーントーンテクスチャ(ミップマップも生成)
+texture2D screen_tex1 <
+    string ResourceName = TexFile1;
+    int MipLevels = 0;
+>;
+sampler TexSampler1 = sampler_state {
+    texture = <screen_tex1>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = WRAP;
+    AddressV = WRAP;
+};
+
+// 薄いスクリーントーンテクスチャ(ミップマップも生成)
+texture2D screen_tex2 <
+    string ResourceName = TexFile2;
+    int MipLevels = 0;
+>;
+sampler TexSampler2 = sampler_state {
+    texture = <screen_tex2>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = WRAP;
+    AddressV = WRAP;
+};
+
+
+// ディザパターンテクスチャ1
+texture2D dither_tex1 <
+    string ResourceName = "DitherPattern1.png";
+    int MipLevels = 0;
+>;
+sampler DitherSmp1 = sampler_state {
+    texture = <dither_tex1>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = WRAP;
+    AddressV = WRAP;
+};
+
+// ディザパターンテクスチャ2
+texture2D dither_tex2 <
+    string ResourceName = "DitherPattern2.png";
+    int MipLevels = 0;
+>;
+sampler DitherSmp2 = sampler_state {
+    texture = <dither_tex2>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = WRAP;
+    AddressV = WRAP;
+};
+
+// ディザパターンテクスチャ3
+texture2D dither_tex3 <
+    string ResourceName = "DitherPattern3.png";
+    int MipLevels = 0;
+>;
+sampler DitherSmp3 = sampler_state {
+    texture = <dither_tex3>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = WRAP;
+    AddressV = WRAP;
+};
+
+// ディザパターンテクスチャ4
+texture2D dither_tex4 <
+    string ResourceName = "DitherPattern4.png";
+    int MipLevels = 0;
+>;
+sampler DitherSmp4 = sampler_state {
+    texture = <dither_tex4>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = WRAP;
+    AddressV = WRAP;
+};
+
+// ディザパターンテクスチャ5
+texture2D dither_tex5 <
+    string ResourceName = "DitherPattern5.png";
+    int MipLevels = 0;
+>;
+sampler DitherSmp5 = sampler_state {
+    texture = <dither_tex5>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = WRAP;
+    AddressV = WRAP;
+};
+
+// ディザパターンテクスチャ6
+texture2D dither_tex6 <
+    string ResourceName = "DitherPattern6.png";
+    int MipLevels = 0;
+>;
+sampler DitherSmp6 = sampler_state {
+    texture = <dither_tex6>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = WRAP;
+    AddressV = WRAP;
+};
+
+// ディザパターンテクスチャ7
+texture2D dither_tex7 <
+    string ResourceName = "DitherPattern7.png";
+    int MipLevels = 0;
+>;
+sampler DitherSmp7 = sampler_state {
+    texture = <dither_tex7>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = WRAP;
+    AddressV = WRAP;
+};
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// スクリーントーンの貼り付け
+
+// 濃いスクリーントーン
+float3 SetToonColor1(float4 VPos)
+{
+    // スクリーンの座標
+    VPos.x = ( VPos.x/VPos.w + 1.0f ) * 0.5f;
+    VPos.y = 1.0f - (VPos.y/VPos.w + 1.0f ) * 0.5f;
+
+    // 貼り付けるテクスチャの色
+    float2 texCoord = float2( VPos.x*ViewportSize.x/ViewportSize.y/ToonScaling1, VPos.y/ToonScaling1 );
+    float3 Color = tex2D( TexSampler1, texCoord ).rgb;
+    Color += ToonColor1;
+    Color = saturate(Color);
+
+    return Color;
+}
+
+// 薄いスクリーントーン
+float3 SetToonColor2(float4 VPos, float lightNormal)
+{
+    // スクリーンの座標
+    VPos.x = ( VPos.x/VPos.w + 1.0f ) * 0.5f;
+    VPos.y = 1.0f - (VPos.y/VPos.w + 1.0f ) * 0.5f;
+
+    // 貼り付けるテクスチャの色
+    float2 texCoord = float2( VPos.x*ViewportSize.x/ViewportSize.y/ToonScaling2, VPos.y/ToonScaling2 );
+    float4 Color = tex2D( TexSampler2, texCoord );
+
+    if( UseDither ) {
+        // ディザ処理の追加
+        texCoord = float2( VPos.x*ViewportSize.x/ViewportSize.y/ToonScaling2*0.5f, VPos.y/ToonScaling2*0.5f );
+        if(lightNormal > 0.6f){
+           Color += tex2D( DitherSmp1, texCoord );
+        }else if(lightNormal > 0.55f){
+           Color += tex2D( DitherSmp2, texCoord );
+        }else if(lightNormal > 0.5f){
+           Color += tex2D( DitherSmp3, texCoord );
+        }else if(lightNormal > 0.45f){
+           Color += tex2D( DitherSmp4, texCoord );
+        }else if(lightNormal > 0.4f){
+           Color += tex2D( DitherSmp5, texCoord );
+        }else if(lightNormal > 0.35f){
+           Color += tex2D( DitherSmp6, texCoord );
+        }else if(lightNormal > 0.3f){
+           Color += tex2D( DitherSmp7, texCoord );
+        }
+    }
+
+    Color.rgb += ToonColor2;
+    Color = saturate(Color);
+
+    return Color.rgb;
+}
+
+// 地面影トーン
+float4 SetToonColor3(float4 VPos)
+{
+    // スクリーンの座標
+    VPos.x = ( VPos.x/VPos.w + 1.0f ) * 0.5f;
+    VPos.y = 1.0f - (VPos.y/VPos.w + 1.0f ) * 0.5f;
+
+    // 貼り付けるテクスチャの色
+    float2 texCoord = float2( VPos.x*ViewportSize.x/ViewportSize.y/ToonScalingShadow, VPos.y/ToonScalingShadow );
+    float4 c = tex2D( TexSampler2, texCoord );
+    float alpha = 1.0f - (c.r + c.g + c.b) * 0.33333f;
+
+    return float4(ShadowColor, alpha);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct VS_OUTPUT {
+    float4 Pos    : POSITION;    // 射影変換座標
+    float2 Tex    : TEXCOORD1;   // テクスチャ
+    float3 Normal : TEXCOORD2;   // 法線
+    float2 SpTex  : TEXCOORD3;   // スフィアマップテクスチャ座標
+    float4 VPos   : TEXCOORD4;   // スクリーン座標取得用射影変換座標
+    float4 Color  : COLOR0;      // ディフューズ色
+};
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 輪郭描画(独自描画,エッジOFF材質・アクセサリにもエッジを付ける)
+
+// 頂点シェーダ
+VS_OUTPUT Edge_VS(MMM_SKINNING_INPUT IN)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    MMM_SKINNING_OUTPUT SkinOut = MMM_SkinnedPositionNormal(IN.Pos, IN.Normal, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // ワールド座標
+    float4 Pos = mul(SkinOut.Position, WorldMatrix);
+
+    // ワールド座標変換による頂点法線
+    Out.Normal = normalize( mul( SkinOut.Normal, (float3x3)WorldMatrix ) );
+
+    // カメラとの距離
+    float len = max( length( CameraPosition - Pos.xyz ), 5.0f );
+
+    // 頂点座標
+    if (MMM_IsDinamicProjection)
+    {
+        float dist = length(CameraPosition - Pos.xyz);
+        float4x4 vpmat = mul(ViewMatrix, MMM_DynamicFov(ProjMatrix, dist));
+        // 頂点を法線方向に押し出す
+        Pos.xyz += Out.Normal * ( pow( len, 0.9f ) * EdgeThick * 0.003f * pow(2.4142f / ProjMatrix._22, 0.7f) ) * MMM_GetDynamicFovEdgeRate(dist);
+        // カメラ視点のビュー射影変換
+        Out.Pos = mul( Pos, vpmat );
+    }
+    else
+    {
+        // 頂点を法線方向に押し出す
+        Pos.xyz += Out.Normal * ( pow( len, 0.9f ) * EdgeThick * 0.003f * pow(2.4142f / ProjMatrix._22, 0.7f) );
+        // カメラ視点のビュー射影変換
+        Out.Pos = mul( Pos, ViewProjMatrix );
+    }
+
+    // 半透明材質にエッジを付けないためにalpha値も求めておく
+    Out.Color = DiffuseColor;
+
+    // テクスチャ座標
+    Out.Tex = IN.Tex;
+
+    return Out;
+}
+
+// ピクセルシェーダ
+float4 Edge_PS(VS_OUTPUT IN, uniform bool useTexture) : COLOR0
+{
+    float4 Color = IN.Color;
+    if ( useTexture ) {
+        // テクスチャ適用
+        Color *= tex2D( ObjTexSampler, IN.Tex );
+    }
+    // 半透明にはエッジを付けない
+    float alpha = Color.a;
+    alpha *= step( 0.98f, alpha );
+    clip(alpha - 0.005f);
+
+    // 輪郭色で塗りつぶし
+    return float4(EdgeColor.rgb, alpha);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+//==============================================
+// 頂点シェーダ
+// MikuMikuMoving独自の頂点シェーダ入力(MMM_SKINNING_INPUT)
+//==============================================
+VS_OUTPUT Basic_VS(MMM_SKINNING_INPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPositionNormal)。座標と法線を取得する。
+    //================================================================================
+    MMM_SKINNING_OUTPUT SkinOut = MMM_SkinnedPositionNormal(IN.Pos, IN.Normal, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // 頂点法線
+    Out.Normal = normalize( mul( SkinOut.Normal, (float3x3)WorldMatrix ) );
+
+    // 頂点座標
+    if (MMM_IsDinamicProjection)
+    {
+        float dist = length(CameraPosition - mul( SkinOut.Position, WorldMatrix ).xyz);
+        float4x4 wvpmat = mul(mul(WorldMatrix, ViewMatrix), MMM_DynamicFov(ProjMatrix, dist));
+        Out.Pos = mul( SkinOut.Position, wvpmat );
+    }
+    else
+    {
+        Out.Pos = mul( SkinOut.Position, WorldViewProjMatrix );
+    }
+
+    // ディフューズ色＋アンビエント色 計算
+    float3 color = float3(0, 0, 0);
+    float3 ambient = float3(0, 0, 0);
+    for (int i = 0; i < 3; i++) {
+        if (LightEnables[i]) {
+            color += (float3(1,1,1) - color) * (max(0, DiffuseColor.rgb * dot(Out.Normal, -LightDirection[i])));
+        }
+    }
+    Out.Color.rgb = saturate(AmbientColor + color);
+    Out.Color.a = MaterialDiffuse.a;
+
+
+    // テクスチャ座標
+    Out.Tex = IN.Tex;
+    Out.SpTex = IN.AddUV1.xy;
+
+    if ( useSphereMap ) {
+        // スフィアマップテクスチャ座標
+        float2 NormalWV = mul( Out.Normal, (float3x3)ViewMatrix ).xy;
+        Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+        Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+    }
+
+    // スクリーン座標取得用
+    Out.VPos = Out.Pos;
+
+    return Out;
+}
+
+//==============================================
+// ピクセルシェーダ
+// 入力は特に独自形式なし
+//==============================================
+float4 Basic_PS(VS_OUTPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon) : COLOR0
+{
+    float4 Color = IN.Color;
+    float4 texColor = float4(1,1,1,1);
+    float  texAlpha = MultiplyTexture.a + AddingTexture.a;
+
+    // テクスチャ適用
+    if (useTexture) {
+        texColor = tex2D(ObjTexSampler, IN.Tex);
+        texColor.rgb = (texColor.rgb * MultiplyTexture.rgb + AddingTexture.rgb) * texAlpha + (1.0 - texAlpha);
+    }
+    Color.rgb *= texColor.rgb;
+
+    // スフィアマップ適用
+    if ( useSphereMap ) {
+        // スフィアマップ適用
+        if(spadd) Color.rgb = Color.rgb + (tex2D(ObjSphareSampler,IN.SpTex).rgb * MultiplySphere.rgb + AddingSphere.rgb);
+        else      Color.rgb = Color.rgb * (tex2D(ObjSphareSampler,IN.SpTex).rgb * MultiplySphere.rgb + AddingSphere.rgb);
+    }
+    // アルファ適用
+    Color.a = IN.Color.a * texColor.a;
+
+    // モノクロに変換
+    float v = (Color.r + Color.g + Color.b) * 0.3333f;
+    Color.rgb = float3(v, v, v);
+
+    // 明度でベタ,白,スクリーントーンに分ける
+    if(v < ToonLevel1){
+       Color.rgb = FillColor;
+    }else if(v < ToonLevel2){
+       // スクリーントーン色
+       if( useToon ) {
+           Color.rgb = float3(1.0f, 1.0f, 1.0f);
+           float LightNormal = 0.0f;
+           for (int i = 0; i < 3; i++) {
+               if (LightEnables[i]) {
+                   LightNormal += (1.0f - LightNormal) * dot(IN.Normal, -LightDirection[i]);
+               }
+           }
+           if(saturate(LightNormal * 16.0f + 0.5f) < 0.5f){
+               Color.rgb = saturate( float3(0.8f, 0.8f, 0.8f) + ToonColor1 );
+           }
+       }
+       Color.rgb *= SetToonColor1(IN.VPos);
+    }else{
+       // 白はトーンシェードで白,薄スクリーントーンに分ける
+       Color.rgb = float3(1.0f, 1.0f, 1.0f);
+       if( useToon ) {
+           float LightNormal = 0.0f;
+           for (int i = 0; i < 3; i++) {
+               if (LightEnables[i]) {
+                   LightNormal += (1.0f - LightNormal) * dot(IN.Normal, -LightDirection[i]);
+               }
+           }
+           if( UseDither ) {
+               // ディザ処理あり
+               if(saturate(LightNormal + 0.45f) < 0.7f){
+                   Color.rgb = SetToonColor2(IN.VPos, LightNormal+0.45);
+               }
+           } else {
+               // ディザ処理なし
+               if(saturate(LightNormal * 16.0f + 0.5f) < 0.5f){
+                   Color.rgb = SetToonColor2(IN.VPos, 1.0f);
+               }
+           }
+       }
+    }
+
+    return Color;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画用テクニック（アクセサリ用）
+technique MainTec01 < string MMDPass = "object"; bool UseTexture = false; bool useSphereMap = false; bool UseToon = false; bool UseSelfShadow = false; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_2_0 Basic_VS(false, false, false);
+        PixelShader  = compile ps_2_0 Basic_PS(false, false, false);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(false);
+    }
+}
+
+technique MainTec02 < string MMDPass = "object"; bool UseTexture = false; bool useSphereMap = true; bool UseToon = false; bool UseSelfShadow = false; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_2_0 Basic_VS(false, true, false);
+        PixelShader  = compile ps_2_0 Basic_PS(false, true, false);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(false);
+    }
+}
+
+technique MainTec03 < string MMDPass = "object"; bool UseTexture = true; bool useSphereMap = false; bool UseToon = false; bool UseSelfShadow = false; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_2_0 Basic_VS(true, false, false);
+        PixelShader  = compile ps_2_0 Basic_PS(true, false, false);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(true);
+    }
+}
+
+technique MainTec04 < string MMDPass = "object"; bool UseTexture = true; bool useSphereMap = true; bool UseToon = false; bool UseSelfShadow = false; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_2_0 Basic_VS(true, true, false);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, false);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(true);
+    }
+}
+
+technique MainTec05 < string MMDPass = "object"; bool UseTexture = false; bool useSphereMap = false; bool UseToon = false; bool UseSelfShadow = true; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_2_0 Basic_VS(false, false, false);
+        PixelShader  = compile ps_2_0 Basic_PS(false, false, false);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(false);
+    }
+}
+
+technique MainTec06 < string MMDPass = "object"; bool UseTexture = false; bool useSphereMap = true; bool UseToon = false; bool UseSelfShadow = true; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_2_0 Basic_VS(false, true, false);
+        PixelShader  = compile ps_2_0 Basic_PS(false, true, false);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(false);
+    }
+}
+
+technique MainTec07 < string MMDPass = "object"; bool UseTexture = true; bool useSphereMap = false; bool UseToon = false; bool UseSelfShadow = true; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_2_0 Basic_VS(true, false, false);
+        PixelShader  = compile ps_2_0 Basic_PS(true, false, false);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(true);
+    }
+}
+
+technique MainTec08 < string MMDPass = "object"; bool UseTexture = true; bool useSphereMap = true; bool UseToon = false; bool UseSelfShadow = true; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_2_0 Basic_VS(true, true, false);
+        PixelShader  = compile ps_2_0 Basic_PS(true, true, false);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(true);
+    }
+}
+
+// オブジェクト描画用テクニック（PMDモデル用）
+technique MainTec09 < string MMDPass = "object"; bool UseTexture = false; bool useSphereMap = false; bool UseToon = true; bool UseSelfShadow = false; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, true);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(false);
+    }
+}
+
+technique MainTec10 < string MMDPass = "object"; bool UseTexture = false; bool useSphereMap = true; bool UseToon = true; bool UseSelfShadow = false; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, true);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(false);
+    }
+}
+
+technique MainTec11 < string MMDPass = "object"; bool UseTexture = true; bool useSphereMap = false; bool UseToon = true; bool UseSelfShadow = false; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, true);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(true);
+    }
+}
+
+technique MainTec12 < string MMDPass = "object"; bool UseTexture = true; bool useSphereMap = true; bool UseToon = true; bool UseSelfShadow = false; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, true);
+    }
+    pass DrawEdge {
+        CullMode = CW;
+        VertexShader = compile vs_2_0 Edge_VS();
+        PixelShader  = compile ps_2_0 Edge_PS(true);
+    }
+}
+
+technique MainTec13 < string MMDPass = "object"; bool UseTexture = false; bool useSphereMap = false; bool UseToon = true; bool UseSelfShadow = true; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, false, true);
+    }
+}
+
+technique MainTec14 < string MMDPass = "object"; bool UseTexture = false; bool useSphereMap = true; bool UseToon = true; bool UseSelfShadow = true; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(false, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(false, true, true);
+    }
+}
+
+technique MainTec15 < string MMDPass = "object"; bool UseTexture = true; bool useSphereMap = false; bool UseToon = true; bool UseSelfShadow = true; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, false, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, false, true);
+    }
+}
+
+technique MainTec16 < string MMDPass = "object"; bool UseTexture = true; bool useSphereMap = true; bool UseToon = true; bool UseSelfShadow = true; >
+{
+    pass DrawObject {
+        VertexShader = compile vs_3_0 Basic_VS(true, true, true);
+        PixelShader  = compile ps_3_0 Basic_PS(true, true, true);
+    }
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 輪郭描画
+
+//==============================================
+// 頂点シェーダ
+//==============================================
+float4 CommonEdge_VS(MMM_SKINNING_INPUT IN) : POSITION 
+{
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    MMM_SKINNING_OUTPUT SkinOut = MMM_SkinnedPositionNormal(IN.Pos, IN.Normal, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // ワールド座標
+    float4 Pos = mul(SkinOut.Position, WorldMatrix);
+
+    // 法線方向
+    float3 Normal = mul(SkinOut.Normal, (float3x3)WorldMatrix);
+
+    // 頂点座標
+    if (MMM_IsDinamicProjection)
+    {
+        float dist = length(CameraPosition - Pos.xyz);
+        float4x4 vpmat = mul(ViewMatrix, MMM_DynamicFov(ProjMatrix, dist));
+
+        Pos += float4(Normal, 0) * IN.EdgeWeight * EdgeWidth * distance(Pos.xyz, CameraPosition) * MMM_GetDynamicFovEdgeRate(dist);
+        return mul( Pos, vpmat );
+    }
+    else
+    {
+        Pos += float4(Normal, 0) * IN.EdgeWeight * EdgeWidth * distance(Pos.xyz, CameraPosition);
+        return mul( Pos, ViewProjMatrix );
+    }
+}
+
+//==============================================
+// ピクセルシェーダ
+//==============================================
+float4 CommonEdge_PS() : COLOR
+{
+    // 輪郭色で塗りつぶし
+    return EdgeColor;
+}
+
+//==============================================
+// 輪郭描画テクニック
+//==============================================
+technique EdgeTec < string MMDPass = "edge"; > {
+    pass DrawEdge {
+        VertexShader = compile vs_2_0 CommonEdge_VS();
+        PixelShader  = compile ps_2_0 CommonEdge_PS();
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 影（非セルフシャドウ）描画
+
+struct VS_OUTPUT2 {
+    float4 Pos   : POSITION;    // 射影変換座標
+    float4 VPos  : TEXCOORD4;   // スクリーン座標取得用射影変換座標
+};
+
+//==============================================
+// 頂点シェーダ
+//==============================================
+VS_OUTPUT2 Shadow_VS(MMM_SKINNING_INPUT IN)
+{
+    VS_OUTPUT2 Out = (VS_OUTPUT2)0;
+
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    float4 Pos = MMM_SkinnedPosition(IN.Pos, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // カメラ視点のワールドビュー射影変換
+    Out.Pos = mul( Pos, WorldViewProjMatrix );
+
+    // スクリーン座標取得用
+    Out.VPos = Out.Pos;
+
+    return Out;
+}
+
+//==============================================
+// ピクセルシェーダ
+//==============================================
+float4 Shadow_PS(VS_OUTPUT2 IN) : COLOR
+{
+    float4 Color = SetToonColor3(IN.VPos);
+    return Color;
+}
+
+//==============================================
+// 地面影描画テクニック
+//==============================================
+technique ShadowTec < string MMDPass = "shadow"; > {
+    pass DrawShadow {
+        VertexShader = compile vs_2_0 Shadow_VS();
+        PixelShader  = compile ps_2_0 Shadow_PS();
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+

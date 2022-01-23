@@ -1,0 +1,855 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Butterfly_MMM.fxm ver0.0.3  蝶の群れパーティクルエフェクト
+//  (MikuMikuMoving対応版)
+//  作成: 針金P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ここのパラメータを変更してください
+
+// 蝶パラメータスイッチ
+#define TEX_TYPE    1    // 蝶の種類(とりあえず1～4でテクスチャ選択)
+#define MMM_LIGHT   1    // MMMの照明操作に 0:連動しない, 1:連動する
+
+#define UnitHitAvoid  0    // ユニット同士の衝突回避判定をする場合は1にする(重くなる可能性有り)
+float WideViewRadius = 30.0;     // 視認エリア半径(大きくすると他のユニットが見つかりやすくなる)
+float WideViewAngle = 45.0;      // 視認エリア角度(0～180)(大きくすると他のユニットが見つかりやすくなる)
+float SeparationFactor = 30.0;   // 分離度(大きくすると隣接ユニットとの衝突回避度が大きくなる)
+float SeparationLength = 10.0;   // 分離判定距離(大きくすると隣接ユニットとの衝突回避行動をとりやすくなる)
+
+#define WriteZBuffer  0    // ユニット描画時にZバッファを書き換える場合は1にする
+
+int Count <             // 蝶の数(最大512まで)
+   string UIName = "蝶の数";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   int UIMin = 1;
+   int UIMax = 512;
+> = 200;
+
+// 蝶パラメータ設定
+float ButterflySize <        // 蝶のサイズ
+   string UIName = "蝶のサイズ";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 20.0;
+> = 0.7;
+
+float RandamMove <        // ランダムな動き度合い
+   string UIName = "ランダム動き度";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 50.0;
+> = 8.0;
+
+float FlapAmp <        // 羽ばたき振幅
+   string UIName = "羽ばたき振幅";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 30.0;
+> = 1.8;
+
+float FlapFreq <        // 羽ばたき周波数
+   string UIName = "羽ばたき周波数";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 50.0;
+> = 2.0;
+
+// 蝶移動パラメータ設定
+float DrivingForceFactor <        // 推進力(大きくすると移動スピードが速くなる)
+   string UIName = "推進力";
+   string UIHelp = "大きくすると移動スピードが速くなる";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 100.0;
+> = 10.0;
+
+float ResistanceFactor <        // 抵抗力(大きくすると移動スピードが減衰しやすくなる)
+   string UIName = "抵抗力";
+   string UIHelp = "大きくすると移動スピードが減衰しやすくなる";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 50.0;
+> = 2.0;
+
+float VerticalAngleLimit <       // 鉛直移動制限角(0～90)(大きくすると上下方向の移動が活発になる)
+   string UIName = "鉛直移動制限角";
+   string UIHelp = "大きくすると上下方向の移動が活発になる";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 90.0;
+> = 30.0;
+
+float PotentialOutside <       // 移動制限外縁距離(大きくすると移動範囲が広くなる)
+   string UIName = "制限外縁距離";
+   string UIHelp = "大きくすると移動範囲が広くなる";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = 0.0;
+   float UIMax = 500.0;
+> = 35.0;
+
+float PotentialFloor <       // 移動制限床面高さ(大きくすると床に近づいた時に高い位置で回避行動をとる)
+   string UIName = "移動制限床面高";
+   string UIHelp = "大きくすると床に近づいた時に高い位置で回避行動をとる";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = -500.0;
+   float UIMax = 500.0;
+> = 2.0;
+
+float PotentialCiel <       // 移動制限天井高さ(大きくするとより高い位置まで移動するようになる)
+   string UIName = "移動制限天井高";
+   string UIHelp = "大きくするとより高い位置まで移動するようになる";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = -500.0;
+   float UIMax = 500.0;
+> = 30.0;
+
+
+// 必要に応じて蝶テクスチャをここで定義
+#if TEX_TYPE == 1
+   #define TEX_FileName  "蝶1.png"  // オブジェクトに貼り付けるテクスチャファイル名
+   #define TEX_PARTICLE_XNUM  2     // テクスチャx方向蝶の数
+   #define TEX_PARTICLE_YNUM  1     // テクスチャy方向蝶の数
+   #define TEX_ADD_FLG     0        // 0:半透明合成, 1:加算合成
+#endif
+
+#if TEX_TYPE == 2
+   #define TEX_FileName  "蝶2.png"  // オブジェクトに貼り付けるテクスチャファイル名
+   #define TEX_PARTICLE_XNUM  5     // テクスチャx方向蝶の数
+   #define TEX_PARTICLE_YNUM  1     // テクスチャy方向蝶の数
+   #define TEX_ADD_FLG     0        // 0:半透明合成, 1:加算合成
+#endif
+
+#if TEX_TYPE == 3
+   #define TEX_FileName  "蝶3.png"  // オブジェクトに貼り付けるテクスチャファイル名
+   #define TEX_PARTICLE_XNUM  4     // テクスチャx方向蝶の数
+   #define TEX_PARTICLE_YNUM  1     // テクスチャy方向蝶の数
+   #define TEX_ADD_FLG     0        // 0:半透明合成, 1:加算合成
+#endif
+
+#if TEX_TYPE == 4
+   #define TEX_FileName  "蝶3(加算合成用).png"  // オブジェクトに貼り付けるテクスチャファイル名
+   #define TEX_PARTICLE_XNUM  4     // テクスチャx方向蝶の数
+   #define TEX_PARTICLE_YNUM  1     // テクスチャy方向蝶の数
+   #define TEX_ADD_FLG     1        // 0:半透明合成, 1:加算合成
+#endif
+
+
+// 解らない人はここから下はいじらないでね
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+float AcsY  : CONTROLOBJECT < string name = "(self)"; string item = "Y"; >;
+float AcsTr : CONTROLOBJECT < string name = "(self)"; string item = "Tr"; >;
+float AcsSi : CONTROLOBJECT < string name = "(self)"; string item = "Si"; >;
+static float OutsideLength = PotentialOutside * AcsSi * 0.1f;
+static float CielHeight = PotentialCiel + AcsY;
+
+static float WideViewCosA = cos( radians(WideViewAngle) );
+static float VAngLimit = radians(VerticalAngleLimit);
+
+#define ArrangeFileName "ArrangeData.png" // 初期配置情報画像ファイル名
+#define ARRANGE_TEX_WIDTH  8       // 初期配置テクスチャピクセル幅
+#define ARRANGE_TEX_HEIGHT 512     // 初期配置テクスチャピクセル高さ
+#define TEX_WIDTH  1               // ユニットデータ格納テクスチャピクセル幅
+#define TEX_HEIGHT 512             // ユニットデータ格納テクスチャピクセル高さ
+
+// 座標変換行列
+float4x4 ViewMatrix      : VIEW;
+float4x4 ProjMatrix      : PROJECTION;
+float4x4 ViewProjMatrix  : VIEWPROJECTION;
+
+float3 CameraPosition    : POSITION  < string Object = "Camera"; >;
+
+// マテリアル色
+float4 MaterialDiffuse   : DIFFUSE  < string Object = "Geometry"; >;
+float3 MaterialAmbient   : AMBIENT  < string Object = "Geometry"; >;
+float3 MaterialEmmisive  : EMISSIVE < string Object = "Geometry"; >;
+float3 MaterialSpecular  : SPECULAR < string Object = "Geometry"; >;
+float  SpecularPower     : SPECULARPOWER < string Object = "Geometry"; >;
+
+//ライト関連
+bool   LightEnables[3]    : LIGHTENABLES;     // 有効フラグ
+float3 LightDirection[3]  : LIGHTDIRECTIONS;  // 方向
+
+// ライト色
+float3 LightDiffuses[3]   : LIGHTDIFFUSECOLORS;
+float3 LightAmbients[3]   : LIGHTAMBIENTCOLORS;
+float3 LightSpeculars[3]  : LIGHTSPECULARCOLORS;
+
+// ライト色
+static float4 DiffuseColor[3]  = { MaterialDiffuse * float4(LightDiffuses[0] * LightAmbients[0], 1.0f)
+                                 , MaterialDiffuse * float4(LightDiffuses[1] * LightAmbients[0], 1.0f)
+                                 , MaterialDiffuse * float4(LightDiffuses[2] * LightAmbients[0], 1.0f) };
+static float3 AmbientColor[3]  = { MaterialDiffuse.rgb * LightAmbients[0] * 0.4f + MaterialEmmisive
+                                 , MaterialDiffuse.rgb * LightAmbients[1] * 0.4f + MaterialEmmisive
+                                 , MaterialDiffuse.rgb * LightAmbients[2] * 0.4f + MaterialEmmisive };
+static float3 SpecularColor[3] = { MaterialSpecular * LightSpeculars[0]
+                                 , MaterialSpecular * LightSpeculars[1]
+                                 , MaterialSpecular * LightSpeculars[2] };
+
+// 配置情報テクスチャ
+texture2D ArrangeTex <
+    string ResourceName = ArrangeFileName;
+>;
+sampler ArrangeSmp = sampler_state{
+    texture = <ArrangeTex>;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+// オブジェクトに貼り付けるテクスチャ(ミップマップも生成)
+texture2D ParticleTex <
+    string ResourceName = TEX_FileName;
+    int MipLevels = 0;
+>;
+sampler ParticleSamp = sampler_state {
+    texture = <ParticleTex>;
+    MinFilter = ANISOTROPIC;
+    MagFilter = ANISOTROPIC;
+    MipFilter = LINEAR;
+    AddressU  = CLAMP;
+    AddressV  = CLAMP;
+};
+
+// 1フレーム前の座標記録用
+texture CoordTexOld : RenderColorTarget
+<
+   int Width=TEX_WIDTH;
+   int Height=TEX_HEIGHT;
+   string Format="A32B32G32R32F";
+>;
+sampler SmpCoordOld = sampler_state
+{
+   Texture = <CoordTexOld>;
+   ADDRESSU = CLAMP;
+   ADDRESSV = CLAMP;
+   MAGFILTER = NONE;
+   MINFILTER = NONE;
+   MIPFILTER = NONE;
+};
+
+// 現在の座標記録用
+shared texture Butterfly_CoordTex : RenderColorTarget
+<
+   int Width=TEX_WIDTH;
+   int Height=TEX_HEIGHT;
+   string Format="A32B32G32R32F";
+>;
+sampler Butterfly_SmpCoord : register(s2) = sampler_state
+{
+   Texture = <Butterfly_CoordTex>;
+   ADDRESSU = CLAMP;
+   ADDRESSV = CLAMP;
+   MAGFILTER = NONE;
+   MINFILTER = NONE;
+   MIPFILTER = NONE;
+};
+
+// 速度記録用
+shared texture Butterfly_VelocityTex : RenderColorTarget
+<
+   int Width=TEX_WIDTH;
+   int Height=TEX_HEIGHT;
+   string Format="A32B32G32R32F";
+>;
+sampler Butterfly_SmpVelocity : register(s3) = sampler_state
+{
+   Texture = <Butterfly_VelocityTex>;
+   ADDRESSU = CLAMP;
+   ADDRESSV = CLAMP;
+   MAGFILTER = NONE;
+   MINFILTER = NONE;
+   MIPFILTER = NONE;
+};
+
+// ポテンシャル記録用
+shared texture Butterfly_PotentialTex : RenderColorTarget
+<
+   int Width=TEX_WIDTH;
+   int Height=TEX_HEIGHT;
+   string Format="A32B32G32R32F";
+>;
+sampler Butterfly_SmpPotential = sampler_state
+{
+   Texture = <Butterfly_PotentialTex>;
+   ADDRESSU = CLAMP;
+   ADDRESSV = CLAMP;
+   MAGFILTER = NONE;
+   MINFILTER = NONE;
+   MIPFILTER = NONE;
+};
+
+// 共通の深度ステンシルバッファ
+texture DepthBuffer : RenderDepthStencilTarget <
+   int Width=TEX_WIDTH;
+   int Height=TEX_HEIGHT;
+    string Format = "D24S8";
+>;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 時間間隔計算(MMMでは ELAPSEDTIME はオフスクリーンの有無で大きく変わるので使わない)
+
+float time : Time;
+
+// 更新時刻記録用
+texture TimeTex : RENDERCOLORTARGET
+<
+   int Width=1;
+   int Height=1;
+   string Format = "D3DFMT_R32F" ;
+>;
+sampler TimeTexSmp = sampler_state
+{
+   Texture = <TimeTex>;
+    AddressU  = CLAMP;
+    AddressV = CLAMP;
+    MinFilter = NONE;
+    MagFilter = NONE;
+    MipFilter = NONE;
+};
+texture TimeDepthBuffer : RenderDepthStencilTarget <
+   int Width=1;
+   int Height=1;
+    string Format = "D3DFMT_D24S8";
+>;
+static float Dt = clamp(time - tex2D(TimeTexSmp, float2(0.5f,0.5f)).r, 0.001f, 0.01f);
+
+float4 UpdateTime_VS(float4 Pos : POSITION) : POSITION
+{
+    return Pos;
+}
+
+float4 UpdateTime_PS() : COLOR
+{
+   return float4(time, 0, 0, 1);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 配置情報テクスチャからデータを取り出す
+float Color2Float(int i, int j)
+{
+    float4 d = tex2D(ArrangeSmp, float2((i+0.5)/ARRANGE_TEX_WIDTH, (j+0.5)/ARRANGE_TEX_HEIGHT));
+    float tNum = (65536.0f * d.x + 256.0f * d.y + d.z) * 255.0f;
+    int pNum = round(d.w * 255.0f);
+    int sgn = 1 - 2 * (pNum % 2);
+    float data = tNum * pow(10.0f, pNum/2 - 64) * sgn;
+    return data;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// モデルの回転行列
+float4x4 RoundMatrix(float3 Angle)
+{
+   float3 AngleY = normalize( float3(Angle.x, 0.0f, Angle.z) );
+   float cosy = -AngleY.z;
+   float siny = sign(AngleY.x) * sqrt(1.0f - cosy*cosy);
+   float3 AngleXY = normalize( float3(Angle.x, 0.0f, Angle.z) );
+   float cosx = dot( AngleXY, Angle );
+   float sinx = sign(Angle.y) * sqrt(1.0f - cosx*cosx);
+
+   float4x4 rMat = { cosy,       0.0f,  siny,      0.0f,
+                    -sinx*siny,  cosx,  sinx*cosy, 0.0f,
+                    -cosx*siny, -sinx,  cosx*cosy, 0.0f,
+                     0.0f,       0.0f,  0.0f,      1.0f };
+
+   return rMat;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// モデルの回転逆行列
+float4x4 InvRoundMatrix(float3 Angle)
+{
+   float3 AngleY = normalize( float3(Angle.x, 0.0f, Angle.z) );
+   float cosy = -Angle.z;
+   float siny = sign(Angle.x) * sqrt(1.0f - cosy*cosy);
+   float3 AngleXY = normalize( float3(Angle.x, 0.0f, Angle.z) );
+   float cosx = dot( Angle, AngleXY );
+   float sinx = sign(Angle.y) * sqrt(1.0f - cosx*cosx);
+
+   float4x4 rMat = { cosy, -sinx*siny, -cosx*siny, 0.0f,
+                     0.0f,  cosx,      -sinx,      0.0f,
+                     siny,  sinx*cosy,  cosx*cosy, 0.0f,
+                     0.0f,  0.0f,       0.0f,      1.0f };
+
+   return rMat;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 座標の2D回転
+float2 Rotation2D(float2 pos, float rot)
+{
+    float x = pos.x * cos(rot) - pos.y * sin(rot);
+    float y = pos.x * sin(rot) + pos.y * cos(rot);
+
+    return float2(x,y);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 共通の頂点シェーダ
+
+struct VS_OUTPUT2 {
+   float4 Pos      : POSITION;
+   float2 texCoord : TEXCOORD0;
+};
+
+VS_OUTPUT2 Common_VS(float4 Pos: POSITION, float2 Tex: TEXCOORD)
+{
+   VS_OUTPUT2 Out;
+   Out.Pos = Pos;
+   Out.texCoord = Tex + float2(0.5f/TEX_WIDTH, 0.5f/TEX_HEIGHT);
+   return Out;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 0フレーム再生でユニット座標を初期化
+
+float4 PosInit_PS(float2 texCoord: TEXCOORD0) : COLOR
+{
+   float4 Pos;
+   if( time < 0.001f ){
+      // 0フレーム再生でリセット
+      int i = floor( texCoord.y*TEX_HEIGHT );
+      float y = lerp(PotentialFloor, PotentialCiel, Color2Float(1, i));
+      float3 pos = float3(Color2Float(0, i), y, Color2Float(2, i));
+      Pos = float4( pos, 0.0f );
+   }else{
+      Pos = tex2D(Butterfly_SmpCoord, texCoord);
+   }
+
+   return Pos;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 方向・速度の計算(xyz:正規化された方向ベクトル，w:速さ)
+
+float4 Velocity_PS(float2 texCoord: TEXCOORD0) : COLOR
+{
+   float4 vel;
+   if( time < 0.001f ){
+      // 0フレーム再生で方向初期化
+      int i = floor( texCoord.y*TEX_HEIGHT );
+      float rx = Color2Float(3, i);
+      float ry = Color2Float(4, i);
+      float sinx = sin(rx);
+      float cosx = cos(rx);
+      float siny = sin(ry);
+      float cosy = cos(ry);
+      float3x3 rMat = { cosy,       0.0f,  siny,
+                       -sinx*siny,  cosx,  sinx*cosy,
+                       -cosx*siny, -sinx,  cosx*cosy};
+      float3 ang = mul( float3(0.0f, 0.0f, -1.0f), rMat );
+      vel = float4(ang, 0.0f);
+   }else{
+      float4 vel0 = tex2D(Butterfly_SmpVelocity, texCoord);
+      float3 Pos1 = (float3)tex2D(SmpCoordOld, texCoord);
+      float3 Pos2 = (float3)tex2D(Butterfly_SmpCoord, texCoord);
+      float3 v = ( Pos2 - Pos1 )/max(Dt, 0.01f);
+      float len = length( v );
+      vel = (len > 0.0001f) ? float4( normalize(v), len ) : float4( vel0.xyz, len );
+   }
+
+   return vel;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ポテンシャルの初期化(ポテンシャルによる操舵力は1フレーム前の結果が使われるため
+// 0フレーム再生時は初期化の必要有り)
+
+float4 PotentialInit_PS(float2 texCoord: TEXCOORD0) : COLOR
+{
+   // ポテンシャルによるユニットの操舵力
+   float4 SteerForce = tex2D(Butterfly_SmpPotential, texCoord);
+   if( time < 0.001f ){
+      // 0フレーム再生でリセット
+      SteerForce = float4(0.0f, 0.0f, 0.0f, 0.0f);
+   }
+
+   return SteerForce;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 現ユニット座標値を1フレーム前の座標にコピー
+
+float4 PosCopy_PS(float2 texCoord: TEXCOORD0) : COLOR
+{
+   float4 Pos = tex2D(Butterfly_SmpCoord, texCoord);
+   return Pos;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 現ユニット座標値を更新
+
+float4 PosButterfly_PS(float2 texCoord: TEXCOORD0) : COLOR
+{
+    // 1フレーム前の位置
+    float3 Pos0 = tex2D(SmpCoordOld, texCoord).xyz;
+    float lenP0 = length( Pos0 );
+
+    // 方向・速度
+    float4 v = tex2D(Butterfly_SmpVelocity, texCoord);
+    float3 Angle = v.xyz;
+    float3 Vel = Angle * v.w;
+
+    // 回転逆行列
+    float3x3 invRMat = (float3x3)InvRoundMatrix(Angle);
+
+    // 操舵力初期化
+    float3 SteerForce = 0.0f;
+
+    // ユニットインデックス
+    int index = floor( texCoord.y*TEX_HEIGHT );
+
+#if(UnitHitAvoid==1)
+    // ユニット同士の衝突回避
+    for(int i=0; i<Count; i++){
+       if( i != index ){
+          float y = (float(i) + 0.5f)/TEX_HEIGHT;
+          float3 pos_i = tex2D(SmpCoordOld, float2(texCoord.x, y)).xyz;
+          float3 ang_i = tex2D(Butterfly_SmpVelocity, float2(texCoord.x, y)).xyz;
+          float len = length( pos_i - Pos0 );
+          float cosa = dot( normalize(pos_i - Pos0), Angle );
+          if(len < WideViewRadius && cosa > WideViewCosA){ // 視認ユニットかどうか
+             if(len < SeparationLength){
+                float3 pos_local = mul( pos_i-Pos0, invRMat );
+                SteerForce += normalize( -pos_local ) * SeparationFactor / len * min(1.0f, time/5.0f);
+             }
+          }
+       }
+    }
+#endif
+
+    // ポテンシャルによる操舵力を付加
+    SteerForce += tex2D(Butterfly_SmpPotential, texCoord).xyz;
+
+    // 気まぐれな動き
+    SteerForce.x += RandamMove*(Color2Float(5, index)+0.5f)*sin(Color2Float(6, index)*time+Color2Float(3, index));
+
+    // 操舵力の方向をワールド座標系に変換
+    SteerForce = mul( SteerForce, (float3x3)RoundMatrix(Angle) );
+
+    // 加速度計算(推進力+抵抗力+操舵力)
+    float3 Accel = DrivingForceFactor * Angle - ResistanceFactor * Vel + SteerForce;
+
+    // 蝶の羽ばたきパラメータ
+    float flap = 0.5f*(1.0f-cos(6.28f*FlapFreq*(1.0f+0.3f*(Color2Float(7, index)-0.5f))*time+Color2Float(4, index)));
+    flap = 1.0f - pow(flap, 1.5f);
+
+    // 新しい座標に更新
+    float4 Pos = float4( Pos0 + Dt * (Vel + Dt * Accel), flap );
+
+    // 鉛直方向角度制限
+    if( (PotentialFloor <= Pos.y && Pos.y <= CielHeight) ||
+        (Pos.y < PotentialFloor && Pos.y < Pos0.y) ||
+        (CielHeight < Pos.y && Pos.y > Pos0.y) ){
+       float3 pos2 = Pos.xyz - Pos0;
+       float3 pos3 = float3(pos2.x, 0.0f, pos2.z );
+       float a = acos( min(dot( normalize(pos2), normalize(pos3) ), 1.0f) );
+       if(a > VAngLimit){
+          pos3.y = sign(pos2.y) * length(pos3) * tan(VAngLimit);
+          Pos = float4( Pos0 + pos3, flap );
+       }
+    }
+
+    return Pos;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ユニットを指定範囲内に留めるためのポテンシャルによる操舵力を求める
+
+float4 Potential_PS(float2 texCoord: TEXCOORD0) : COLOR
+{
+    // ユニットの位置
+    float3 Pos0 = (float3)tex2D(Butterfly_SmpCoord, texCoord);
+    float lenP0 = length( Pos0 );
+
+    // ユニットの方向・速度
+    float4 v = tex2D(Butterfly_SmpVelocity, texCoord);
+    float3 Angle = v.xyz;
+    float3 Vel = Angle * v.w;
+
+    // 回転逆行列
+    float3x3 invRMat = (float3x3)InvRoundMatrix(Angle);
+
+    // ポテンシャルによる操舵力初期化
+    float3 SteerForce = float3(0.0f, 0.0f, 0.0f);
+
+    // 外縁ポテンシャル(遠くに行きすぎないように)
+    float limit = (lenP0 < 2.0f*OutsideLength) ? -abs(cos(time)) : -0.9999f;
+    float p = clamp(-OutsideLength-Pos0.x, 0.0f, 20.0f);
+    if( p > 0.0f && dot( Angle, float3(-1.0f, 0.0f, 0.0f) ) > limit ){
+       float3 pa = mul( float3(-Pos0.x, 0.0f, -Pos0.z), invRMat );
+       pa.z = 0.0f;
+       SteerForce += normalize(pa)*p*p;
+    }
+    p = clamp(Pos0.x-OutsideLength, 0.0f, 20.0f);
+    if( p > 0.0f && dot( Angle, float3(1.0f, 0.0f, 0.0f) ) > limit ){
+       float3 pa = mul( float3(-Pos0.x, 0.0f, -Pos0.z), invRMat );
+       pa.z = 0.0f;
+       SteerForce += normalize(pa)*p*p;
+    }
+    p = clamp(-OutsideLength-Pos0.z, 0.0f, 20.0f);
+    if( p > 0.0f && dot( Angle, float3(0.0f, 0.0f, -1.0f) ) > limit ){
+       float3 pa = mul( float3(-Pos0.x, 0.0f, -Pos0.z), invRMat );
+       pa.z = 0.0f;
+       SteerForce += normalize(pa)*p*p;
+    }
+    p = clamp(Pos0.z-OutsideLength, 0.0f, 20.0f);
+    if( p > 0.0f && dot( Angle, float3(0.0f, 0.0f, 1.0f) ) > limit ){
+       float3 pa = mul( float3(-Pos0.x, 0.0f, -Pos0.z), invRMat );
+       pa.z = 0.0f;
+       SteerForce += normalize(pa)*p*p;
+    }
+
+    // 床面ポテンシャル(床下に潜らないように)
+    p = max( PotentialFloor - Pos0.y, 0.0f);
+    SteerForce.y += p*p;
+
+    // 天井ポテンシャル(昇り過ぎないように)
+    p = max( Pos0.y - CielHeight, 0.0f);
+    SteerForce.y -= p*p;
+
+   return float4(SteerForce, 0.0f);
+}
+
+/////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT
+{
+    float4 Pos    : POSITION;    // 射影変換座標
+    float2 Tex    : TEXCOORD0;   // テクスチャ
+    float3 Normal : TEXCOORD1;   // 法線
+    float3 Eye    : TEXCOORD2;   // カメラとの相対位置
+    float4 Color  : COLOR0;      // 粒子の乗算色
+};
+
+// 頂点シェーダ
+VS_OUTPUT Particle_VS(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, int index: _INDEX)
+{
+   VS_OUTPUT Out;
+
+   int Index = round( -Pos.y * 100.0f );
+   int Index2 = round( fmod(index, 8.0f) );
+   Pos.y = 0.0f;
+   float2 texCoord = float2(0.5f/TEX_WIDTH, (Index+0.5f)/TEX_HEIGHT);
+
+   // 蝶の基点座標
+   float4 Pos0 = tex2Dlod(Butterfly_SmpCoord, float4(texCoord, 0, 0));
+
+   // 蝶の方向ベクトル
+   float3 Angle = tex2Dlod(Butterfly_SmpVelocity, float4(texCoord, 0, 0)).xyz;
+
+   // 蝶の羽ばたき
+   float rot = 0.0f;
+   if(Index2 < 4){
+      rot = lerp(radians(30.0f), radians(-85.0f), Pos0.w);
+   }else{
+      rot = lerp(radians(-30.0f), radians(85.0f), Pos0.w);
+   }
+   Pos.xy = Rotation2D(Pos.xy, rot);
+   Pos.y -= FlapAmp * (Pos0.w-0.5f) * 0.1f;
+   Normal.xy = Rotation2D(Normal.xy, rot);
+
+   // 蝶の大きさ
+   Pos.xyz *= ButterflySize * 10.0f;
+
+   // 蝶の回転
+   float4x4 rotMat = RoundMatrix(Angle);
+   Pos = mul( Pos, rotMat );
+   Out.Normal = normalize( mul( Normal, (float3x3)rotMat ) );
+
+   // 蝶のワールド座標
+   Pos.xyz += Pos0.xyz;
+   Pos.xyz *= step(Index, Count);
+   Pos.w = 1.0f;
+
+   // カメラ視点のビュー射影変換
+   if (MMM_IsDinamicProjection)
+   {
+       float4x4 vpmat = mul(ViewMatrix, MMM_DynamicFov(ProjMatrix, length(CameraPosition - Pos.xyz)));
+       Out.Pos = mul( Pos, vpmat );
+   }
+   else
+   {
+       Out.Pos = mul( Pos, ViewProjMatrix );
+   }
+
+   // カメラとの相対位置
+   Out.Eye = CameraPosition - Pos.xyz;
+
+   // 色を計算
+   float3 color = float3(0, 0, 0);
+   float count = 0;
+
+   if(LightEnables[0]) {
+      color += saturate(AmbientColor[0] + max(0, DiffuseColor[0].rgb * dot(Out.Normal, -LightDirection[0])));
+      count += 1.0;
+   }
+
+   for(int i = 1; i < MMM_LightCount; i++) {
+      if(LightEnables[i]) {
+         color += saturate(AmbientColor[i] + max(0, DiffuseColor[i].rgb * dot(Out.Normal, -LightDirection[i])));
+         count += 0.95f;
+      }
+   }
+   Out.Color.rgb = saturate(color / count);
+   Out.Color.a = AcsTr*step(Index, Count);
+
+   // テクスチャ座標
+   int texIndex = Index % (TEX_PARTICLE_XNUM * TEX_PARTICLE_YNUM);
+   int tex_i = texIndex % TEX_PARTICLE_XNUM;
+   int tex_j = texIndex / TEX_PARTICLE_XNUM;
+   Out.Tex = float2((Tex.x + tex_i)/TEX_PARTICLE_XNUM, (Tex.y + tex_j)/TEX_PARTICLE_YNUM);
+
+   return Out;
+}
+
+// ピクセルシェーダ
+float4 Particle_PS( VS_OUTPUT IN ) : COLOR0
+{
+#if(MMM_LIGHT==1)
+
+   float4 Color = IN.Color;
+
+   // テクスチャ適用
+   Color *= tex2D( ParticleSamp, float2(IN.Tex.x, 1.0f-IN.Tex.y) );
+
+   #if TEX_ADD_FLG == 0
+   // スペキュラ色計算(ライト0のみ反映)
+   float3 HalfVector = normalize(normalize(IN.Eye) - LightDirection[0]);
+   float3 Specular = pow(max(0,dot( HalfVector, normalize(IN.Normal))), SpecularPower) * SpecularColor[0];
+   // スペキュラ適用
+   Color.rgb += Specular;
+   #endif
+#else
+   // テクスチャ適用
+   float4 Color = tex2D( ParticleSamp, float2(IN.Tex.x, 1.0f-IN.Tex.y) );
+#endif
+
+#if TEX_ADD_FLG == 1
+   Color.rgb *= Color.a;
+#endif
+
+   return Color;
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+technique MainTec0 < string MMDPass = "object";
+    string Script = 
+        "RenderColorTarget0=Butterfly_CoordTex;"
+            "RenderDepthStencilTarget=DepthBuffer;"
+            "Pass=PosInit;"
+        "RenderColorTarget0=Butterfly_VelocityTex;"
+            "RenderDepthStencilTarget=DepthBuffer;"
+            "Pass=CalcVelocity;"
+        "RenderColorTarget0=Butterfly_PotentialTex;"
+            "RenderDepthStencilTarget=DepthBuffer;"
+            "Pass=PotentialInit;"
+        "RenderColorTarget0=CoordTexOld;"
+            "RenderDepthStencilTarget=DepthBuffer;"
+            "Pass=PosCopy;"
+        "RenderColorTarget0=Butterfly_CoordTex;"
+            "RenderDepthStencilTarget=DepthBuffer;"
+            "Pass=PosUpdate;"
+        "RenderColorTarget0=Butterfly_PotentialTex;"
+            "RenderDepthStencilTarget=DepthBuffer;"
+            "Pass=CalcPotential;"
+        "RenderColorTarget0=TimeTex;"
+            "RenderDepthStencilTarget=TimeDepthBuffer;"
+            "Pass=UpdateTime;"
+        "RenderColorTarget0=;"
+            "RenderDepthStencilTarget=;"
+            "Pass=DrawObject;";
+>{
+    pass PosInit < string Script = "Draw=Buffer;";>
+    {
+        ALPHABLENDENABLE = FALSE;
+        ALPHATESTENABLE = FALSE;
+        VertexShader = compile vs_3_0 Common_VS();
+        PixelShader  = compile ps_3_0 PosInit_PS();
+    }
+    pass CalcVelocity < string Script = "Draw=Buffer;";>
+    {
+        ALPHABLENDENABLE = FALSE;
+        ALPHATESTENABLE = FALSE;
+        VertexShader = compile vs_3_0 Common_VS();
+        PixelShader  = compile ps_3_0 Velocity_PS();
+    }
+    pass PotentialInit < string Script = "Draw=Buffer;";>
+    {
+        ALPHABLENDENABLE = FALSE;
+        ALPHATESTENABLE = FALSE;
+        VertexShader = compile vs_1_1 Common_VS();
+        PixelShader  = compile ps_2_0 PotentialInit_PS();
+    }
+    pass PosCopy < string Script = "Draw=Buffer;";>
+    {
+        ALPHABLENDENABLE = FALSE;
+        ALPHATESTENABLE = FALSE;
+        VertexShader = compile vs_1_1 Common_VS();
+        PixelShader  = compile ps_2_0 PosCopy_PS();
+    }
+    pass PosUpdate < string Script = "Draw=Buffer;";>
+    {
+        ALPHABLENDENABLE = FALSE;
+        ALPHATESTENABLE = FALSE;
+        VertexShader = compile vs_3_0 Common_VS();
+        PixelShader  = compile ps_3_0 PosButterfly_PS();
+    }
+    pass CalcPotential < string Script = "Draw=Buffer;";>
+    {
+        ALPHABLENDENABLE = FALSE;
+        ALPHATESTENABLE = FALSE;
+        VertexShader = compile vs_3_0 Common_VS();
+        PixelShader  = compile ps_3_0 Potential_PS();
+    }
+    pass UpdateTime < string Script= "Draw=Buffer;"; > {
+        ZEnable = FALSE;
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = FALSE;
+        VertexShader = compile vs_1_1 UpdateTime_VS();
+        PixelShader  = compile ps_2_0 UpdateTime_PS();
+    }
+    pass DrawObject {
+        ZENABLE = TRUE;
+        #if(WriteZBuffer == 0)
+        ZWRITEENABLE = FALSE;
+        #endif
+        #if(TEX_ADD_FLG == 1)
+        DestBlend = ONE;
+        SrcBlend = ONE;
+        #else
+        DestBlend = INVSRCALPHA;
+        SrcBlend = SRCALPHA;
+        #endif
+        AlphaBlendEnable = TRUE;
+        CullMode = NONE;
+        VertexShader = compile vs_3_0 Particle_VS();
+        PixelShader  = compile ps_3_0 Particle_PS();
+   }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 非セルフシャドウ地面影は非表示
+technique ShadowTec < string MMDPass = "shadow"; > { }
+

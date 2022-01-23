@@ -1,0 +1,129 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Ghost_Mask1_MMM.fxm ver0.0.5  マスク画像作成，適用モデルをを白に
+//  ( MikuMikuMoving対応版, Ghost.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P( MoggP氏のSampleBase.fxm改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+//座標変換行列
+float4x4 ViewProjMatrix  : VIEWPROJECTION;
+float4x4 WorldMatrix     : WORLD;
+float4x4 ViewMatrix      : VIEW;
+float4x4 ProjMatrix      : PROJECTION;
+
+//カメラ位置
+float3 CameraPosition  : POSITION  < string Object = "Camera"; >;
+
+float  EdgeWidth       : EDGEWIDTH;
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct VS_OUTPUT {
+    float4 Pos  : POSITION;    // 射影変換座標
+    float4 WPos : TEXCOORD1;   // ワールド変換座標
+};
+
+// エッジ用頂点シェーダ
+VS_OUTPUT VS_EdgeMask(MMM_SKINNING_INPUT IN)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    MMM_SKINNING_OUTPUT SkinOut = MMM_SkinnedPositionNormal(IN.Pos, IN.Normal, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // ワールド座標
+    float4 Pos = mul(SkinOut.Position, WorldMatrix);
+    Out.WPos = Pos;
+
+    // 法線方向
+    float3 Normal = mul(SkinOut.Normal, (float3x3)WorldMatrix);
+
+    // 頂点座標
+    if (MMM_IsDinamicProjection)
+    {
+        float dist = length(CameraPosition - Pos.xyz);
+        float4x4 vpmat = mul(ViewMatrix, MMM_DynamicFov(ProjMatrix, dist));
+
+        Pos += float4(Normal, 0) * IN.EdgeWeight * EdgeWidth * distance(Pos.xyz, CameraPosition) * MMM_GetDynamicFovEdgeRate(dist);
+        Out.Pos = mul( Pos, vpmat );
+    }
+    else
+    {
+        Pos += float4(Normal, 0) * IN.EdgeWeight * EdgeWidth * distance(Pos.xyz, CameraPosition);
+        Out.Pos = mul( Pos, ViewProjMatrix );
+    }
+
+    return Out;
+}
+
+// オブジェクト用頂点シェーダ
+VS_OUTPUT VS_ObjectMask(MMM_SKINNING_INPUT IN)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    float4 Pos = MMM_SkinnedPosition(IN.Pos, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // ワールド座標
+    Pos = mul(Pos, WorldMatrix);
+    Out.WPos = Pos;
+
+    // 頂点座標
+    if (MMM_IsDinamicProjection)
+    {
+        float dist = length(CameraPosition - Pos.xyz);
+        float4x4 vpmat = mul(ViewMatrix, MMM_DynamicFov(ProjMatrix, dist));
+        Out.Pos = mul( Pos, vpmat );
+    }
+    else
+    {
+        Out.Pos = mul( Pos, ViewProjMatrix );
+    }
+
+   return Out;
+}
+
+// ピクセルシェーダ
+float4 PS_Mask(VS_OUTPUT IN) : COLOR
+{
+    float h = max( IN.WPos.y/IN.WPos.w, 0.0f );
+    float h10 = saturate( floor(h/10.0f) * 0.1f );
+    float h1 = saturate( fmod(h,10.0f) * 0.1f );
+    return float4(1.0, h10, h1, 1.0);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+// エッジ
+technique EdgeTec < string MMDPass = "edge"; > {
+    pass DrawMask {
+        VertexShader = compile vs_2_0 VS_EdgeMask();
+        PixelShader  = compile ps_2_0 PS_Mask();
+    }
+}
+
+// セルフシャドウなし
+technique Mask < string MMDPass = "object"; bool UseSelfShadow = false; > {
+    pass DrawMask {
+        VertexShader = compile vs_2_0 VS_ObjectMask();
+        PixelShader  = compile ps_2_0 PS_Mask();
+    }
+}
+
+// セルフシャドウあり
+technique MaskSS < string MMDPass = "object"; bool UseSelfShadow = true; > {
+    pass DrawMask {
+        VertexShader = compile vs_2_0 VS_ObjectMask();
+        PixelShader  = compile ps_2_0 PS_Mask();
+    }
+}
+
+//描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+

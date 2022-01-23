@@ -1,0 +1,124 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Silhouette_Obj.fx   マスク画像作成，適用モデルをを白に
+//  ( MikuMikuMoving対応版, Silhouette.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P( MoggP氏のSampleBase.fxm改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座標変換行列
+float4x4 WorldViewProjMatrix : WORLDVIEWPROJECTION;
+float4x4 ViewProjMatrix      : VIEWPROJECTION;
+float4x4 WorldMatrix         : WORLD;
+float4x4 ViewMatrix          : VIEW;
+float4x4 ProjMatrix          : PROJECTION;
+
+//カメラ位置
+float3 CameraPosition  : POSITION  < string Object = "Camera"; >;
+
+float  EdgeWidth       : EDGEWIDTH;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// エッジ用頂点シェーダ
+float4 VS_EdgeMask(MMM_SKINNING_INPUT IN) : POSITION
+{
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    MMM_SKINNING_OUTPUT SkinOut = MMM_SkinnedPositionNormal(IN.Pos, IN.Normal, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // ワールド座標
+    float4 Pos = mul(SkinOut.Position, WorldMatrix);
+
+    // 法線方向
+    float3 Normal = mul(SkinOut.Normal, (float3x3)WorldMatrix);
+
+    // 頂点座標
+    if (MMM_IsDinamicProjection)
+    {
+        float dist = length(CameraPosition - Pos.xyz);
+        float4x4 vpmat = mul(ViewMatrix, MMM_DynamicFov(ProjMatrix, dist));
+
+        Pos += float4(Normal, 0) * IN.EdgeWeight * EdgeWidth * distance(Pos.xyz, CameraPosition) * MMM_GetDynamicFovEdgeRate(dist);
+        return mul( Pos, vpmat );
+    }
+    else
+    {
+        Pos += float4(Normal, 0) * IN.EdgeWeight * EdgeWidth * distance(Pos.xyz, CameraPosition);
+        return mul( Pos, ViewProjMatrix );
+    }
+}
+
+// 地面影用頂点シェーダ
+float4 VS_ShadowMask(MMM_SKINNING_INPUT IN) : POSITION
+{
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    float4 Pos = MMM_SkinnedPosition(IN.Pos, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // カメラ視点のワールドビュー射影変換
+    return mul( Pos, WorldViewProjMatrix );
+}
+
+// オブジェクト用頂点シェーダ
+float4 VS_ObjectMask(MMM_SKINNING_INPUT IN) : POSITION
+{
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    float4 Pos = MMM_SkinnedPosition(IN.Pos, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // ワールド座標
+    Pos = mul(Pos, WorldMatrix);
+
+    // 頂点座標
+    if (MMM_IsDinamicProjection)
+    {
+        float dist = length(CameraPosition - Pos.xyz);
+        float4x4 vpmat = mul(ViewMatrix, MMM_DynamicFov(ProjMatrix, dist));
+        return mul( Pos, vpmat );
+    }
+    else
+    {
+        return mul( Pos, ViewProjMatrix );
+    }
+}
+
+//ピクセルシェーダ
+float4 PS_Mask() : COLOR {
+    return float4(1.0, 1.0, 1.0, 1.0);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+technique EdgeTec < string MMDPass = "edge"; > {
+    pass DrawMask {
+        VertexShader = compile vs_2_0 VS_EdgeMask();
+        PixelShader  = compile ps_2_0 PS_Mask();
+    }
+}
+
+//セルフシャドウなし
+technique Mask < string MMDPass = "object"; bool UseSelfShadow = false; > {
+    pass DrawMask {
+        VertexShader = compile vs_2_0 VS_ObjectMask();
+        PixelShader  = compile ps_2_0 PS_Mask();
+    }
+}
+
+//セルフシャドウあり
+technique MaskSS < string MMDPass = "object"; bool UseSelfShadow = true; > {
+    pass DrawMask {
+        VertexShader = compile vs_2_0 VS_ObjectMask();
+        PixelShader  = compile ps_2_0 PS_Mask();
+    }
+}
+
+
+//地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+

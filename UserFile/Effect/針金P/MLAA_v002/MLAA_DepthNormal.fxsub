@@ -1,0 +1,186 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  MLAA_DepthNormal.fxsub  深度・法線マップ作成
+//  ( MLAA.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P( 舞力介入P氏のfull.fx改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+#define DEPTH_FAR  5000.0f   // 深度最遠値
+
+// 透過値に対する深度読み取り閾値
+float AlphaClipThreshold = 0.5;
+
+// 座標変換行列
+float4x4 WorldViewProjMatrix : WORLDVIEWPROJECTION;
+float4x4 WorldViewMatrix     : WORLDVIEW;
+
+// マテリアル色
+float4 MaterialDiffuse : DIFFUSE  < string Object = "Geometry"; >;
+float4 EdgeColor       : EDGECOLOR;
+
+bool opadd; // 加算合成フラグ
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = LINEAR;
+    ADDRESSU  = WRAP;
+    ADDRESSV  = WRAP;
+};
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// エッジ描画
+
+struct VS_EDGE {
+    float4 Pos    : POSITION;
+    float4 VPos   : TEXCOORD0;
+};
+
+// 頂点シェーダ
+VS_EDGE VS_Edge(float4 Pos : POSITION)
+{
+    VS_EDGE Out = (VS_EDGE)0; 
+
+    // カメラ視点のワールドビュー射影変換
+    Out.Pos = mul( Pos, WorldViewProjMatrix );
+
+    // カメラ視点のワールドビュー変換
+    Out.VPos = mul( Pos, WorldViewMatrix );
+
+    return Out;
+}
+
+//ピクセルシェーダ
+float4 PS_Edge(VS_EDGE IN) : COLOR
+{
+    float alpha = EdgeColor.a * !opadd;
+    // α値が閾値以下の箇所は描画しない
+    clip(alpha - AlphaClipThreshold);
+
+    // 深度
+    float dep = length(IN.VPos.xyz / IN.VPos.w);
+    dep = saturate(dep / DEPTH_FAR);
+
+    return float4(dep, 0.5f, 0.5f, 100.0f);
+}
+
+
+// エッジ描画テクニック
+technique EdgeDepthTec < string MMDPass = "edge"; >
+{
+    pass DrawEdge {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = FALSE;
+        VertexShader = compile vs_2_0 VS_Edge();
+        PixelShader  = compile ps_2_0 PS_Edge();
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT {
+    float4 Pos    : POSITION;
+    float4 VPos   : TEXCOORD0;
+    float3 Normal : TEXCOORD1;      // 法線
+    float2 Tex    : TEXCOORD2;
+};
+
+// 頂点シェーダ
+VS_OUTPUT VS_Object(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+    // カメラ視点のワールドビュー射影変換
+    Out.Pos = mul( Pos, WorldViewProjMatrix );
+
+    // カメラ視点のワールドビュー変換
+    Out.VPos = mul( Pos, WorldViewMatrix );
+
+    // ビュー座標視点の頂点法線
+    Out.Normal = normalize( mul( Normal, (float3x3)WorldViewMatrix ) );
+
+    // テクスチャ座標
+    Out.Tex = Tex;
+
+    return Out;
+}
+
+//ピクセルシェーダ
+float4 PS_Object(VS_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+    float alpha = MaterialDiffuse.a * !opadd;
+    if ( useTexture ) {
+        // テクスチャ透過値適用
+        alpha *= tex2D( ObjTexSampler, IN.Tex ).a * !opadd;
+    }
+    // α値が閾値以下の箇所は描画しない
+    clip(alpha - AlphaClipThreshold);
+
+    // 深度
+    float dep = length(IN.VPos.xyz / IN.VPos.w);
+    dep = saturate(dep / DEPTH_FAR);
+
+    // 法線
+    float3 Normal = (normalize( IN.Normal ) + 1.0f) * 0.5f;
+
+    return float4(dep, Normal);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+// オブジェクト描画(セルフシャドウなし)
+technique DepthTec0 < string MMDPass = "object"; bool UseTexture = false; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(false);
+    }
+}
+
+technique DepthTec1 < string MMDPass = "object"; bool UseTexture = true; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true);
+    }
+}
+
+// オブジェクト描画(セルフシャドウあり)
+technique DepthTecSS0 < string MMDPass = "object_ss"; bool UseTexture = false; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(false);
+    }
+}
+
+technique DepthTecSS1 < string MMDPass = "object_ss"; bool UseTexture = true; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+//地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+

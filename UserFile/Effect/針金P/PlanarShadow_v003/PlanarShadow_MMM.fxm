@@ -1,0 +1,100 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  PlanarShadow_MMM.fxm ver0.0.3 MMDの地面影を任意の平面に投影できるようにします
+//  (MikuMikuMoving対応版)
+//  作成: 針金P( Mogg氏のSampleBase.fxm改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ここのパラメータを変更してください
+
+float3 PlanarPos <   // 投影する平面上の任意の座標
+   string UIName = "任意平面座標";
+   string UIHelp = "投影する平面上の任意の座標";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = -1000.0;
+   float UIMax = 1000.0;
+> = float3( 0.0, 10.0, 0.0 );
+
+float3 PlanarNormal <   // 投影する平面の法線ベクトル
+   string UIName = "任意平面ﾍﾞｸﾄﾙ";
+   string UIHelp = "投影する平面の法線ベクトル";
+   string UIWidget = "Numeric";
+   bool UIVisible =  true;
+   float UIMin = -1.0;
+   float UIMax = 1.0;
+> = float3( 0.0, 1.0, 0.0 );
+
+
+// 解らない人はここから下はいじらないでね
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+int Count = MMM_LightCount;
+int Index;
+
+// 座標変換行列
+float4x4 ViewProjMatrix  : VIEWPROJECTION;
+
+//ライト関連
+bool   LightEnables[MMM_LightCount]    : LIGHTENABLES;      // 有効フラグ
+float3 LightDirection[MMM_LightCount]  : LIGHTDIRECTIONS;   // 方向
+
+//  地面影色
+float4 GroundShadowColor : GROUNDSHADOWCOLOR;
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 任意平面の影（非セルフシャドウ）描画
+
+//==============================================
+// 頂点シェーダ
+//==============================================
+float4 Shadow_VS(MMM_SKINNING_INPUT IN) : POSITION
+{
+    //================================================================================
+    //MikuMikuMoving独自のスキニング関数(MMM_SkinnedPosition)。座標を取得する。
+    //================================================================================
+    float4 Pos = MMM_SkinnedPosition(IN.Pos, IN.BlendWeight, IN.BlendIndices, IN.SdefC, IN.SdefR0, IN.SdefR1);
+
+    // 光源の仮位置(平行光源なので)
+    float3 LightPos = Pos.xyz + LightDirection[Index];
+
+    // 任意平面に投影
+    float a = dot(PlanarNormal, PlanarPos - LightPos);
+    float b = dot(PlanarNormal, Pos.xyz - PlanarPos);
+    float c = dot(PlanarNormal, Pos.xyz - LightPos);
+    Pos = float4(Pos.xyz * a + LightPos * b, c);
+
+    // ビュー射影変換
+    return mul( Pos, ViewProjMatrix );
+}
+
+//==============================================
+// ピクセルシェーダ
+//==============================================
+float4 Shadow_PS() : COLOR
+{
+    // 照明オフの時は描画しない
+    clip( float(LightEnables[Index]) - 0.1f );
+
+    // 地面影色で塗りつぶし
+    return GroundShadowColor;
+}
+
+//==============================================
+// 地面影描画テクニック
+//==============================================
+technique ShadowTec < string MMDPass = "shadow";
+    string Script = "LoopByCount=Count;"
+                        "LoopGetIndex=Index;"
+                        "Pass=DrawShadow;"
+                    "LoopEnd=;";
+> {
+    pass DrawShadow {
+        VertexShader = compile vs_2_0 Shadow_VS();
+        PixelShader  = compile ps_2_0 Shadow_PS();
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////

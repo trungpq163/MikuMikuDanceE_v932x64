@@ -1,0 +1,120 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  VS_Stencil.fxsub  シャドウボリューム作成(深度ステンシルバッファのステンシルを更新)
+//  ( VolumeShadow.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+// 制御パラメータ
+float AcsX : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "X"; >;
+
+// 座標変換行列
+float4x4 ViewProjMatrix : VIEWPROJECTION;
+float4x4 WorldMatrix    : WORLD;
+
+float3 LightDirection : DIRECTION < string Object = "Light"; >;
+
+// マテリアル色
+float  SpecularPower   : SPECULARPOWER < string Object = "Geometry"; >;
+
+bool opadd; // 加算合成フラグ
+
+// シャドウボリュームの描画結果を記録するためのレンダーターゲット
+shared texture2D VolumeShadow_VolumeMap : RENDERCOLORTARGET;
+shared texture2D VolumeShadow_DepthStencilBuffer : RENDERDEPTHSTENCILTARGET;
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// シャドウボリューム描画
+
+struct VS_OUTPUT {
+    float4 Pos    : POSITION;
+    float4 Color  : COLOR0;    // ディフューズ色
+};
+
+// 頂点シェーダ
+VS_OUTPUT VS_Object(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+    // ワールド座標変換
+    Pos = mul( Pos, WorldMatrix );
+
+    // 頂点法線
+    Normal = normalize( mul( Normal, (float3x3)WorldMatrix ) );
+
+    // 法線がライトと反対側の時は頂点を引き延ばす
+    if(Tex.x > 9999.9f){
+        if( dot(Normal, -LightDirection) < 0.0f ){
+            Pos.xyz += LightDirection * (1000.0f + AcsX);
+        }
+    }
+
+    // カメラ視点のビュー射影変換
+    Out.Pos = mul( Pos, ViewProjMatrix );
+
+    // ディフューズ色＋アンビエント色 計算
+    Out.Color = float4(0.7f, 0.7f, 0.7f, 1.0f);
+    Out.Color.rgb += max(0, dot( Normal, -LightDirection ));
+    Out.Color = saturate( Out.Color );
+
+    return Out;
+}
+
+//ピクセルシェーダ
+float4 PS_Object(VS_OUTPUT IN) : COLOR
+{
+    // シャドウボリューム材質以外は描画しない
+    clip(0.00001f - abs(10000.0f - SpecularPower));
+
+    // 加算合成モデルは描画しない
+    clip( !opadd - 0.001f );
+
+    // テスト用にとりあえずシャドウボリューム描画
+    return IN.Color;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+technique VolumeShadowTec0 < string MMDPass = "object_ss"; string Subset = "0";
+    string Script = 
+        "RenderColorTarget0=VolumeShadow_VolumeMap;"
+            "RenderDepthStencilTarget=VolumeShadow_DepthStencilBuffer;"
+            "Pass=DrawObject;"
+        "RenderColorTarget0=;"
+            "RenderDepthStencilTarget=;"
+        ; >
+{
+    pass DrawObject {
+        // ステンシルバッファを更新(DepthFail法)
+        CullMode = NONE;
+        ZWriteEnable = FALSE;
+        ShadeMode = FLAT;
+        StencilEnable = TRUE;
+        TwoSidedStencilMode = TRUE;  // 両面ステンシルを使う
+        StencilFunc = ALWAYS;
+        StencilFail = KEEP;
+        StencilZFail = DECR;
+        StencilPass = KEEP;
+        CCW_StencilFunc = ALWAYS;
+        CCW_StencilFail = KEEP;
+        CCW_StencilZFail = INCR;
+        CCW_StencilPass = KEEP;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object();
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+// シャドウボリューム以外は描画しない
+technique VolumeShadowTec < string MMDPass = "object"; >{ }
+technique VolumeShadowTecSS < string MMDPass = "object_ss"; >{ }
+
+// 輪郭は描画しない
+technique EdgeTec < string MMDPass = "edge"; > { }
+//地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }

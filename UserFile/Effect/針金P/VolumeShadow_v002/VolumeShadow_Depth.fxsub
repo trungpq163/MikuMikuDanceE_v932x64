@@ -1,0 +1,148 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  VS_Depth.fxsub  深度ステンシルバッファの深度を更新
+//  ( VolumeShadow.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+// 透過値に対する深度読み取り閾値
+float AlphaClipThreshold = 0.5;
+
+// 座標変換行列
+float4x4 WorldViewProjMatrix : WORLDVIEWPROJECTION;
+float4x4 ViewProjMatrix      : VIEWPROJECTION;
+float4x4 WorldMatrix         : WORLD;
+float4x4 ProjMatrix          : PROJECTION;
+
+float3 CameraPosition : POSITION  < string Object = "Camera"; >;
+
+// マテリアル色
+float4 MaterialDiffuse : DIFFUSE  < string Object = "Geometry"; >;
+float  SpecularPower   : SPECULARPOWER < string Object = "Geometry"; >;
+float4 EdgeColor       : EDGECOLOR;
+
+bool opadd; // 加算合成フラグ
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = LINEAR;
+    ADDRESSU  = WRAP;
+    ADDRESSV  = WRAP;
+};
+
+// シャドウボリュームの描画結果を記録するためのレンダーターゲット
+shared texture2D VolumeShadow_VolumeMap : RENDERCOLORTARGET;
+shared texture2D VolumeShadow_DepthStencilBuffer : RENDERDEPTHSTENCILTARGET;
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 深度描画
+
+struct VS_OUTPUT {
+    float4 Pos  : POSITION;
+    float2 Tex  : TEXCOORD1;
+};
+
+// 頂点シェーダ
+VS_OUTPUT VS_Object(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+    // ワールド座標変換
+    Pos = mul( Pos, WorldMatrix );
+    Normal = normalize( mul( Normal, (float3x3)WorldMatrix ) );
+
+    //  ボリューム接触面でのちらつき防止対策
+    if(ProjMatrix._44 < 0.5f){ // パースペクティブon
+        // カメラとの距離によるレート
+        float len = max( length( CameraPosition - Pos.xyz ) - 50.0f, 0.0f );
+        // パースによるレート
+        float parthRate = max(1.0f / ProjMatrix._22, pow(0.002f / ProjMatrix._22, 0.3f));
+        // 頂点を法線方向に押し出す
+        Pos.xyz += Normal * ( 0.003f * len * parthRate );
+    }
+
+    // カメラ視点のビュー射影変換
+    Out.Pos = mul( Pos, ViewProjMatrix );
+
+    // テクスチャ座標
+    Out.Tex = Tex;
+
+    return Out;
+}
+
+//ピクセルシェーダ
+float4 PS_Object(VS_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+    // シャドウボリューム材質は描画しない
+    clip(abs(10000.0f - SpecularPower) - 0.00001f);
+
+    // 加算合成モデルは描画しない
+    clip( !opadd - 0.001f );
+
+    float alpha = MaterialDiffuse.a * !opadd;
+    if ( useTexture ) {
+        // テクスチャ透過値適用
+        alpha *= tex2D( ObjTexSampler, IN.Tex ).a * !opadd;
+    }
+    // α値が閾値以下の箇所は描画しない
+    clip(alpha - AlphaClipThreshold);
+
+    return float4(0, 0, 0, 1);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+// テクニック(スクリーンは非更新)
+
+// オブジェクト描画(セルフシャドウあり)
+technique DepthTecSS0 < string MMDPass = "object_ss"; bool UseTexture = false;
+    string Script = 
+        "RenderColorTarget0=VolumeShadow_VolumeMap;"
+            "RenderDepthStencilTarget=VolumeShadow_DepthStencilBuffer;"
+            "Pass=DrawObject;"
+        "RenderColorTarget0=;"
+            "RenderDepthStencilTarget=;"
+        ; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = TRUE;
+        SrcBlend = ZERO;
+        DestBlend = ONE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(false);
+    }
+}
+
+technique DepthTecSS1 < string MMDPass = "object_ss"; bool UseTexture = true;
+    string Script = 
+        "RenderColorTarget0=VolumeShadow_VolumeMap;"
+            "RenderDepthStencilTarget=VolumeShadow_DepthStencilBuffer;"
+            "Pass=DrawObject;"
+        "RenderColorTarget0=;"
+            "RenderDepthStencilTarget=;"
+        ; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = TRUE;
+        SrcBlend = ZERO;
+        DestBlend = ONE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+// 非セルフシャドウ描画は行わない
+technique DepthTec < string MMDPass = "object"; >{ }
+// エッジは描画しない
+technique EdgeDepthTec < string MMDPass = "edge"; >{}
+// 地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+

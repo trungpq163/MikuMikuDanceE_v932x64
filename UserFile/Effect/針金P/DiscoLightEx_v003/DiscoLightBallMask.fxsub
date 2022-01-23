@@ -1,0 +1,70 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  DiscoLightBallMask.fxsub : DiscoLightEx ライトボールマスク描画
+//  ( DiscoLightEx.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P( 舞力介入P氏のDiscoLighting改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+#define  MODEL_FILE_NAME   "DiscoLightEx.pmx"
+
+// ライトの位置
+float3 LightPosition: CONTROLOBJECT < string Name = MODEL_FILE_NAME; string item = "光源位置"; >;
+
+float4x4 ViewProjMatrix : VIEWPROJECTION;
+float4x4 WMat           : WORLD;
+float4x4 ViewMatrix     : VIEW;
+float4x4 ProjMatrix     : PROJECTION;
+static float4x4 WorldMatrix = float4x4(WMat[0], WMat[1], WMat[2], LightPosition, 1);
+static float4x4 WorldViewProjMatrix = mul(WorldMatrix, ViewProjMatrix);
+
+//カメラ位置
+float3 CameraPosition  : POSITION  < string Object = "Camera"; >;
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+float4 Basic_VS(float4 Pos: POSITION) : POSITION
+{
+   // 頂点座標
+   #ifndef MIKUMIKUMOVING
+   Pos = mul(Pos, WorldViewProjMatrix);
+   #else
+   if (MMM_IsDinamicProjection)
+   {
+       float4x4 wvpmat = mul(mul(WorldMatrix, ViewMatrix), MMM_DynamicFov(ProjMatrix, length(CameraPosition - mul(Pos, WorldMatrix).xyz)));
+       Pos = mul( Pos, wvpmat );
+   }
+   else
+   {
+       Pos = mul( Pos, WorldViewProjMatrix );
+   }
+   #endif
+
+   return Pos;
+}
+
+
+float4 Basic_PS() : COLOR 
+{
+   // 黒で塗り潰し
+   return float4(0,0,0,1);
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+technique DiscoLightBall
+{
+   pass DrawObject
+   {
+      VertexShader = compile vs_2_0 Basic_VS();
+      PixelShader  = compile ps_2_0 Basic_PS();
+   }
+
+}
+

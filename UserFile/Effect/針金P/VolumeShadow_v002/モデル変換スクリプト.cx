@@ -1,0 +1,516 @@
+<?xml version="1.0"?>
+<CSScriptData xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ScriptType>CS1</ScriptType>
+  <CompilerVersion>4</CompilerVersion>
+  <ReferenceAssemblies>
+    <string>System.dll</string>
+    <string>System.Core.dll</string>
+    <string>System.Data.dll</string>
+    <string>System.Data.DataSetExtensions.dll</string>
+    <string>System.Deployment.dll</string>
+    <string>System.Drawing.dll</string>
+    <string>System.Windows.Forms.dll</string>
+    <string>System.Xml.dll</string>
+    <string>System.Xml.Linq.dll</string>
+    <string>Microsoft.CSharp.dll</string>
+  </ReferenceAssemblies>
+  <UsingText>using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Windows.Forms;
+using System.IO;
+using PEPlugin;
+using PEPlugin.SDX;
+using PEPlugin.Pmx;
+using PEPlugin.Pmd;
+using PEPlugin.Vmd;
+using PEPlugin.Vme;
+using PEPlugin.Form;
+using PEPlugin.View;
+using SlimDX;
+using SlimDX.Direct3D9;
+using IES = PEPlugin.Vme.IPEVmeEventState;
+using IBS = PEPlugin.Vme.IPEVmeBoneState;
+using ISS = PEPlugin.Vme.IPEVmeSingleValueState;
+using IMS = PEPlugin.Vme.IPEVmeSingleValueState;
+using ICS = PEPlugin.Vme.IPEVmeCameraState;
+using ILS = PEPlugin.Vme.IPEVmeLightState;
+</UsingText>
+  <FullCodeText>///////////////////////////////////////////////////////////////////////////////
+//
+//  VolumeShadowエフェクト用, シャドウボリューム作成スクリプト
+//　作成：針金P
+//
+///////////////////////////////////////////////////////////////////////////////
+
+// using項目はメニューから一括管理
+
+// Scriptプラグインクラス(クラス名変更不可)
+public class CSScriptClass : PEPluginClass
+{
+    // コンストラクタ
+    public CSScriptClass() : base()
+    {
+        // 起動オプション
+        // boot時実行(true/false), プラグインメニューへの登録(true/false), メニュー登録名("")
+        m_option = new PEPluginOption(false, true, "CSScript生成プラグイン");
+    }
+
+    // エントリポイント
+    public override void Run(IPERunArgs args)
+    {
+        base.Run(args);
+        try {
+            // ホスト配下
+            IPEPluginHost host = args.Host;
+            IPEConnector connect = host.Connector;
+
+            // PMX関連
+            IPXPmx pmx = connect.Pmx.GetCurrentState();     // PMX取得
+            IList&lt;IPXVertex&gt; vertex = pmx.Vertex;           // vertex   :頂点   | リスト
+            IList&lt;IPXMaterial&gt; material = pmx.Material;     // material :材質   | リスト
+            IList&lt;IPXMorph&gt; morph = pmx.Morph;              // morph    :モーフ | リスト
+
+            // ボリュームシャドウの対象となる面インデックスリスト
+            List&lt;int&gt; facesIndex = new List&lt;int&gt;();
+            List&lt;int&gt; facesIndexBoth = new List&lt;int&gt;();  // 裏面リスト
+
+            for (int i = 0; i &lt; material.Count; i++)
+            {
+                //if (Math.Abs(material[i].Diffuse.A - 0.98f) &gt; 0.00001f)
+                if (material[i].SelfShadowMap)
+                {
+                    for (int j = 0; j &lt; material[i].Faces.Count; j++)
+                    {
+                        int i1 = vertex.IndexOf(material[i].Faces[j].Vertex1);
+                        int i2 = vertex.IndexOf(material[i].Faces[j].Vertex2);
+                        int i3 = vertex.IndexOf(material[i].Faces[j].Vertex3);
+                        facesIndex.Add(i1);
+                        facesIndex.Add(i2);
+                        facesIndex.Add(i3);
+                        facesIndexBoth.Add(i1);
+                        facesIndexBoth.Add(i3);
+                        facesIndexBoth.Add(i2);
+                    }
+                }
+            }
+
+            if (facesIndex.Count == 0)
+            {
+                MessageBox.Show("シャドウボリュームを作成するポリゴンがありません\nシャドウボリュームはセルフ影マップONの材質のみ作成されます", "確認", MessageBoxButtons.OK);
+                return;
+            }
+
+            // 頂点モーフのオフセット追加頂点リストの初期化
+            List&lt;IPXVertex&gt;[] morphOffsetList = new List&lt;IPXVertex&gt;[vertex.Count];
+            for (int i = 0; i &lt; morph.Count; i++)
+            {
+                if (morph[i].IsVertex)
+                {
+                    IList&lt;IPXMorphOffset&gt; offsets = morph[i].Offsets;
+                    for (int j = 0; j &lt; offsets.Count; j++)
+                    {
+                        IPXVertexMorphOffset srcOffset = (IPXVertexMorphOffset)offsets[j];
+                        int index = vertex.IndexOf(srcOffset.Vertex);
+                        if (morphOffsetList[index] == null)
+                        {
+                            morphOffsetList[index] = new List&lt;IPXVertex&gt;();
+                        }
+                    }
+                }
+            }
+
+            // シャドウボリューム作成用の材質を作成
+            IPXMaterial vsMaterial = PEStaticBuilder.Pmx.Material();
+            vsMaterial.Name = "セルフ影作成";
+            vsMaterial.NameE = "selfShadowElem";
+            vsMaterial.Diffuse.A = 0.0f;  // 透明にする
+            vsMaterial.Power = 10000.0f;  // エフェクト識別用にSpecularPowerを10000にする
+
+            // 表面のシャドウボリュームの頂点と面を追加
+            AddVertexFace(vertex, vsMaterial.Faces, morph, facesIndex, morphOffsetList);
+
+            // 裏面のシャドウボリュームの頂点と面を追加
+            AddVertexFace(vertex, vsMaterial.Faces, morph, facesIndexBoth, morphOffsetList);
+
+            // 材質リスト先頭にシャドウボリューム材質を追加する
+            material.Insert(0, vsMaterial);
+
+            // 追加頂点に対する頂点モーフのオフセットを追加
+            for (int i = 0; i &lt; morph.Count; i++)
+            {
+                if (morph[i].IsVertex)
+                {
+                    IList&lt;IPXMorphOffset&gt; offsets = morph[i].Offsets;
+                    int srcOffsetsCount = offsets.Count;
+                    for (int j = 0; j &lt; srcOffsetsCount; j++)
+                    {
+                        IPXVertexMorphOffset srcOffset = (IPXVertexMorphOffset)offsets[j];
+                        int index = vertex.IndexOf(srcOffset.Vertex);
+                        for (int k = 0; k &lt; morphOffsetList[index].Count; k++)
+                        {
+                            V3 offset = new V3(srcOffset.Offset);
+                            IPXVertexMorphOffset newOffset = PEStaticBuilder.Pmx.VertexMorphOffset();
+                            newOffset.Vertex = morphOffsetList[index][k];
+                            newOffset.Offset = offset;
+                            offsets.Add(newOffset);
+                        }
+                    }
+                }
+            }
+
+            /*
+            // 全材質シャドウマップ描画無し設定にする
+            for (int i = 1; i &lt; material.Count; i++)
+            {
+                material[i].SelfShadowMap = false;
+            }
+            */
+
+            // コントロールモーフを追加
+            V3 morphOffset = new V3(0.0f, 0.0f, 0.0f);
+            IPXVertexMorphOffset item1 = PEStaticBuilder.Pmx.VertexMorphOffset(vertex[0], morphOffset);
+            IPXVertexMorphOffset item2 = PEStaticBuilder.Pmx.VertexMorphOffset(vertex[0], morphOffset);
+            IPXVertexMorphOffset item3 = PEStaticBuilder.Pmx.VertexMorphOffset(vertex[0], morphOffset);
+            IPXVertexMorphOffset item4 = PEStaticBuilder.Pmx.VertexMorphOffset(vertex[0], morphOffset);
+
+            IPXMorph morphShadowBlurP = PEStaticBuilder.Pmx.Morph();
+            morphShadowBlurP.Name = "ShadowBlur+";
+            morphShadowBlurP.NameE = "ShadowBlur+";
+            morphShadowBlurP.Panel = 4;
+            morphShadowBlurP.Kind = MorphKind.Vertex;
+            morphShadowBlurP.Offsets.Add(item1);
+            morph.Add(morphShadowBlurP);
+
+            IPXMorph morphShadowBlurM = PEStaticBuilder.Pmx.Morph();
+            morphShadowBlurM.Name = "ShadowBlur-";
+            morphShadowBlurM.NameE = "ShadowBlur-";
+            morphShadowBlurM.Panel = 4;
+            morphShadowBlurM.Kind = MorphKind.Vertex;
+            morphShadowBlurM.Offsets.Add(item2);
+            morph.Add(morphShadowBlurM);
+
+            IPXMorph morphShadowDensP = PEStaticBuilder.Pmx.Morph();
+            morphShadowDensP.Name = "ShadowDen+";
+            morphShadowDensP.NameE = "ShadowDen+";
+            morphShadowDensP.Panel = 4;
+            morphShadowDensP.Kind = MorphKind.Vertex;
+            morphShadowDensP.Offsets.Add(item3);
+            morph.Add(morphShadowDensP);
+
+            IPXMorph morphShadowDensM = PEStaticBuilder.Pmx.Morph();
+            morphShadowDensM.Name = "ShadowDen-";
+            morphShadowDensM.NameE = "ShadowDen-";
+            morphShadowDensM.Panel = 4;
+            morphShadowDensM.Kind = MorphKind.Vertex;
+            morphShadowDensM.Offsets.Add(item4);
+            morph.Add(morphShadowDensM);
+
+            // 表示枠に追加
+            pmx.ExpressionNode.Items.Add(PEStaticBuilder.Pmx.MorphNodeItem(morphShadowBlurP));
+            pmx.ExpressionNode.Items.Add(PEStaticBuilder.Pmx.MorphNodeItem(morphShadowBlurM));
+            pmx.ExpressionNode.Items.Add(PEStaticBuilder.Pmx.MorphNodeItem(morphShadowDensP));
+            pmx.ExpressionNode.Items.Add(PEStaticBuilder.Pmx.MorphNodeItem(morphShadowDensM));
+
+
+            // PMX更新
+            connect.Pmx.Update(pmx);
+
+            // Form更新
+            connect.Form.UpdateList(UpdateObject.All);  // 重い場合は引数を変更して個別に更新
+
+            // View更新
+            connect.View.PMDView.UpdateModel();         // Viewの更新が不要な場合はコメントアウト
+            connect.View.PMDView.UpdateView();
+
+        }
+        catch (Exception ex) {
+            MessageBox.Show(ex.Message, "エラー", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+        }
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    // 稜線情報クラス
+    public class PMXFaceEdgeSupport
+    {
+        public int index1;  // 元の頂点インデックス1
+        public int index2;  // 元の頂点インデックス2
+
+        public IPXVertex newVertex11;  // 左側のindex1に対応するボリューム頂点
+        public IPXVertex newVertex12;  // 左側のindex2に対応するボリューム頂点
+        public IPXVertex newVertex21;  // 右側のindex1に対応するボリューム頂点
+        public IPXVertex newVertex22;  // 右側のindex2に対応するボリューム頂点
+
+        public PMXFaceEdgeSupport()
+        {
+            newVertex11 = null;
+            newVertex12 = null;
+            newVertex21 = null;
+            newVertex22 = null;
+        }
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    // シャドウボリュームの頂点と面の追加
+    private void AddVertexFace(IList&lt;IPXVertex&gt; vertex, IList&lt;IPXFace&gt; faces, IList&lt;IPXMorph&gt; morph, List&lt;int&gt; facesIndex, List&lt;IPXVertex&gt;[] morphOffsetList)
+    {
+        // 元の頂点数
+        int srcVertexCount = vertex.Count;
+
+        // 面に垂直な法線を求める
+        V3[] faceNormals = new V3[facesIndex.Count / 3];
+        for (int i = 0; i &lt; facesIndex.Count / 3; i++)
+        {
+            V3 v1 = vertex[facesIndex[i * 3]].Position;
+            V3 v2 = vertex[facesIndex[i * 3 + 1]].Position;
+            V3 v3 = vertex[facesIndex[i * 3 + 2]].Position;
+            Vector3 vec1 = v2 - v1;
+            Vector3 vec2 = v3 - v1;
+            Vector3 normalVec = Vector3.Cross(vec1, vec2);
+            if (normalVec != Vector3.Zero)
+            {
+                faceNormals[i] = Vector3.Normalize(normalVec);
+            }
+            else
+            {
+                V3 v = v1 + v2 + v3;
+                v.Normalize();
+                faceNormals[i] = v;
+            }
+        }
+
+        // 頂点追加
+        for (int i = 0; i &lt; facesIndex.Count; i++)
+        {
+            IPXVertex newVert = (IPXVertex)vertex[facesIndex[i]].Clone();
+            V3 normal = Vector3.Normalize(newVert.Normal);
+            newVert.Position += -0.001f * normal;    // ちらつき防止のため少し押し下げる
+            newVert.Normal = faceNormals[i / 3];     // 面に垂直な法線に差し替える
+            newVert.UV = new V2(10000.0f, 10000.0f); // ボリュームシャドウ材質識別用
+            vertex.Add(newVert);
+            if (morphOffsetList[facesIndex[i]] != null)
+            {
+                morphOffsetList[facesIndex[i]].Add(newVert);
+            }
+        }
+
+        // 面追加
+        for (int i = 0; i &lt; facesIndex.Count; i += 3)
+        {
+            IPXFace newFase = PEStaticBuilder.Pmx.Face();
+            newFase.Vertex1 = vertex[srcVertexCount + i];
+            newFase.Vertex2 = vertex[srcVertexCount + i + 1];
+            newFase.Vertex3 = vertex[srcVertexCount + i + 2];
+            faces.Add(newFase);
+        }
+
+        // 稜線情報リストの作成
+        List&lt;PMXFaceEdgeSupport&gt; faceEdges = new List&lt;PMXFaceEdgeSupport&gt;();
+        for (int i = 0; i &lt; facesIndex.Count; i += 3)
+        {
+            AddFaceEdge(faceEdges, i, i + 1, vertex, facesIndex, srcVertexCount);
+            AddFaceEdge(faceEdges, i + 1, i + 2, vertex, facesIndex, srcVertexCount);
+            AddFaceEdge(faceEdges, i + 2, i, vertex, facesIndex, srcVertexCount);
+        }
+
+        // 面が片方しか接続されていない稜線に頂点を追加する(ここで追加した頂点は引き延ばさない)
+        for (int i = 0; i &lt; faceEdges.Count; i++)
+        {
+            if (faceEdges[i].newVertex11 == null)
+            {
+                IPXVertex newVert = (IPXVertex)faceEdges[i].newVertex21.Clone();
+                newVert.UV = new V2(9999.0f, 9999.0f); // 引き延ばす頂点との識別用
+                vertex.Add(newVert);
+                if (morphOffsetList[faceEdges[i].index1] != null)
+                {
+                    morphOffsetList[faceEdges[i].index1].Add(newVert);
+                }
+
+                faceEdges[i].newVertex11 = newVert;
+                newVert = (IPXVertex)faceEdges[i].newVertex22.Clone();
+                newVert.UV = new V2(9999.0f, 9999.0f);
+                vertex.Add(newVert);
+                faceEdges[i].newVertex12 = newVert;
+                if (morphOffsetList[faceEdges[i].index2] != null)
+                {
+                    morphOffsetList[faceEdges[i].index2].Add(newVert);
+                }
+            }
+            if (faceEdges[i].newVertex21 == null)
+            {
+                IPXVertex newVert = (IPXVertex)faceEdges[i].newVertex11.Clone();
+                newVert.UV = new V2(9999.0f, 9999.0f);
+                vertex.Add(newVert);
+                if (morphOffsetList[faceEdges[i].index1] != null)
+                {
+                    morphOffsetList[faceEdges[i].index1].Add(newVert);
+                }
+
+                faceEdges[i].newVertex21 = newVert;
+                newVert = (IPXVertex)faceEdges[i].newVertex12.Clone();
+                newVert.UV = new V2(9999.0f, 9999.0f);
+                vertex.Add(newVert);
+                faceEdges[i].newVertex22 = newVert;
+                if (morphOffsetList[faceEdges[i].index2] != null)
+                {
+                    morphOffsetList[faceEdges[i].index2].Add(newVert);
+                }
+            }
+        }
+
+        // 稜線に面を埋め込む
+        for (int i = 0; i &lt; faceEdges.Count; i++)
+        {
+            IPXFace newFase = PEStaticBuilder.Pmx.Face();
+            newFase.Vertex1 = faceEdges[i].newVertex11;
+            newFase.Vertex2 = faceEdges[i].newVertex12;
+            newFase.Vertex3 = faceEdges[i].newVertex21;
+            faces.Add(newFase);
+            newFase = PEStaticBuilder.Pmx.Face();
+            newFase.Vertex1 = faceEdges[i].newVertex22;
+            newFase.Vertex2 = faceEdges[i].newVertex21;
+            newFase.Vertex3 = faceEdges[i].newVertex12;
+            faces.Add(newFase);
+        }
+
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    // 稜線情報リストの解析と追加
+    private void AddFaceEdge(List&lt;PMXFaceEdgeSupport&gt; faceEdges, int index1, int index2, IList&lt;IPXVertex&gt; vertex, List&lt;int&gt; facesIndex, int srcVertexCount)
+    {
+        bool flag = true;
+
+        // index1 &lt; index2 となるようにセット
+        int fIndex1 = facesIndex[index1];
+        int fIndex2 = facesIndex[index2];
+        int i1 = (fIndex1 &lt; fIndex2) ? fIndex1 : fIndex2;
+        int i2 = (fIndex1 &lt; fIndex2) ? fIndex2 : fIndex1;
+
+        for (int i = 0; i &lt; faceEdges.Count; i++)
+        {
+            // 同じ稜線の場合
+            if (faceEdges[i].index1 == i1 &amp;&amp; faceEdges[i].index2 == i2)
+            {
+                if (i1 == fIndex1)
+                {
+                    // 登録されていなければ反対側に登録
+                    if (faceEdges[i].newVertex21 == null)
+                    {
+                        faceEdges[i].newVertex21 = vertex[srcVertexCount + index1];
+                        faceEdges[i].newVertex22 = vertex[srcVertexCount + index2];
+                        flag = false;
+                        break;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    if (faceEdges[i].newVertex11 == null)
+                    {
+                        // 登録されていなければ反対側に登録
+                        faceEdges[i].newVertex11 = vertex[srcVertexCount + index2];
+                        faceEdges[i].newVertex12 = vertex[srcVertexCount + index1];
+                        flag = false;
+                        break;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // 同じ稜線が無ければ新たな稜線を追加
+        if (flag)
+        {
+            PMXFaceEdgeSupport newFaceEdge = new PMXFaceEdgeSupport();
+            newFaceEdge.index1 = i1;
+            newFaceEdge.index2 = i2;
+            if (i1 == fIndex1)
+            {
+                newFaceEdge.newVertex21 = vertex[srcVertexCount + index1];
+                newFaceEdge.newVertex22 = vertex[srcVertexCount + index2];
+            }
+            else
+            {
+                newFaceEdge.newVertex11 = vertex[srcVertexCount + index2];
+                newFaceEdge.newVertex12 = vertex[srcVertexCount + index1];
+            }
+            faceEdges.Add(newFaceEdge);
+        }
+    }
+
+}
+
+
+</FullCodeText>
+  <CodeText>
+// Run()関数内の処理を記述
+// 外部クラスの活用などは一般形式のスクリプトコードを使用してください.
+
+// プラグイン変数は IPERunArgs args を通して取得可能
+// コードに自動的に追加されるヘッダ／フッタはメニューから有効化／確認が可能(ヘッダは標準で有効設定)
+
+
+</CodeText>
+  <CodeHeader>//
+// ---- 簡易編集用ヘッダコード ----
+
+// 常用接続変数一括登録
+
+// ホスト配下
+IPEPluginHost host = args.Host;
+IPEBuilder builder = host.Builder;
+IPEShortBuilder bd = host.Builder.SC;		// 短絡系ビルダ
+IPXPmxBuilder bdx = host.Builder.Pmx;		// PMXビルダ
+IPEConnector connect = host.Connector;
+IPEPMDViewConnector view = host.Connector.View.PMDView;
+
+// PMX関連
+IPXPmx pmx = connect.Pmx.GetCurrentState();     // PMX取得
+
+IPXHeader header = pmx.Header;                  // header   :ヘッダ
+IPXModelInfo info = pmx.ModelInfo;              // info     :モデル情報
+IList&lt;IPXVertex&gt; vertex = pmx.Vertex;           // vertex   :頂点   | リスト
+IList&lt;IPXMaterial&gt; material = pmx.Material;     // material :材質   | リスト
+IList&lt;IPXBone&gt; bone = pmx.Bone;                 // bone     :ボーン | リスト
+IList&lt;IPXMorph&gt; morph = pmx.Morph;				// morph    :モーフ | リスト
+IList&lt;IPXNode&gt; node = pmx.Node;					// node     :表示枠 | リスト
+IList&lt;IPXBody&gt; body = pmx.Body;                 // body     :剛体   | リスト
+IList&lt;IPXJoint&gt; joint = pmx.Joint;              // joint    :Joint  | リスト
+IList&lt;IPXSoftBody&gt; sbody = pmx.SoftBody;        // sbody    :SoftBody  | リスト
+
+</CodeHeader>
+  <CodeFooter>//
+// ---- 簡易編集用フッタコード ----
+
+// 更新処理
+// デフォルト設定ではフッタコードはOFF
+
+// PMX更新
+connect.Pmx.Update(pmx);
+
+// Form更新
+connect.Form.UpdateList(UpdateObject.All);  // 重い場合は引数を変更して個別に更新
+
+// View更新
+connect.View.PMDView.UpdateModel();         // Viewの更新が不要な場合はコメントアウト
+connect.View.PMDView.UpdateView();
+
+
+</CodeFooter>
+  <EnableHeader>true</EnableHeader>
+  <EnableFooter>false</EnableFooter>
+  <ActivePages>0</ActivePages>
+</CSScriptData>

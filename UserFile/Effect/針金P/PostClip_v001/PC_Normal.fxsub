@@ -1,0 +1,126 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  PC_Normal.fxsub  法線マップ作成
+//  ( PostClip_Normal.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+// 透過値に対する深度読み取り閾値
+float AlphaClipThreshold = 0.5;
+
+// 座標変換行列
+float4x4 WorldViewProjMatrix : WORLDVIEWPROJECTION;
+float4x4 WorldMatrix         : WORLD;
+
+// マテリアル色
+float4 MaterialDiffuse : DIFFUSE < string Object = "Geometry"; >;
+
+bool opadd; // 加算合成フラグ
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = LINEAR;
+    ADDRESSU  = WRAP;
+    ADDRESSV  = WRAP;
+};
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 法線描画
+
+struct VS_OUTPUT {
+    float4 Pos    : POSITION;
+    float3 Normal : TEXCOORD0;
+    float2 Tex    : TEXCOORD1;
+};
+
+// 頂点シェーダ
+VS_OUTPUT VS_Object(float4 Pos : POSITION, float3 Normal: NORMAL, float2 Tex : TEXCOORD0)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+    // カメラ視点のワールドビュー射影変換
+    Out.Pos = mul( Pos, WorldViewProjMatrix );
+
+    // 法線のワールド変換
+    Out.Normal = normalize( mul( Normal, (float3x3)WorldMatrix ) );
+
+    // テクスチャ座標
+    Out.Tex = Tex;
+
+    return Out;
+}
+
+
+//ピクセルシェーダ
+float4 PS_Object(VS_OUTPUT IN, uniform bool useTexture) : COLOR0
+{
+    float alpha = MaterialDiffuse.a * !opadd;
+    if ( useTexture ) {
+        // テクスチャ透過値適用
+        alpha *= tex2D( ObjTexSampler, IN.Tex ).a * !opadd;
+    }
+    // α値が閾値以下の箇所は描画しない
+    clip(alpha - AlphaClipThreshold);
+
+    // 法線(-1～+1を0～1に正規化)
+    float3 Normal = (IN.Normal + 1.0f) / 2.0f;
+
+    return float4(Normal, 1.0f);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+// オブジェクト描画(セルフシャドウなし)
+technique NormalTec0 < string MMDPass = "object"; bool UseTexture = false; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(false);
+    }
+}
+
+technique NormalTec1 < string MMDPass = "object"; bool UseTexture = true; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true);
+    }
+}
+
+// オブジェクト描画(セルフシャドウあり)
+technique NormalTecSS0 < string MMDPass = "object_ss"; bool UseTexture = false; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(false);
+    }
+}
+
+technique NormalTecSS1 < string MMDPass = "object_ss"; bool UseTexture = true; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_2_0 VS_Object();
+        PixelShader  = compile ps_2_0 PS_Object(true);
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+// 地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+// エッジは描画しない
+technique EdgeDepthTec < string MMDPass = "edge"; > { }
+
+

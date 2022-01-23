@@ -1,0 +1,359 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  HgPL_Object.fxsub : HgPointLightオブジェクト描画
+//  ( HgPointLight.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P( 舞力介入P氏のfull.fx改変 )
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+#define FLG_EXCEPTION  0  // MMDでモデル描画が正常にされない場合はここを1にする
+
+// コントロールパラメータ
+float MorphLtVol   : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "光量"; >;
+float MorphLtDist  : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "照射距離"; >;
+float MorphRed     : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "赤色"; >;
+float MorphGreen   : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "緑色"; >;
+float MorphBlue    : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "青色"; >;
+float MorphAmbient : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "散乱光"; >;
+
+// 光源位置
+float3 LightPosition : CONTROLOBJECT < string name = "(OffscreenOwner)"; string item = "光源位置"; >;
+// 光源の明るさ
+static float LightPower = lerp(0.0f, 5.0f, MorphLtVol);
+// ライト色
+static float3 LightColor = saturate( float3(MorphRed, MorphGreen, MorphBlue) );
+// 光源の距離に対する減衰量係数
+static float Attenuation = 1.0f/max(lerp(0.1f, 5.0f, MorphLtDist), 0.1f);
+// 光源よる散乱光の強さ
+static float AmbientPower = lerp(0.03f, 1.0f, MorphAmbient);
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座標変換行列
+float4x4 WorldViewProjMatrix : WORLDVIEWPROJECTION;
+float4x4 WorldMatrix         : WORLD;
+float4x4 ViewMatrix          : VIEW;
+
+float3 CameraPosition : POSITION  < string Object = "Camera"; >;
+
+// マテリアル色
+float4 MaterialDiffuse  : DIFFUSE  < string Object = "Geometry"; >;
+float3 MaterialAmbient  : AMBIENT  < string Object = "Geometry"; >;
+float3 MaterialEmmisive : EMISSIVE < string Object = "Geometry"; >;
+float3 MaterialSpecular : SPECULAR < string Object = "Geometry"; >;
+float  SpecularPower    : SPECULARPOWER < string Object = "Geometry"; >;
+float3 MaterialToon     : TOONCOLOR;
+float4 EdgeColor        : EDGECOLOR;
+static float4 DiffuseColor  = MaterialDiffuse  * float4(LightColor, 1.0f);
+static float3 AmbientColor  = MaterialEmmisive * LightColor * AmbientPower;
+static float3 SpecularColor = MaterialSpecular * LightColor;
+
+// テクスチャ材質モーフ値
+#if(FLG_EXCEPTION == 0)
+float4 TextureAddValue : ADDINGTEXTURE;
+float4 TextureMulValue : MULTIPLYINGTEXTURE;
+float4 SphereAddValue  : ADDINGSPHERETEXTURE;
+float4 SphereMulValue  : MULTIPLYINGSPHERETEXTURE;
+#else
+float4 TextureAddValue = float4(0,0,0,0);
+float4 TextureMulValue = float4(1,1,1,1);
+float4 SphereAddValue  = float4(0,0,0,0);
+float4 SphereMulValue  = float4(1,1,1,1);
+#endif
+
+bool use_subtexture;    // サブテクスチャフラグ
+bool spadd;    // スフィアマップ加算合成フラグ
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = ANISOTROPIC;
+    MAGFILTER = ANISOTROPIC;
+    MIPFILTER = LINEAR;
+    MAXANISOTROPY = 16;
+    ADDRESSU  = WRAP;
+    ADDRESSV  = WRAP;
+};
+
+// スフィアマップのテクスチャ
+texture ObjectSphereMap: MATERIALSPHEREMAP;
+sampler ObjSphareSampler = sampler_state {
+    texture = <ObjectSphereMap>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = LINEAR;
+    ADDRESSU  = WRAP;
+    ADDRESSV  = WRAP;
+};
+
+// トゥーンマップのテクスチャ
+texture ObjectToonTexture: MATERIALTOONTEXTURE;
+sampler ObjToonSampler = sampler_state {
+    texture = <ObjectToonTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = NONE;
+    ADDRESSU  = CLAMP;
+    ADDRESSV  = CLAMP;
+};
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// 輪郭描画
+
+// 頂点シェーダ
+float4 VS_Edge(float4 Pos : POSITION) : POSITION 
+{
+    // カメラ視点のワールドビュー射影変換
+    return mul( Pos, WorldViewProjMatrix );
+}
+
+// ピクセルシェーダ
+float4 PS_Edge() : COLOR
+{
+    // 黒で塗りつぶし
+    return float4(0, 0, 0, EdgeColor.a);
+}
+
+// 輪郭描画用テクニック
+technique EdgeTec < string MMDPass = "edge"; > {
+    pass DrawEdge {
+        VertexShader = compile vs_2_0 VS_Edge();
+        PixelShader  = compile ps_2_0 PS_Edge();
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// オブジェクト描画
+
+struct VS_OUTPUT {
+    float4 Pos       : POSITION;    // 射影変換座標
+    float4 WPos      : TEXCOORD0;   // ワールド座標
+    float2 Tex       : TEXCOORD1;   // テクスチャ
+    float3 Normal    : TEXCOORD2;   // 法線
+    float3 Eye       : TEXCOORD3;   // カメラとの相対位置
+    float2 SpTex     : TEXCOORD4;   // スフィアマップテクスチャ座標
+};
+
+// 頂点シェーダ
+VS_OUTPUT VS_Object(float4 Pos : POSITION, float3 Normal : NORMAL, float2 Tex : TEXCOORD0, float2 Tex2 : TEXCOORD1,
+                    uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    // カメラ視点のワールドビュー射影変換
+    Out.Pos = mul( Pos, WorldViewProjMatrix );
+
+    // ワールド座標
+    Out.WPos = mul( Pos, WorldMatrix );
+
+    // カメラとの相対位置
+    Out.Eye = CameraPosition - mul( Pos, WorldMatrix ).xyz;
+
+    // 頂点法線
+    Out.Normal = normalize( mul( Normal, (float3x3)WorldMatrix ) );
+
+    // テクスチャ座標
+    Out.Tex = Tex;
+
+    if ( useSphereMap ) {
+        if ( use_subtexture ) {
+            // PMXサブテクスチャ座標
+            Out.SpTex = Tex2;
+        } else {
+            // スフィアマップテクスチャ座標
+            float2 NormalWV = mul( Out.Normal, (float3x3)ViewMatrix ).xy;
+            Out.SpTex.x = NormalWV.x * 0.5f + 0.5f;
+            Out.SpTex.y = NormalWV.y * -0.5f + 0.5f;
+        }
+    }
+
+    return Out;
+}
+
+// ピクセルシェーダ
+float4 PS_Object(VS_OUTPUT IN, uniform bool useTexture, uniform bool useSphereMap, uniform bool useToon, uniform bool useSelfShadow) : COLOR0
+{
+    // ライト方向
+    float3 LightDirection = normalize(IN.WPos.xyz - LightPosition);
+
+    // ピクセル法線
+    float3 Normal = normalize( IN.Normal );
+
+    // ディフューズ色＋アンビエント色 計算
+    float4 Color = float4(AmbientColor, DiffuseColor.a);
+    if( !useToon ) Color.rgb *= 0.7f;
+    Color.rgb += max(0.0f, dot(Normal, -LightDirection)) * DiffuseColor.rgb;
+    Color = saturate( Color );
+
+    if ( useTexture ) {
+        // テクスチャ適用
+        float4 TexColor = tex2D( ObjTexSampler, IN.Tex );
+        if( useSelfShadow ) {
+            // テクスチャ材質モーフ数
+            TexColor.rgb = lerp(1, TexColor * TextureMulValue + TextureAddValue, TextureMulValue.a + TextureAddValue.a).rgb;
+        }
+        Color *= TexColor;
+    }
+    if ( useSphereMap ) {
+        // スフィアマップ適用
+        float4 TexColor = tex2D(ObjSphareSampler,IN.SpTex);
+        if( useSelfShadow ) {
+            // スフィアテクスチャ材質モーフ数
+            TexColor.rgb = lerp(spadd?0:1, TexColor * SphereMulValue + SphereAddValue, SphereMulValue.a + SphereAddValue.a).rgb;
+        }
+        if(spadd) Color.rgb += TexColor.rgb;
+        else      Color.rgb *= TexColor.rgb;
+        Color.a *= TexColor.a;
+    }
+
+    if( useToon ){
+        // トゥーン適用
+        float LightNormal = dot( Normal, -LightDirection );
+        #if(FLG_EXCEPTION == 0)
+        Color.rgb *= tex2D(ObjToonSampler, float2(0.0f, 0.5f - LightNormal * 0.5f) ).rgb;
+        #else
+        Color.rgb *= lerp(MaterialToon, float3(1,1,1), saturate(LightNormal * 16 + 0.5));
+        #endif
+    }
+
+    // スペキュラ適用
+    float3 HalfVector = normalize( normalize(IN.Eye) + -LightDirection );
+    float3 Specular = pow( max(0, dot( HalfVector, Normal )), SpecularPower ) * SpecularColor;
+    Color.rgb += Specular;
+
+    // ライト強度
+    float LtPower = LightPower / max( pow(length(IN.WPos.xyz - LightPosition) * 0.1f, Attenuation), 1.0f);
+    Color.rgb *= LtPower;
+
+    return Color;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+// オブジェクト描画用テクニック（アクセサリ用, セルフシャドウOFF）
+technique MainTec0 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(false, false, false);
+        PixelShader  = compile ps_3_0 PS_Object(false, false, false, false);
+    }
+}
+
+technique MainTec1 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(true, false, false);
+        PixelShader  = compile ps_3_0 PS_Object(true, false, false, false);
+    }
+}
+
+technique MainTec2 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(false, true, false);
+        PixelShader  = compile ps_3_0 PS_Object(false, true, false, false);
+    }
+}
+
+technique MainTec3 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(true, true, false);
+        PixelShader  = compile ps_3_0 PS_Object(true, true, false, false);
+    }
+}
+
+// オブジェクト描画用テクニック（PMD・PMXモデル用, セルフシャドウOFF）
+technique MainTec4 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(false, false, true);
+        PixelShader  = compile ps_3_0 PS_Object(false, false, true, false);
+    }
+}
+
+technique MainTec5 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(true, false, true);
+        PixelShader  = compile ps_3_0 PS_Object(true, false, true, false);
+    }
+}
+
+technique MainTec6 < string MMDPass = "object"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(false, true, true);
+        PixelShader  = compile ps_3_0 PS_Object(false, true, true, false);
+    }
+}
+
+technique MainTec7 < string MMDPass = "object"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(true, true, true);
+        PixelShader  = compile ps_3_0 PS_Object(true, true, true, false);
+    }
+}
+
+// オブジェクト描画用テクニック（アクセサリ用, セルフシャドウON）
+technique MainTecSS0 < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(false, false, false);
+        PixelShader  = compile ps_3_0 PS_Object(false, false, false, true);
+    }
+}
+
+technique MainTecSS1 < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(true, false, false);
+        PixelShader  = compile ps_3_0 PS_Object(true, false, false, true);
+    }
+}
+
+technique MainTecSS2 < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(false, true, false);
+        PixelShader  = compile ps_3_0 PS_Object(false, true, false, true);
+    }
+}
+
+technique MainTecSS3 < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = false; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(true, true, false);
+        PixelShader  = compile ps_3_0 PS_Object(true, true, false, true);
+    }
+}
+
+// オブジェクト描画用テクニック（PMD・PMXモデル用, セルフシャドウON）
+technique MainTecSS4 < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(false, false, true);
+        PixelShader  = compile ps_3_0 PS_Object(false, false, true, true);
+    }
+}
+
+technique MainTecSS5 < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = false; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(true, false, true);
+        PixelShader  = compile ps_3_0 PS_Object(true, false, true, true);
+    }
+}
+
+technique MainTecSS6 < string MMDPass = "object_ss"; bool UseTexture = false; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(false, true, true);
+        PixelShader  = compile ps_3_0 PS_Object(false, true, true, true);
+    }
+}
+
+technique MainTecSS7 < string MMDPass = "object_ss"; bool UseTexture = true; bool UseSphereMap = true; bool UseToon = true; > {
+    pass DrawObject {
+        VertexShader = compile vs_3_0 VS_Object(true, true, true);
+        PixelShader  = compile ps_3_0 PS_Object(true, true, true, true);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+//地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+

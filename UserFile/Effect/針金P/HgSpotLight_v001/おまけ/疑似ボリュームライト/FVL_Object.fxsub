@@ -1,0 +1,368 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  FVL_Object.fxsub : FakeVolumeLightオブジェクト描画
+//  ( FakeVolumeLight.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ここのパラメータを変更してください
+
+// Zバッファの書き換え
+#define ZBuffWrite  0  // 0:しない, 1:する
+// ここを 0 にすると複数の光線が重なっても綺麗に加算することが出来ますが、
+// これより後に他のオブジェクトが描画されると光線が上書きされて消えてしまいます。
+// ここを 1 にすると他のオブジェクトに上書きされることはありませんが、
+// 複数の光線が重なったときは光源の描画順で結果が変わります。
+
+
+// 解らない人はここから下はいじらないでね
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+// コントロールパラメータ
+#define SLC_FLIENAME   "HgSpotLight.pmx"
+bool flagSLC : CONTROLOBJECT < string name = SLC_FLIENAME; >;
+float3 BonePos1      : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "照射方向"; >;
+float MorphLtVol     : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "光量"; >;
+float MorphLtRadius  : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "光源径"; >;
+float MorphRed       : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "赤色"; >;
+float MorphGreen     : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "緑色"; >;
+float MorphBlue      : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "青色"; >;
+float MorphSpotDirec : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "照射角"; >;
+float MorphSpotGrad  : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "照射縁階調"; >;
+
+float MorphFVL_Vol   : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "FVL光量"; >;
+float MorphFVL_OrgVol: CONTROLOBJECT < string name = SLC_FLIENAME; string item = "FVL光源量"; >;
+float MorphFVL_Len   : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "FVL長さ"; >;
+float MorphFVL_Len10 : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "FVL長さ*10"; >;
+float MorphFVL_Aettn : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "FVL減衰率"; >;
+float MorphFVL_Rand  : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "FVLランダム"; >;
+
+// 光源ワールド変換行列
+float4x4 LightMatrix : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "光源位置"; >;
+// 光源位置
+float3 LightPosition : CONTROLOBJECT < string name = SLC_FLIENAME; string item = "光源位置"; >;
+// 光軸方向
+static float3 LightDirecCenter = flagSLC ? normalize( BonePos1 - LightPosition ) : float3(0,0,1);
+// ライト色
+static float3 LightColor = flagSLC ? saturate( float3(MorphRed, MorphGreen, MorphBlue) ) : float3(1,1,1);
+// 光軸から照明縁までの角度(rad)
+static float LightShieldDirection = radians( flagSLC ? lerp(1.0f, 85.0f, saturate(MorphSpotDirec)) : 20.0f );
+// 照明縁の階調度
+static float LightShieldGradRate = flagSLC ? lerp( 0.01f, 1.0f, saturate(MorphSpotGrad) ) : 0.2f;
+// 階調中間の光軸から照明縁までの角度(rad)
+static float LightShieldDirection2 = LightShieldDirection * ( 1.0f - LightShieldGradRate*0.3f );
+// FVL光量
+static float LtFvlPower = flagSLC ? max(MorphFVL_Vol,0.0f) : 0.10f;
+// FVL光源量
+static float LtFvlOrgPower = flagSLC ? lerp(0.0f, 10.0f, max(MorphFVL_OrgVol, 0.0f)) : 1.0f;
+// FVL光源の半径
+static float LtFvlRadius = flagSLC ? lerp(0.1f, 10.0f, saturate(MorphLtRadius)) : 1.0f;
+// 光源径がある時の補正した点光源の座標
+static float3 LightOrg = LightPosition - LightDirecCenter * LtFvlRadius / tan(LightShieldDirection);
+// FVL光線の長さ
+static float  LtFvlLen = flagSLC ? lerp(0.1f, 100.0f, max(MorphFVL_Len+10.0f*MorphFVL_Len10, 0.0f)) : 20.0f;
+// FVL光線の減衰率
+static float  LtFvlAettn = flagSLC ? lerp(1.0f, 5.0f, max(MorphFVL_Aettn, 0.0f)) : 2.0f;
+// FVL光線のランダム光芒
+static float  LtFvlRandom = flagSLC ? saturate(MorphFVL_Rand) : 0.5f;
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 座標変換行列
+float4x4 ViewProjMatrix : VIEWPROJECTION;
+float4x4 WorldMatrix    : WORLD;
+float4x4 ViewMatrix     : VIEW;
+float4x4 ProjMatrix     : PROJECTION;
+
+float3 CameraPosition : POSITION  < string Object = "Camera"; >;
+
+// マテリアル色
+float4 MaterialDiffuse  : DIFFUSE  < string Object = "Geometry"; >;
+float4 EdgeColor        : EDGECOLOR;
+
+bool opadd; // 加算合成フラグ
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = LINEAR;
+    ADDRESSU  = WRAP;
+    ADDRESSV  = WRAP;
+};
+
+// 乱数テクスチャ
+texture2D RandomTex <
+    string ResourceName = "Rand.bmp";
+    int MipLevels = 1;
+>;
+sampler RandomSamp = sampler_state {
+    texture = <RandomTex>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = NONE;
+    AddressU  = CLAMP;
+    AddressV  = CLAMP;
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+// ライト方向のワールド変換行列
+float4x4 GetLightWorldMatrix()
+{
+   // x軸方向ベクトル(LightDirecCenterがz軸方向ベクトル)
+   float3 ltWorldX = cross( LightDirecCenter, LightMatrix._21_22_23 ); 
+   float3 ltWorldY;
+
+   if( any(ltWorldX) ){
+       // x軸方向ベクトルの正規化
+       ltWorldX = normalize(ltWorldX);
+       // y軸方向ベクトル
+       ltWorldY = cross( ltWorldX, LightDirecCenter );
+
+   }else{
+       // Y軸とLightDirecCenterの方向が一致する場合は特異値となる
+       ltWorldX = LightMatrix._11_12_13;
+       ltWorldY = -sign(dot(LightMatrix._21_22_23, LightDirecCenter)) * LightMatrix._31_32_33;
+   }
+
+   // ワールド変換行列
+   return float4x4( ltWorldX, 0,
+                    ltWorldY, 0,
+                    LightDirecCenter, 0,
+                    LightMatrix[3] );
+};
+
+// 乱数取得
+float Random(float2 Tex)
+{
+    return tex2D(RandomSamp, float2(Tex.x, 0.5f)).r;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 光源部の描画
+
+struct VS_OUTPUT {
+    float4 Pos    : POSITION;    // 射影変換座標
+    float2 Tex    : TEXCOORD3;   // テクスチャ
+};
+
+// 頂点シェーダ
+VS_OUTPUT VS_Object1(float4 Pos : POSITION, float2 Tex : TEXCOORD0, float4 AddUV1 : TEXCOORD1, uniform bool isFace)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    // ワールド座標変換
+    float4 WPos = AddUV1;
+    WPos.xy *= length(LightPosition - LightOrg) * tan(LightShieldDirection2);
+    WPos = mul(WPos, GetLightWorldMatrix());
+
+    // テクスチャ座標
+    Out.Tex = Tex;
+
+    if( isFace ){
+        // カメラ視点のビュー射影変換
+        Out.Pos = mul( WPos, ViewProjMatrix );
+    }else{
+        float4 VPos = mul( WPos, ViewMatrix );
+        float3 VLightOrg = mul( float4(LightOrg,1), ViewMatrix ).xyz;
+        if(VPos.z > VLightOrg.z && VPos.z < 1.0001f){
+            // カメラがライトボリュームの中に入り光源と逆方向を見ている時
+            float3 vec = (VPos.xyz - VLightOrg) * (1.0001f - VPos.z) / (VPos.z - VLightOrg.z);
+            VPos.xyz += vec;
+            Out.Tex.y = 1.0f - min(length(vec) * cos(LightShieldDirection2), LtFvlLen) / LtFvlLen;
+        }
+        Out.Pos = mul( VPos, ProjMatrix );
+    }
+
+    return Out;
+}
+
+// ピクセルシェーダ
+float4 PS_Object1(VS_OUTPUT IN, uniform bool isFace) : COLOR
+{
+    if( isFace ){
+        // ライトボリュームの中から見ている時に光源が強く発光する
+        float cosD = dot( normalize(CameraPosition-LightOrg), LightDirecCenter );
+        float cosD0 = cos( LightShieldDirection );
+        float cosD1 = cos( LightShieldDirection * (1.0f-LightShieldGradRate) );
+        float rate = smoothstep( cosD0, cosD1, cosD ) * max(LtFvlOrgPower-LtFvlPower, 0.0f) + LtFvlPower;
+        return float4( LightColor*rate, 1.0f );
+    }else{
+        // 光源の裏側は周囲の光線の色と同じ
+        float rate = LtFvlPower * pow(max(IN.Tex.y,0.0f), LtFvlAettn);
+        return float4( LightColor*rate, 1.0f );
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// 光線部の描画
+
+// 頂点シェーダ
+VS_OUTPUT VS_Object2(float4 Pos : POSITION, float2 Tex : TEXCOORD0, float4 AddUV1 : TEXCOORD1)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+
+    // ワールド座標変換
+    float4 WPos = AddUV1;
+    if(WPos.z < 0.5){
+        // 光源側の座標
+        WPos.xy *= length(LightPosition - LightOrg) * tan(LightShieldDirection2);
+    }else{
+        // 光線を延ばした側の座標
+        float radius = (LtFvlLen + length(LightPosition - LightOrg)) * tan(LightShieldDirection2);
+        WPos.xy *= radius;
+        WPos.z = LtFvlLen;
+    }
+    WPos = mul( WPos, GetLightWorldMatrix() );
+
+    // カメラ視点のビュー射影変換
+    Out.Pos = mul( WPos, ViewProjMatrix );
+
+    // テクスチャ座標
+    Out.Tex = Tex;
+
+    return Out;
+}
+
+// ピクセルシェーダ
+float4 PS_Object2(VS_OUTPUT IN) : COLOR
+{
+    // ライトボリュームの中から見ている時に光量を大きくするする
+    float cosD = dot( normalize(CameraPosition-LightOrg), LightDirecCenter );
+    float cosD0 = cos( LightShieldDirection );
+    float cosD1 = cos( LightShieldDirection * (1.0f-LightShieldGradRate) );
+    float rate = smoothstep( cosD0, cosD1, cosD ) + 1.0f;
+
+    // ランダム光芒を付ける
+    float rand = Random(IN.Tex) * LtFvlRandom;
+    rate *= LtFvlPower * pow( max(IN.Tex.y-rand*(1.0f-IN.Tex.y), 0.0f), LtFvlAettn );
+    rate = saturate(rate);
+
+    return float4( LightColor*rate, 1.0f );
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+// オブジェクト描画(セルフシャドウなし)
+technique LightVecTec0 < string MMDPass = "object"; string Subset = "0"; >
+{
+    pass DrawObject1 {
+        AlphaBlendEnable = TRUE;
+        SrcBlend = ONE;
+        DestBlend = ONE;
+        CullMode = CW;
+        VertexShader = compile vs_2_0 VS_Object1(true);
+        PixelShader  = compile ps_2_0 PS_Object1(true);
+    }
+    pass DrawObject2 {
+        #if(ZBuffWrite==0)
+        ZEnable = TRUE;
+        ZWriteEnable = FALSE;
+        #endif
+        AlphaBlendEnable = TRUE;
+        SrcBlend = ONE;
+        DestBlend = ONE;
+        CullMode = CCW;
+        VertexShader = compile vs_2_0 VS_Object1(false);
+        PixelShader  = compile ps_2_0 PS_Object1(false);
+    }
+}
+
+technique LightVecTec1 < string MMDPass = "object"; string Subset = "1"; >
+{
+    pass DrawObject1 {
+        #if(ZBuffWrite==0)
+        ZEnable = TRUE;
+        ZWriteEnable = FALSE;
+        #endif
+        AlphaBlendEnable = TRUE;
+        SrcBlend = ONE;
+        DestBlend = ONE;
+        CullMode = CCW;
+        VertexShader = compile vs_2_0 VS_Object2();
+        PixelShader  = compile ps_2_0 PS_Object2();
+    }
+    pass DrawObject2 {
+        #if(ZBuffWrite==0)
+        ZEnable = TRUE;
+        ZWriteEnable = FALSE;
+        #endif
+        AlphaBlendEnable = TRUE;
+        SrcBlend = ONE;
+        DestBlend = ONE;
+        CullMode = CW;
+        VertexShader = compile vs_2_0 VS_Object2();
+        PixelShader  = compile ps_2_0 PS_Object2();
+    }
+}
+
+// オブジェクト描画(セルフシャドウあり)
+technique LightVecTecSS0 < string MMDPass = "object_ss"; string Subset = "0"; >
+{
+    pass DrawObject1 {
+        AlphaBlendEnable = TRUE;
+        SrcBlend = ONE;
+        DestBlend = ONE;
+        CullMode = CW;
+        VertexShader = compile vs_2_0 VS_Object1(true);
+        PixelShader  = compile ps_2_0 PS_Object1(true);
+    }
+    pass DrawObject2 {
+        #if(ZBuffWrite==0)
+        ZEnable = TRUE;
+        ZWriteEnable = FALSE;
+        #endif
+        AlphaBlendEnable = TRUE;
+        AlphaBlendEnable = TRUE;
+        SrcBlend = ONE;
+        DestBlend = ONE;
+        CullMode = CCW;
+        VertexShader = compile vs_2_0 VS_Object1(false);
+        PixelShader  = compile ps_2_0 PS_Object1(false);
+    }
+}
+
+technique LightVecTecSS1 < string MMDPass = "object_ss"; string Subset = "1"; >
+{
+    pass DrawObject1 {
+        #if(ZBuffWrite==0)
+        ZEnable = TRUE;
+        ZWriteEnable = FALSE;
+        #endif
+        AlphaBlendEnable = TRUE;
+        SrcBlend = ONE;
+        DestBlend = ONE;
+        CullMode = CCW;
+        VertexShader = compile vs_2_0 VS_Object2();
+        PixelShader  = compile ps_2_0 PS_Object2();
+    }
+    pass DrawObject2 {
+        #if(ZBuffWrite==0)
+        ZEnable = TRUE;
+        ZWriteEnable = FALSE;
+        #endif
+        AlphaBlendEnable = TRUE;
+        SrcBlend = ONE;
+        DestBlend = ONE;
+        CullMode = CW;
+        VertexShader = compile vs_2_0 VS_Object2();
+        PixelShader  = compile ps_2_0 PS_Object2();
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+// 輪郭は描画しない
+technique EdgeTec < string MMDPass = "edge"; > { }
+//地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+

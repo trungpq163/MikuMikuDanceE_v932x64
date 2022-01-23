@@ -1,0 +1,186 @@
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  HgSL_ShadowMap.fxsub : HgSpotLight シャドウマップ作成
+//  ( HgSpotLight.fx から呼び出されます．オフスクリーン描画用)
+//  作成: 針金P
+//
+////////////////////////////////////////////////////////////////////////////////////////////////
+// ここのパラメータを変更してください
+
+// 光軸から照明縁までの角度(deg)
+float LightShieldDirection = 20.0;
+
+
+// 解らない人はここから下はいじらないでね
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// パラメータ宣言
+
+// 光源ワールド変換行列
+float4x4 LightWorldMatrix : CONTROLOBJECT < string name = "(OffscreenOwner)"; >;
+// 光源位置
+static float3 LightPosition = LightWorldMatrix._41_42_43;
+// 光軸方向
+static float3 LightDirecCenter = normalize(LightWorldMatrix._31_32_33);
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 透過値に対する深度読み取り閾値
+float AlphaClipThreshold = 0.5;
+
+// Zプロット範囲
+#define Z_NEAR  1.0     // 最近値
+#define Z_FAR   1000.0  // 最遠値
+#define MSC     0.98    // マップ縮小率
+
+// ワールド変換行列
+float4x4 WorldMatrix : WORLD;
+
+// ライト方向のビュー変換行列
+float4x4 GetLightViewMatrix()
+{
+   // x軸方向ベクトル(LightDirecCenterがz軸方向ベクトル)
+   float3 ltViewX = cross( float3(0.0f, 1.0f, 0.0f), LightDirecCenter ); 
+   float3 ltViewY;
+
+   if( any(ltViewX) ){
+       // x軸方向ベクトルの正規化
+       ltViewX = normalize(ltViewX);
+       // y軸方向ベクトル
+       ltViewY = cross( LightDirecCenter, ltViewX );
+   }else{
+       // 真上/真下とLightDirecCenterの方向が一致する場合は特異値となる
+       ltViewX = float3(1.0f, 0.0f, 0.0f);
+       ltViewY = float3(0.0f, 0.0f, -sign(LightDirecCenter.y));
+   }
+
+   // ビュー座標変換の回転行列
+   float3x3 ltViewRot = { ltViewX.x, ltViewY.x, LightDirecCenter.x,
+                          ltViewX.y, ltViewY.y, LightDirecCenter.y,
+                          ltViewX.z, ltViewY.z, LightDirecCenter.z };
+
+   return float4x4( ltViewRot[0],  0,
+                    ltViewRot[1],  0,
+                    ltViewRot[2],  0,
+                   -mul( LightPosition, ltViewRot ), 1 );
+};
+
+// ライト方向の射影変換
+float4 CalcLightProjPos(float4 VPos)
+{
+    float vL = MSC / tan(radians(LightShieldDirection));
+    float zp = Z_FAR * ( VPos.z - Z_NEAR ) / ( Z_FAR - Z_NEAR );
+    return float4(vL*VPos.x, vL*VPos.y, zp, VPos.z);
+}
+
+// マテリアル色
+float4 MaterialDiffuse : DIFFUSE  < string Object = "Geometry"; >;
+
+bool opadd; // 加算合成フラグ
+
+// オブジェクトのテクスチャ
+texture ObjectTexture: MATERIALTEXTURE;
+sampler ObjTexSampler = sampler_state {
+    texture = <ObjectTexture>;
+    MINFILTER = LINEAR;
+    MAGFILTER = LINEAR;
+    MIPFILTER = LINEAR;
+    ADDRESSU  = WRAP;
+    ADDRESSV  = WRAP;
+};
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// Zプロット描画
+
+struct VS_OUTPUT {
+    float4 Pos  : POSITION;    // 射影変換座標
+    float4 PPos : TEXCOORD0;   // 射影変換座標
+    float2 Tex  : TEXCOORD1;   // テクスチャ
+};
+
+// 頂点シェーダ
+VS_OUTPUT VS_ShadowMap(float4 Pos : POSITION, float2 Tex : TEXCOORD0)
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0; 
+
+    // ワールドビュー変換
+    float4 VPos = mul( Pos, mul(WorldMatrix, GetLightViewMatrix()) );
+
+    // 射影変換
+    Out.Pos = CalcLightProjPos(VPos);
+    Out.PPos = Out.Pos;
+
+    // テクスチャ座標
+    Out.Tex = Tex;
+
+    return Out;
+}
+
+//ピクセルシェーダ
+float4 PS_ShadowMap(VS_OUTPUT IN, uniform bool useTexture) : COLOR
+{
+    // α値
+    float alpha = MaterialDiffuse.a * !opadd;
+    if ( useTexture ) {
+        // テクスチャ透過値適用
+        alpha *= tex2D( ObjTexSampler, IN.Tex ).a * !opadd;
+    }
+    // α値が閾値以下の箇所は描画しない
+    clip(alpha - AlphaClipThreshold);
+
+    // Z値
+    float z = saturate(IN.PPos.z / IN.PPos.w);
+
+    return float4(z, z*z, 0, 1);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+// テクニック
+
+// オブジェクト描画(セルフシャドウなし)
+technique DepthTec0 < string MMDPass = "object"; bool UseTexture = false; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_3_0 VS_ShadowMap();
+        PixelShader  = compile ps_3_0 PS_ShadowMap(false);
+    }
+}
+
+technique DepthTec1 < string MMDPass = "object"; bool UseTexture = true; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_3_0 VS_ShadowMap();
+        PixelShader  = compile ps_3_0 PS_ShadowMap(true);
+    }
+}
+
+// オブジェクト描画(セルフシャドウあり)
+technique DepthTecSS0 < string MMDPass = "object_ss"; bool UseTexture = false; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_3_0 VS_ShadowMap();
+        PixelShader  = compile ps_3_0 PS_ShadowMap(false);
+    }
+}
+
+technique DepthTecSS1 < string MMDPass = "object_ss"; bool UseTexture = true; >
+{
+    pass DrawObject {
+        AlphaBlendEnable = FALSE;
+        VertexShader = compile vs_3_0 VS_ShadowMap();
+        PixelShader  = compile ps_3_0 PS_ShadowMap(true);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+// 輪郭は描画しない
+technique EdgeTec < string MMDPass = "edge"; > { }
+//地面影は描画しない
+technique ShadowTec < string MMDPass = "shadow"; > { }
+
