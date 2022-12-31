@@ -14,4 +14,4 @@
 5. Pj5 (/UserFile/Project/3-9-20) : https://youtu.be/ln-JvUeH68w
 6. Pj6 (/UserFile/Project/17-9-20) : https://youtu.be/icFKPfv31VM
 
-### :copyright: This is a PJ that I share with friends, if you use for making video, remember credit author (model, stage, motion).
+### :copyright: This is my projects that I share with my friends, if you use for making video, remember credit author (model, stage, motion). Thank you very much!
